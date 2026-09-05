@@ -73,7 +73,7 @@ for line in sys.stdin:
     def test_oversized_request_rejected(self):
         c = self.client('import sys; sys.stdin.read()')
         with self.assertRaisesRegex(CheckError, "line limit"):
-            c.request("ping", {})
+            c.request("ping", {"x": "x" * MAX_LINE})
 
     def test_normal_tool_text(self):
         self.assertEqual(tool_text({"content": [{"type": "text", "text": "saved"}]}), "saved")
