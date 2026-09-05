@@ -12,6 +12,12 @@ The central surviving formats are MOD, XM, S3M, and IT. Their canonical authorin
 
 A second route existed: procedural synthesizers such as Farbrausch V2 and 4klang stored note, patch, and synthesis data rather than PCM samples. That route matters to the wider demoscene and appears in keygen-music collections, but it was designed primarily for severe size limits such as 4K intros. It should not be treated as the default explanation for classic keygen music.
 
+## Music-only agent workflow
+
+The [FT2/MilkyTracker investigation and setup](docs/10-agent-xm-workflow.md), added on 2026-09-05, covers a pinned headless FT2 authoring fork, its missing controls, and the distinction between composition and rendering.
+
+Use the [setup guide](docs/10-agent-xm-workflow.md#build-and-connect), [example MCP configuration](config/ft2-mcp.example.json), and [acceptance checker](tools/ft2_smoke.py) to validate the environment before using the [creative brief](prompts/keygen-composer.md). The [verification record](data/agent-tooling-verification.json) separates source inspection and 22 passing offline tests from native rendering and listening checks that were not run here.
+
 ## Repository map
 
 - `docs/00-methodology.md`
