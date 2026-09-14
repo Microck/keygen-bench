@@ -141,8 +141,10 @@ class StdioMCP:
         self._send({"jsonrpc": "2.0", "method": "notifications/initialized"})
         return result
 
-    def call(self, name: str, **arguments) -> str:
-        return tool_text(self.request("tools/call", {"name": name, "arguments": arguments}))
+    def call(self, tool: str, **arguments) -> str:
+        # The tool name is positional as `tool`, not `name`: module_new and sample_load
+        # take their own `name` argument, which must reach the tool untouched.
+        return tool_text(self.request("tools/call", {"name": tool, "arguments": arguments}))
 
     def close(self) -> None:
         try:

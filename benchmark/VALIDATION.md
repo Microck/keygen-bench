@@ -31,6 +31,32 @@ Not executed here:
 - Native canonical rendering of a model-generated tune.
 - Musical quality evaluation or any ranking.
 
-The Dockerfile makes the existing native FT2 smoke test a required build step.
+## Follow-up on the benchmark host, 2026-09-14
+
+Executed on Linux arm64 with Python 3.11.14, Docker server 29.2.0, and
+mini-swe-agent 2.4.6 installed in a fresh virtual environment:
+
+- `python -m unittest benchmark.tests.test_benchmark -v`: 23 tests passed, none
+  skipped. The real DefaultAgent contract test ran.
+- `python -m unittest tests.test_ft2_smoke`: 17 tests passed.
+- `docker build -f benchmark/Dockerfile .` succeeded, including the native FT2
+  acceptance gate. The first build failed because `StdioMCP.call` in
+  `tools/ft2_smoke.py` used `name` for the tool, which collided with the `name`
+  argument of `module_new` and `sample_load`. That parameter is now `tool`.
+- A scripted round trip through `run.py` primitives without a model:
+  `start_container`, `ft2 list` and `ft2 batch` through `Sandbox.execute`,
+  `Submitted` on the finish command, `docker pause`, `collect` through the
+  read-only export helper, `render` in a fresh container, `wav_info` on the
+  canonical WAV, and removal of every container and volume.
+- The container-command tests use a hand-written recording stand-in for
+  `run.shell`, not `unittest.mock`.
+
+Still not executed:
+
+- End-to-end mini-swe-agent + real CLIProxyAPI + provider inference.
+- Actual subscription authentication or provider authorization checks.
+- Provider-facing payload audit or per-credential proxy override audit.
+- Musical quality evaluation or any ranking.
+
 Run the complete test suite and build on the intended benchmark host before an
-official attempt. No model results or musical scores are claimed by this PR.
+official attempt. No model results or musical scores are claimed.
