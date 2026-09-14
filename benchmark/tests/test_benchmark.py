@@ -14,12 +14,26 @@ import tarfile
 import tempfile
 import threading
 import unittest
-from unittest.mock import patch
 import wave
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from benchmark import run
 from benchmark.proxy import ProxyModel, request, validate_url
+
+
+@contextmanager
+def environ(**values):
+    """Set process environment variables for one block, then restore the originals."""
+    saved = {key: os.environ.get(key) for key in values}
+    os.environ.update(values)
+    try:
+        yield
+    finally:
+        for key, old in saved.items():
+            if old is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = old
 
 
 @contextmanager
@@ -68,6 +82,16 @@ class BenchmarkTests(unittest.TestCase):
     def load(self):
         self.path.write_text(json.dumps(self.config))
         return run.load_config(self.path)
+
+    def fake_shell(self, stdout=b""):
+        """Replace run.shell with a recorder so no Docker command runs; returns the recorded argv list."""
+        commands = []
+        def shell(cmd, **kwargs):
+            commands.append(cmd)
+            return subprocess.CompletedProcess(cmd, 0, stdout, b"")
+        self.addCleanup(setattr, run, "shell", run.shell)
+        run.shell = shell
+        return commands
 
     def test_campaign_configuration(self):
         c = self.load()
@@ -126,9 +150,8 @@ class BenchmarkTests(unittest.TestCase):
         self.assertEqual(validate_url("http://127.0.0.1:8317/v1/"), "http://127.0.0.1:8317/v1")
 
     def test_no_ambient_configuration_forwarded(self):
-        with patch.dict(os.environ, {"CLIPROXY_CLIENT_KEY": "secret", "BASH_ENV": "/tmp/skills",
-                                      "MSWEA_DEFAULT_MODEL": "other", "ANTHROPIC_API_KEY": "private",
-                                      "PYTHONPATH": "/tmp/injected"}):
+        with environ(CLIPROXY_CLIENT_KEY="secret", BASH_ENV="/tmp/skills", MSWEA_DEFAULT_MODEL="other",
+                     ANTHROPIC_API_KEY="private", PYTHONPATH="/tmp/injected"):
             env = run.isolated_env(self.root, "CLIPROXY_CLIENT_KEY")
         for key in ["BASH_ENV", "MSWEA_DEFAULT_MODEL", "ANTHROPIC_API_KEY", "PYTHONPATH"]:
             self.assertNotIn(key, env)
@@ -146,7 +169,7 @@ class BenchmarkTests(unittest.TestCase):
 
     def test_outbound_prompt_unmodified_no_native_tools(self):
         c = self.load()
-        with endpoint() as (url, seen), patch.dict(os.environ, {"CLIPROXY_CLIENT_KEY": "local-secret", "HTTP_PROXY": "http://unreachable:1"}):
+        with endpoint() as (url, seen), environ(CLIPROXY_CLIENT_KEY="local-secret", HTTP_PROXY="http://unreachable:1"):
             c["base_url"] = url
             model = ProxyModel(c, c["models"][0], self.root / "audit.jsonl")
             answer = model.query([{"role": "system", "content": "Exact original {{ text }}", "extra": {"private": 1}}])
@@ -172,15 +195,14 @@ class BenchmarkTests(unittest.TestCase):
 
     def test_model_switch_fails(self):
         c = self.load()
-        with endpoint(returned_model="unexpected") as (url, _), patch.dict(os.environ, {"CLIPROXY_CLIENT_KEY": "secret"}):
+        with endpoint(returned_model="unexpected") as (url, _), environ(CLIPROXY_CLIENT_KEY="secret"):
             c["base_url"] = url
             with self.assertRaisesRegex(ValueError, "Unexpected response model"):
                 ProxyModel(c, c["models"][0], self.root / "audit").query([])
 
     def test_sandbox_flags_no_host_mounts(self):
-        with patch.object(run, "shell", return_value=subprocess.CompletedProcess([], 0, b"", b"")) as execute:
-            run.start_container(["/usr/bin/docker"], "sha256:test", "test")
-        commands = [call.args[0] for call in execute.call_args_list]
+        commands = self.fake_shell()
+        run.start_container(["/usr/bin/docker"], "sha256:test", "test")
         cmd = next(c for c in commands if "--name" in c and c[c.index("--name") + 1] == "test")
         for value in ["--read-only", "--cap-drop", "--network", "none", "--user", "10001:10001"]:
             self.assertIn(value, cmd)
@@ -190,9 +212,9 @@ class BenchmarkTests(unittest.TestCase):
             self.assertNotIn(value, cmd)
 
     def test_shell_skips_profiles(self):
-        with patch.object(run, "shell", return_value=subprocess.CompletedProcess([], 0, b"ok", b"")) as execute:
-            result = run.Sandbox(["docker"], "container", 10).execute({"command": "echo ok"})
-        command = " ".join(execute.call_args.args[0])
+        commands = self.fake_shell(b"ok")
+        result = run.Sandbox(["docker"], "container", 10).execute({"command": "echo ok"})
+        command = " ".join(commands[-1])
         self.assertIn("--noprofile --norc", command)
         self.assertIn("BASH_ENV=/dev/null", command)
         self.assertEqual(result["output"], "ok")
