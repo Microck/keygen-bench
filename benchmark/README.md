@@ -222,6 +222,15 @@ after the end). The first part of the render must be byte-identical to
 `packet.json` with hashes, gain, and any loudness shortfall. Packets are what a
 blind listener hears; `canonical.wav` stays the reference artifact.
 
+`craft` is the one number: 0 to 100, weights fixed in `CRAFT_WEIGHTS` (loop 25,
+audio 20, silence 10, structure 30, dynamics 5, length 5, process 5), every input a
+column from the same table, every band disclosed in `craft_score()`. It measures
+tracker discipline and render integrity. A clean-looping, well-levelled,
+multi-channel module scores high whether or not the music is any good; a
+one-sample playback of pre-rendered audio scores low on structure whatever it
+sounds like. Rows sort by it. Treat it as "how well was the tracker used", never
+as "how good is the tune".
+
 What this layer cannot do is judge music. A ranking needs blind listening by a
 person (the protocol in `docs/12-scoring-ideation-2026-09-24.md` is the current
 plan); an audio-language judge would have to be validated against those labels
