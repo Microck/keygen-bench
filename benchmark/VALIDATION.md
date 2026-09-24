@@ -80,3 +80,12 @@ Through the dedicated CLIProxyAPI instance (port 8417) on the benchmark host:
 
 The proxy places the benchmark system prompt as a `developer` message under its
 own system framing for codex models; `upstream_payload_verified` stays false.
+
+## Visualizer video, 2026-09-24
+
+Smoke run `gpt-6-luna`, bash tool protocol, `max_tokens` 32768, images
+`keygen-ft2-benchmark:local` and `keygen-ft2-visualizer:local` built with explicit
+targets: 7 turns, `Submitted`, `PLAYABLE_UNSCORED`, canonical render 51.8 s.
+`visualizer/visualizer.mp4`: 52 s, 1280x960, H.264 + AAC, 42.7 MB, window
+1264x800 at +8+80, audio offset 0.747 s. Frames show the pattern editor scrolling
+and scopes moving; the pointer sprite is parked off-window.
