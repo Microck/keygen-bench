@@ -251,6 +251,21 @@ class BenchmarkTests(unittest.TestCase):
         for value in ["-v", "--volume", "--env-file", "--privileged"]:
             self.assertNotIn(value, cmd)
 
+    def test_visualizer_container_is_isolated_and_capped(self):
+        c = self.load()
+        (self.root / "submission").mkdir(); (self.root / "submission/tune.xm").write_bytes(b"Extended Module: x")
+        commands = self.fake_shell(b"")
+        video = run.visualize(["docker"], "sha256:vis", self.root, c, duration=100000.0)
+        start = next(cmd for cmd in commands if cmd[1] == "run")
+        for value in ["--network", "none", "--read-only", "--cap-drop", "--user", "10001:10001"]:
+            self.assertIn(value, start)
+        self.assertNotIn("type=bind", " ".join(start))
+        capture = next(cmd for cmd in commands if "/opt/keygen/visualize.sh" in cmd)
+        self.assertEqual(capture[-2], str(c["limits"]["video_seconds"]))  # duration capped by the campaign limit
+        self.assertEqual(video["seconds"], c["limits"]["video_seconds"])
+        self.assertTrue((self.root / "visualizer/visualizer.mp4").exists())
+        self.assertEqual(commands[-1][1:3], ["rm", "-f"])
+
     def test_shell_skips_profiles(self):
         commands = self.fake_shell(b"ok")
         result = run.Sandbox(["docker"], "container", 10).execute({"command": "echo ok"})
