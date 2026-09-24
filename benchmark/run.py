@@ -30,7 +30,7 @@ from proxy import ProxyModel, digest, request, validate_url
 
 MINI_VERSION = "2.4.6"
 FINISH = "echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT"
-LIMIT_KEYS = {"steps", "wall_seconds", "request_seconds", "command_seconds", "render_seconds", "artifact_bytes"}
+LIMIT_KEYS = {"steps", "wall_seconds", "request_seconds", "command_seconds", "render_seconds", "video_seconds", "artifact_bytes"}
 PARAMS = {"temperature", "top_p", "max_tokens", "max_completion_tokens", "reasoning_effort", "seed"}
 
 
@@ -70,7 +70,7 @@ def proxy_policy(path: Path) -> dict:
 
 def load_config(path: Path) -> dict:
     value = json.loads(path.read_text(encoding="utf-8"))
-    required = {"base_url", "api_key_env", "proxy_config", "proxy_version", "image", "generation", "limits", "models"}
+    required = {"base_url", "api_key_env", "proxy_config", "proxy_version", "image", "visualizer_image", "generation", "limits", "models"}
     if not isinstance(value, dict) or set(value) != required:
         raise ValueError(f"Campaign keys must be exactly: {sorted(required)}")
     value["base_url"] = validate_url(value["base_url"])
@@ -299,6 +299,32 @@ def render(docker: list[str], image: str, run_dir: Path, config: dict) -> dict:
         remove_container(docker, name)
 
 
+def visualize(docker: list[str], image: str, run_dir: Path, config: dict, duration: float) -> dict:
+    """Record the trusted FT2 GUI playing the collected module as a 4:3 video with its live audio.
+
+    Presentation only: the graded audio stays canonical.wav. The video is capped by video_seconds.
+    """
+    seconds = min(math.ceil(duration), config["limits"]["video_seconds"])
+    name = "keygen-video-" + uuid.uuid4().hex[:16]
+    try:
+        shell(docker + ["run", "-d", "--name", name, "--network", "none", "--read-only", "--cap-drop", "ALL",
+                        "--security-opt", "no-new-privileges", "--user", "10001:10001", "--cpus", "2", "--memory", "2g",
+                        "--pids-limit", "256", "--tmpfs", "/tmp:rw,nosuid,nodev,size=1g,uid=10001,gid=10001", image])
+        shell(docker + ["exec", "-i", name, "sh", "-c", "cat > /tmp/input.xm"],
+              input=(run_dir / "submission/tune.xm").read_bytes())
+        capture = shell(docker + ["exec", name, "/bin/bash", "/opt/keygen/visualize.sh", "/tmp/input.xm", str(seconds), "/tmp/visualizer.mp4"],
+                        timeout=seconds + config["limits"]["render_seconds"])
+        video = shell(docker + ["exec", name, "cat", "/tmp/visualizer.mp4"], timeout=120).stdout
+        if len(video) > config["limits"]["artifact_bytes"]:
+            raise ValueError("Video exceeded byte limit")
+        (run_dir / "visualizer").mkdir()
+        (run_dir / "visualizer/visualizer.mp4").write_bytes(video)
+        return {"seconds": seconds, "bytes": len(video), "sha256": hashlib.sha256(video).hexdigest(),
+                "capture": capture.stdout.decode("utf-8", "replace").strip()}
+    finally:
+        shell(docker + ["rm", "-f", name], check=False)
+
+
 def isolated_env(home: Path, key_name: str) -> dict:
     return {"PATH": "/usr/local/bin:/usr/bin:/bin", "HOME": str(home),
             "XDG_CONFIG_HOME": str(home / ".config"), "MSWEA_GLOBAL_CONFIG_DIR": str(home / "mini-config"),
@@ -334,7 +360,7 @@ def reserve(root: Path, model_id: str) -> Path:
     return directory
 
 
-def run_one(root: Path, config: dict, model: dict, docker: list[str], image: str) -> None:
+def run_one(root: Path, config: dict, model: dict, docker: list[str], image: str, visualizer_image: str) -> None:
     run_dir = reserve(root, model["id"])
     name = "keygen-create-" + uuid.uuid4().hex[:16]
     result = {"status": "INFRA_ERROR", "model": model, "quality_score": None}
@@ -377,6 +403,11 @@ def run_one(root: Path, config: dict, model: dict, docker: list[str], image: str
             result["audio"] = render(docker, image, run_dir, config)
             result["artifact_sha256"] = hashlib.sha256((run_dir / "submission/tune.xm").read_bytes()).hexdigest()
             result["status"] = "PLAYABLE_UNSCORED"
+            # The video is presentation, not evaluation: a capture failure is recorded, not a status change.
+            try:
+                result["video"] = visualize(docker, visualizer_image, run_dir, config, result["audio"]["duration_seconds"])
+            except (OSError, ValueError, subprocess.SubprocessError) as exc:
+                result["video"] = {"error": type(exc).__name__ + ": " + str(exc)[:500]}
         except (ValueError, wave.Error, EOFError) as exc:
             result.update(status="FAILED", error=str(exc))
         except (subprocess.SubprocessError, RuntimeError) as exc:
@@ -396,11 +427,13 @@ def run_one(root: Path, config: dict, model: dict, docker: list[str], image: str
 def fingerprint(config: dict, docker: list[str]) -> dict:
     if importlib.metadata.version("mini-swe-agent") != MINI_VERSION:
         raise ValueError(f"Install mini-swe-agent=={MINI_VERSION}")
-    image = json.loads(shell(docker + ["image", "inspect", config["image"]]).stdout)[0]
+    image, visualizer = (json.loads(shell(docker + ["image", "inspect", config[key]]).stdout)[0]
+                         for key in ("image", "visualizer_image"))
     sources = {str(p.relative_to(HERE)): hashlib.sha256(p.read_bytes()).hexdigest()
-               for p in [HERE / "run.py", HERE / "proxy.py", HERE / "bridge.py", HERE / "Dockerfile", HERE / "requirements.txt"]}
+               for p in [HERE / "run.py", HERE / "proxy.py", HERE / "bridge.py", HERE / "visualize.sh",
+                         HERE / "Dockerfile", HERE / "requirements.txt"]}
     packages = sorted((d.metadata["Name"], d.version) for d in importlib.metadata.distributions())
-    return {"config": config, "source_sha256": sources, "image_id": image["Id"],
+    return {"config": config, "source_sha256": sources, "image_id": image["Id"], "visualizer_image_id": visualizer["Id"],
             "architecture": image["Architecture"], "packages": packages, "python": sys.version,
             "docker_server": shell(docker + ["version", "--format", "{{.Server.Version}}"]).stdout.decode().strip()}
 
@@ -436,6 +469,7 @@ def main() -> None:
     snapshot = fingerprint(config, docker)
     if args.command == "doctor":
         print(json.dumps({"status": "configuration_checked", "image_id": snapshot["image_id"],
+                          "visualizer_image_id": snapshot["visualizer_image_id"],
                           "mini_version": MINI_VERSION, "models": config["models"],
                           "proxy_policy": config["proxy_policy"],
                           "note": "No completion sent. Upstream payload and native rendering not tested by doctor."}, indent=2))
@@ -447,7 +481,7 @@ def main() -> None:
         if (root / model["id"]).exists():
             print(f"Skipping reserved attempt: {model['id']}", flush=True)
             continue
-        run_one(root, config, model, docker, snapshot["image_id"])
+        run_one(root, config, model, docker, snapshot["image_id"], snapshot["visualizer_image_id"])
         print(f"Finished: {model['id']}", flush=True)
     print("Artifacts and audit records saved. No aesthetic ranking has been calculated.")
 

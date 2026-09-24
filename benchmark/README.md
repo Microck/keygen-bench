@@ -31,6 +31,14 @@ agent's process and preview WAV, not an independent replay engine. Entirely
 silent or invalid output fails the validity gate. Duration, RMS, peak, DC offset,
 and full-scale sample counts are reported as technical observations only.
 
+After the canonical render, a second trusted container records the FT2 clone GUI
+playing the module: Xvfb at 1280x960, the tracker's 1264x800 window stretched to
+4:3 the way FT2 filled a CRT, 30 fps H.264. The audio track is what the mixer
+played in real time through SDL's disk driver at 48 kHz, aligned to the frame the
+grab started on. It is presentation; canonical.wav remains the graded artifact.
+Capture length is capped by `video_seconds`, and a capture failure is recorded in
+`status.json` without changing the attempt's status.
+
 There is deliberately no invented music-quality score. `PLAYABLE_UNSCORED`
 means the artifact rendered, not that its composition is good. The previously
 claimed scoring package was not present in the reviewed repository. Domain-fit,
@@ -48,7 +56,8 @@ python3 -m venv benchmark/.venv
 python -m pip install -r benchmark/requirements.txt
 python -m unittest discover -s benchmark/tests -v
 
-docker build -f benchmark/Dockerfile -t keygen-ft2-benchmark:local .
+docker build -f benchmark/Dockerfile --target agent -t keygen-ft2-benchmark:local .
+docker build -f benchmark/Dockerfile --target visualizer -t keygen-ft2-visualizer:local .
 cp benchmark/config/cliproxyapi.example.yaml benchmark/config/cliproxyapi.local.yaml
 cp benchmark/config/campaign.example.json benchmark/config/campaign.local.json
 ```
@@ -58,7 +67,7 @@ if author/edit/save/reload/render does not pass. The final runtime image contain
 only its transport portion, not its demonstration notes or the repository's
 creative prompts. The FT2 source revision is pinned by the existing build script.
 The base OS/package repositories are not bit-for-bit locked: build once and reuse
-the resulting image. The runner locks its immutable image ID, source hashes,
+the resulting images. The runner locks both immutable image IDs, source hashes,
 Python/package versions, prompts, parameters, and proxy-config digest per campaign.
 
 The requirements pin mini itself. Transitive Python dependencies are recorded,
@@ -119,7 +128,7 @@ python -I benchmark/run.py run --campaign benchmark/config/campaign.local.json \
   --out benchmark/runs/official
 ```
 
-`doctor` checks configuration, installed mini version, Docker image, and the
+`doctor` checks configuration, installed mini version, both Docker images, and the
 proxy's model list. It makes no completion request. It does not certify an active
 proxy is using the supplied config file; start that instance explicitly.
 
@@ -145,6 +154,7 @@ benchmark/runs/official/
     status.json
     submission/tune.xm
     canonical/canonical.wav
+    visualizer/visualizer.mp4
 ```
 
 `transport.jsonl` records exact outbound request hashes, reported model IDs, usage,
