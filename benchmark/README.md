@@ -192,6 +192,41 @@ rendered (`ok`, `invalid`, `error`), and `module` what FT2 reports about it
 final artifact; its termination reason is retained separately. A render/infrastructure error is
 not silently turned into a zero musical score. None causes a second model attempt.
 
+## Profiles and listening packets (no score)
+
+`score.py` is the automatic layer that runs over collected attempts. It never ranks
+and never excludes; it produces evidence columns and blind listening material.
+
+```sh
+python -I benchmark/score.py profile --out benchmark/runs/official
+python -I benchmark/score.py packets --out benchmark/runs/official
+```
+
+`profile` writes `profile.json` per attempt and `profiles.{json,md}` at the root:
+XM structure (channels used, distinct patterns in the order, note-ons, instruments,
+sample seconds at root pitch, sample versus pattern bytes, effects, jumps), canonical
+audio metrics (BS.1770 integrated loudness, true peak, silence map, tail silence,
+block RMS range, seam jump across end to start), process tags from the trajectory
+(FT2 tools used, XM written directly, preview rendered, inspected, edited after
+inspection), and craft flags. Every flag rule is disclosed in `FLAG_RULES` and in
+the table footer. A flag is a reason for a human to look, not a verdict; the known
+gaming vector (one long pre-rendered sample) shows up as `PHRASE_SAMPLE` and
+`SAMPLE_HEAVY` and is adjudicated by a person against the prompt's rule.
+
+`packets` renders each tune again with its restart sequence appended to the order
+table, so FT2 plays a real restart with carried tempo, volume and effect state
+(disclosed limitation: with a nonzero restart position the tail wraps to order 0
+after the end). The first part of the render must be byte-identical to
+`canonical.wav` or no packet is written. The packet gets one constant gain to
+-18 LUFS with a -1 dBTP ceiling and no limiter, a 50 ms end fade, and
+`packet.json` with hashes, gain, and any loudness shortfall. Packets are what a
+blind listener hears; `canonical.wav` stays the reference artifact.
+
+What this layer cannot do is judge music. A ranking needs blind listening by a
+person (the protocol in `docs/12-scoring-ideation-2026-09-24.md` is the current
+plan); an audio-language judge would have to be validated against those labels
+first.
+
 ## Isolation details
 
 The worker runs Python with `-I` and an allowlisted environment. Its HOME, XDG
