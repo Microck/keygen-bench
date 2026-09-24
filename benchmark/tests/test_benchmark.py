@@ -168,6 +168,29 @@ class BenchmarkTests(unittest.TestCase):
         self.assertEqual(env["HOME"], str(self.root))
         self.assertEqual(env["MSWEA_GLOBAL_CONFIG_DIR"], str(self.root / "mini-config"))
 
+    def test_policy_digest_ignores_credentials(self):
+        first = self.load()["proxy_policy"]["config_sha256"]
+        self.proxy_file.write_text(self.proxy_file.read_text().replace("REPLACE_WITH_RANDOM_LOCAL_CLIENT_KEY", "rotated-key"))
+        self.assertEqual(self.load()["proxy_policy"]["config_sha256"], first)
+        self.proxy_file.write_text(self.proxy_file.read_text().replace("port: 8317", "port: 8318"))
+        self.config["base_url"] = "http://127.0.0.1:8318/v1"
+        self.assertNotEqual(self.load()["proxy_policy"]["config_sha256"], first)
+
+    def test_drive_plan_one_campaign_per_tier(self):
+        from benchmark import drive
+        self.path.write_text(json.dumps(self.config))
+        selection = self.root / "selection.json"
+        selection.write_text(json.dumps([{"id": "a-low", "model": "a", "response_model": "a", "tier": "low"},
+                                         {"id": "b-low", "model": "devin/b", "response_model": "devin/b", "tier": "low"},
+                                         {"id": "c", "model": "c", "response_model": "c", "tier": "thinking-on"}]))
+        campaigns = dict(drive.plan(selection, self.path, self.root / "out"))
+        low = json.loads(campaigns["low"].read_text())
+        self.assertEqual(low["generation"]["reasoning_effort"], "low")
+        self.assertEqual([m["id"] for m in low["models"]], ["a", "devin-b"])
+        self.assertNotIn("reasoning_effort", json.loads(campaigns["thinking-on"].read_text())["generation"])
+        for path in campaigns.values():
+            run.load_config(path)  # every generated campaign passes the runner's validation
+
     def test_lock_and_one_attempt(self):
         run.lock_campaign(self.root / "lock.json", {"prompt": "original"})
         run.lock_campaign(self.root / "lock.json", {"prompt": "original"})
