@@ -63,9 +63,20 @@ def proxy_policy(path: Path) -> dict:
         raise ValueError("Proxy plugins must be disabled")
     if value.get("claude-code", {}).get("disable-cloaking-model-list") is not True:
         raise ValueError("Disable model-list cloaking")
-    # Do not read auth-dir or save any upstream/local client credentials.
-    return {"config_sha256": digest(value), "port": value.get("port"),
+    # Do not read auth-dir or save any upstream/local client credentials. The digest skips
+    # credential values so a rotated key (Vercel's 12 h OIDC token) is not a changed condition.
+    return {"config_sha256": digest(redact(value)), "port": value.get("port"),
             "auth_overrides_audited": False, "upstream_payload_verified": False}
+
+
+def redact(value):
+    """Copy of a config tree with every key/secret/token value replaced by a marker."""
+    if isinstance(value, dict):
+        return {k: "<redacted>" if re.search(r"key|secret|token", k, re.I) and isinstance(v, (str, list)) else redact(v)
+                for k, v in value.items()}
+    if isinstance(value, list):
+        return [redact(v) for v in value]
+    return value
 
 
 def load_config(path: Path) -> dict:

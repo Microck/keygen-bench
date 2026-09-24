@@ -132,6 +132,19 @@ python -I benchmark/run.py run --campaign benchmark/config/campaign.local.json \
 proxy's model list. It makes no completion request. It does not certify an active
 proxy is using the supplied config file; start that instance explicitly.
 
+To run a roster selection (one row per model and tier, as exported by the roster page)
+as one campaign per tier, in order, with a results table at the end:
+
+```sh
+python -I benchmark/drive.py plan --selection benchmark/config/selection.local.json
+python -I benchmark/drive.py run  --selection benchmark/config/selection.local.json --out benchmark/runs/official
+```
+
+Each tier gets `campaign-<tier>.local.json` and `runs/official/<tier>/`. Tiers that are not a
+`reasoning_effort` value run with no parameter. The driver refreshes a Vercel OIDC token
+between campaigns when it has under six hours left; credential values are excluded from the
+proxy-config digest, so a rotated key does not count as a changed condition.
+
 Reissuing the same `run` command skips every reserved model, including failed or
 interrupted ones. A changed prompt, dependency set, generation setting, image,
 proxy config, or model list is refused for that output directory. There is no
