@@ -112,3 +112,13 @@ Checked on the host: re-rendering both astra tunes gives PCM hashes identical to
 the stored ones (the render is deterministic for a fixed image); `module_info`
 reports 12 channels, 142 BPM, 24 and 32 order entries for them; a 40 KB command
 output arrives as 10 KB + marker + 10 KB with the final line intact. 30 tests pass.
+
+## Profiles and packets, 2026-09-24
+
+`score.py profile` over the three demo attempts: astra-low flags TAIL_SILENCE, SEAM,
+RAW_XM (2.8 s tail silence, 12 channels, 24 distinct patterns, 1570 note-ons);
+astra-low-v2 flags SEAM (11 channels, 32 patterns, 1706 note-ons, -21.4 LUFS);
+luna flags FLAT (6 channels, 4 patterns, 240 note-ons, -17.9 LUFS). Loudness checked
+against a 997 Hz reference tone at -20 dBFS in both channels: -20.0 LKFS within 0.3.
+`score.py packets` built all three: extended renders reproduce the canonical prefix
+byte for byte; tails 10.1 to 13.2 s; gains +4.5, +3.4, -0.1 dB; no loudness shortfall.
