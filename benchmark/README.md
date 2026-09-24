@@ -150,6 +150,7 @@ benchmark/runs/official/
     spec.json
     trajectory.json
     transport.jsonl
+    responses.jsonl
     worker-result.json
     status.json
     submission/tune.xm
@@ -157,8 +158,13 @@ benchmark/runs/official/
     visualizer/visualizer.mp4
 ```
 
-`transport.jsonl` records exact outbound request hashes, reported model IDs, usage,
-and response metadata. The trajectory preserves visible messages and executed
+`transport.jsonl` records, per request: outbound request hash, requested and reported
+model IDs, usage, start time, latency, response size, prompt message count, and the
+rate-limit headers the proxy passed through. `responses.jsonl` keeps each whole
+upstream body, reasoning fields included. Tool results carry the sandbox time of
+their command. `status.json` adds attempt start and end times and per-attempt totals
+(requests, prompt/cached/completion/reasoning tokens, model seconds, sandbox seconds,
+commands). The trajectory preserves visible messages and executed
 actions. Authentication headers and API keys are never placed in prompts or
 serialized model config. Keep these local audit files private unless reviewed.
 No automatic leaderboard or aesthetic ranking is emitted.

@@ -177,10 +177,13 @@ class Sandbox:
         wrapper = (f"timeout --kill-after=2s {self.timeout}s /bin/bash --noprofile --norc -c "
                    + shlex.quote(command) + " > /tmp/keygen-action.log 2>&1; "
                    + "r=$?; head -c 20000 /tmp/keygen-action.log; exit $r")
+        started = time.monotonic()
         result = shell(self.docker + ["exec", "-w", "/workspace", "-e", "BASH_ENV=/dev/null",
                        "-e", "ENV=/dev/null", self.name, "/bin/bash", "--noprofile", "--norc", "-c", wrapper],
                        timeout=self.timeout + 10, check=False)
-        return {"returncode": result.returncode, "output": result.stdout.decode("utf-8", "replace")}
+        # mini copies `extra` onto the tool message, so the sandbox time lands in the trajectory.
+        return {"returncode": result.returncode, "output": result.stdout.decode("utf-8", "replace"),
+                "extra": {"duration_seconds": time.monotonic() - started}}
 
     def get_template_vars(self, **kwargs) -> dict:
         return {}
@@ -356,6 +359,32 @@ def worker(spec_path: Path) -> None:
     write_json(run_dir / "worker-result.json", result)
 
 
+def summarize(run_dir: Path) -> dict:
+    """Per-attempt totals from the audit files, so nobody has to re-sum transport.jsonl later."""
+    totals = {"requests": 0, "prompt_tokens": 0, "cached_tokens": 0, "completion_tokens": 0,
+              "reasoning_tokens": 0, "model_seconds": 0.0, "sandbox_seconds": 0.0, "commands": 0}
+    transport = run_dir / "transport.jsonl"
+    if transport.exists():
+        for line in transport.read_text(encoding="utf-8").splitlines():
+            record = json.loads(line)
+            usage = record.get("usage") or {}
+            totals["requests"] += 1
+            totals["prompt_tokens"] += usage.get("prompt_tokens") or 0
+            totals["completion_tokens"] += usage.get("completion_tokens") or 0
+            totals["cached_tokens"] += (usage.get("prompt_tokens_details") or {}).get("cached_tokens") or 0
+            totals["reasoning_tokens"] += ((usage.get("completion_tokens_details") or {}).get("reasoning_tokens")
+                                           or usage.get("reasoning_tokens") or 0)
+            totals["model_seconds"] += record.get("latency_seconds") or 0.0
+    trajectory = run_dir / "trajectory.json"
+    if trajectory.exists():
+        for message in json.loads(trajectory.read_text(encoding="utf-8")).get("messages", []):
+            duration = message.get("extra", {}).get("duration_seconds")
+            if message.get("role") == "tool" and duration is not None:
+                totals["commands"] += 1
+                totals["sandbox_seconds"] += duration
+    return totals
+
+
 def reserve(root: Path, model_id: str) -> Path:
     directory = root / model_id
     directory.mkdir()  # Atomic one-attempt reservation. No overwrite/redo option.
@@ -366,7 +395,8 @@ def reserve(root: Path, model_id: str) -> Path:
 def run_one(root: Path, config: dict, model: dict, docker: list[str], image: str, visualizer_image: str) -> None:
     run_dir = reserve(root, model["id"])
     name = "keygen-create-" + uuid.uuid4().hex[:16]
-    result = {"status": "INFRA_ERROR", "model": model, "quality_score": None}
+    started = time.time()
+    result = {"status": "INFRA_ERROR", "model": model, "quality_score": None, "started_at": started}
     try:
         start_container(docker, image, name)
         spec = {"config": config, "model": model, "docker": docker, "container": name}
@@ -424,6 +454,9 @@ def run_one(root: Path, config: dict, model: dict, docker: list[str], image: str
         try:
             remove_container(docker, name)
         finally:
+            result["finished_at"] = time.time()
+            result["wall_seconds"] = result["finished_at"] - started
+            result["totals"] = summarize(run_dir)
             write_json(run_dir / "status.json", result)
 
 
@@ -464,7 +497,7 @@ def main() -> None:
     key = os.environ.get(config["api_key_env"])
     if not key:
         raise ValueError("Set the local proxy client-key environment variable")
-    models = request(config["base_url"], key, "/models", timeout=30)
+    models = request(config["base_url"], key, "/models", timeout=30).json
     available = {m["id"] for m in models.get("data", [])}
     if any(m["model"] not in available for m in config["models"]):
         raise ValueError("A configured model is missing from the proxy /v1/models list")
