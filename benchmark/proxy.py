@@ -97,8 +97,17 @@ class ProxyModel:
                    "messages": [forward(m) for m in messages], "tools": [BASH_TOOL],
                    "stream": False, "n": 1}
         started_at = time.time()
-        reply = request(self.config["base_url"], self.key, "/chat/completions", payload,
-                        self.config["limits"]["request_seconds"])
+        try:
+            reply = request(self.config["base_url"], self.key, "/chat/completions", payload,
+                            self.config["limits"]["request_seconds"])
+        except (RuntimeError, ValueError) as exc:
+            # A failed request still cost time; record it so totals do not read as zero.
+            failed = {"request_sha256": digest(payload), "requested_model": self.model["model"], "started_at": started_at,
+                      "latency_seconds": time.time() - started_at, "prompt_messages": len(payload["messages"]),
+                      "error": type(exc).__name__ + ": " + str(exc)}
+            with self.audit.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(failed, allow_nan=False) + "\n")
+            raise
         response = reply.json
         returned_model = response.get("model")
         record = {"request_sha256": digest(payload), "requested_model": self.model["model"],

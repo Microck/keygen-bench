@@ -35,12 +35,13 @@ After the canonical render, a second trusted container records the FT2 clone GUI
 playing the module: Xvfb at 1280x960, the tracker's 1264x800 window stretched to
 4:3 the way FT2 filled a CRT, 30 fps H.264. The audio track is what the mixer
 played in real time through SDL's disk driver at 48 kHz, aligned to the frame the
-grab started on. It is presentation; canonical.wav remains the graded artifact.
+grab started on. It is presentation; canonical.wav is the artifact a later evaluator would use.
 Capture length is capped by `video_seconds`, and a capture failure is recorded in
 `status.json` without changing the attempt's status.
 
-There is deliberately no invented music-quality score. `PLAYABLE_UNSCORED`
-means the artifact rendered, not that its composition is good. The previously
+There is deliberately no invented music-quality score. `RENDERED_UNSCORED`
+means the trusted FT2 process rendered a non-silent WAV from the file, nothing
+more. No ordering of models follows from it. The previously
 claimed scoring package was not present in the reviewed repository. Domain-fit,
 structural, originality, and aesthetic ranking are not implemented in this PR.
 The collection records are intended for a separate frozen artifact evaluator.
@@ -176,15 +177,19 @@ model IDs, usage, start time, latency, response size, prompt message count, and 
 rate-limit headers the proxy passed through. `responses.jsonl` keeps each whole
 upstream body, reasoning fields included. Tool results carry the sandbox time of
 their command. `status.json` adds attempt start and end times and per-attempt totals
-(requests, prompt/cached/completion/reasoning tokens, model seconds, sandbox seconds,
-commands). The trajectory preserves visible messages and executed
+(requests, failed requests, requests with unknown usage, prompt/cached/completion/
+reasoning tokens, model seconds, sandbox seconds, commands). A request that fails
+still gets a transport line with its error and elapsed time. The trajectory preserves visible messages and executed
 actions. Authentication headers and API keys are never placed in prompts or
 serialized model config. Keep these local audit files private unless reviewed.
 No automatic leaderboard or aesthetic ranking is emitted.
 
 Statuses distinguish `FAILED`, `INFRA_ERROR`, `EVALUATION_ERROR`, `INTERRUPTED`,
-and `PLAYABLE_UNSCORED`. A worker timing out may leave a playable final artifact;
-its termination reason is retained separately. A render/infrastructure error is
+and `RENDERED_UNSCORED`. Beside the status, `termination` says how the agent
+ended, `collection` whether a submission was found, `render` whether the file
+rendered (`ok`, `invalid`, `error`), and `module` what FT2 reports about it
+(channels, patterns, instruments). A worker timing out may leave a renderable
+final artifact; its termination reason is retained separately. A render/infrastructure error is
 not silently turned into a zero musical score. None causes a second model attempt.
 
 ## Isolation details

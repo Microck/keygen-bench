@@ -184,10 +184,13 @@ class Sandbox:
             from minisweagent.exceptions import Submitted
             raise Submitted({"role": "exit", "content": "Submitted",
                              "extra": {"exit_status": "Submitted", "submission": "submission/tune.xm"}})
-        # Output is bounded by the container tmpfs and only 20 KB reaches the host.
+        # Output is bounded by the container tmpfs; the host sees the first and last 10 KB with a
+        # marker in between, so a long batch never hides its final error or save result.
         wrapper = (f"timeout --kill-after=2s {self.timeout}s /bin/bash --noprofile --norc -c "
-                   + shlex.quote(command) + " > /tmp/keygen-action.log 2>&1; "
-                   + "r=$?; head -c 20000 /tmp/keygen-action.log; exit $r")
+                   + shlex.quote(command) + " > /tmp/keygen-action.log 2>&1; r=$?; "
+                   + "n=$(stat -c %s /tmp/keygen-action.log); if [ \"$n\" -le 20000 ]; then cat /tmp/keygen-action.log; "
+                   + "else head -c 10000 /tmp/keygen-action.log; printf '\\n[output truncated: %s bytes total]\\n' \"$n\"; "
+                   + "tail -c 10000 /tmp/keygen-action.log; fi; exit $r")
         started = time.monotonic()
         result = shell(self.docker + ["exec", "-w", "/workspace", "-e", "BASH_ENV=/dev/null",
                        "-e", "ENV=/dev/null", self.name, "/bin/bash", "--noprofile", "--norc", "-c", wrapper],
@@ -306,6 +309,7 @@ def render(docker: list[str], image: str, run_dir: Path, config: dict) -> dict:
                     stdin=source, capture_output=True, timeout=30, check=True)
         for tool, arguments in (
                 ("module_load", {"path": "/workspace/input.xm"}),
+                ("module_info", {}),
                 ("module_render", {"path": "/workspace/canonical.wav", "rate": 44100, "bits": 16, "amp": 8, "loops": 1})):
             result = shell(docker + ["exec", name, "ft2", "call", tool, json.dumps(arguments)],
                            timeout=config["limits"]["render_seconds"])
@@ -314,6 +318,16 @@ def render(docker: list[str], image: str, run_dir: Path, config: dict) -> dict:
         return wav_info(run_dir / "canonical/canonical.wav")
     finally:
         remove_container(docker, name)
+
+
+def module_facts(run_dir: Path) -> dict | str:
+    """What FT2 reports about the loaded module (channels, patterns, instruments...), as saved by render()."""
+    raw = json.loads((run_dir / "module_info.json").read_bytes())
+    text = "".join(part.get("text", "") for part in raw.get("content", []))
+    try:
+        return json.loads(text)
+    except ValueError:
+        return text
 
 
 def visualize(docker: list[str], image: str, run_dir: Path, config: dict, duration: float) -> dict:
@@ -372,14 +386,18 @@ def worker(spec_path: Path) -> None:
 
 def summarize(run_dir: Path) -> dict:
     """Per-attempt totals from the audit files, so nobody has to re-sum transport.jsonl later."""
-    totals = {"requests": 0, "prompt_tokens": 0, "cached_tokens": 0, "completion_tokens": 0,
-              "reasoning_tokens": 0, "model_seconds": 0.0, "sandbox_seconds": 0.0, "commands": 0}
+    totals = {"requests": 0, "failed_requests": 0, "usage_unknown": 0, "prompt_tokens": 0, "cached_tokens": 0,
+              "completion_tokens": 0, "reasoning_tokens": 0, "model_seconds": 0.0, "sandbox_seconds": 0.0, "commands": 0}
     transport = run_dir / "transport.jsonl"
     if transport.exists():
         for line in transport.read_text(encoding="utf-8").splitlines():
             record = json.loads(line)
             usage = record.get("usage") or {}
             totals["requests"] += 1
+            if record.get("error"):
+                totals["failed_requests"] += 1
+            if not usage:
+                totals["usage_unknown"] += 1
             totals["prompt_tokens"] += usage.get("prompt_tokens") or 0
             totals["completion_tokens"] += usage.get("completion_tokens") or 0
             totals["cached_tokens"] += (usage.get("prompt_tokens_details") or {}).get("cached_tokens") or 0
@@ -407,7 +425,10 @@ def run_one(root: Path, config: dict, model: dict, docker: list[str], image: str
     run_dir = reserve(root, model["id"])
     name = "keygen-create-" + uuid.uuid4().hex[:16]
     started = time.time()
-    result = {"status": "INFRA_ERROR", "model": model, "quality_score": None, "started_at": started}
+    # status is the attempt outcome; collection and render say separately what happened to the artifact,
+    # termination says how the agent ended. Grouping by status alone conflates them.
+    result = {"status": "INFRA_ERROR", "model": model, "quality_score": None, "started_at": started,
+              "collection": "not_attempted", "render": "not_attempted"}
     try:
         start_container(docker, image, name)
         spec = {"config": config, "model": model, "docker": docker, "container": name}
@@ -439,23 +460,26 @@ def run_one(root: Path, config: dict, model: dict, docker: list[str], image: str
         shell(docker + ["pause", name])
         try:
             collect(docker, name, "/workspace/submission/.", run_dir / "submission", config["limits"]["artifact_bytes"])
+            result["collection"] = "ok"
         except ValueError as exc:
-            result.update(status="FAILED", error=str(exc))
+            result.update(status="FAILED", collection="missing", error=str(exc))
             return
         remove_container(docker, name)
         try:
             result["audio"] = render(docker, image, run_dir, config)
+            result["module"] = module_facts(run_dir)
             result["artifact_sha256"] = hashlib.sha256((run_dir / "submission/tune.xm").read_bytes()).hexdigest()
-            result["status"] = "PLAYABLE_UNSCORED"
+            result["render"] = "ok"
+            result["status"] = "RENDERED_UNSCORED"
             # The video is presentation, not evaluation: a capture failure is recorded, not a status change.
             try:
                 result["video"] = visualize(docker, visualizer_image, run_dir, config, result["audio"]["duration_seconds"])
             except (OSError, ValueError, subprocess.SubprocessError) as exc:
                 result["video"] = {"error": type(exc).__name__ + ": " + str(exc)[:500]}
         except (ValueError, wave.Error, EOFError) as exc:
-            result.update(status="FAILED", error=str(exc))
+            result.update(status="FAILED", render="invalid", error=str(exc))
         except (subprocess.SubprocessError, RuntimeError) as exc:
-            result.update(status="EVALUATION_ERROR", error=type(exc).__name__)
+            result.update(status="EVALUATION_ERROR", render="error", error=type(exc).__name__)
     except KeyboardInterrupt:
         result["status"] = "INTERRUPTED"
         raise
