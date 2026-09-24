@@ -55,6 +55,8 @@ def endpoint(code=200, returned_model="exact-model", redirect=False, tool_calls=
             self.send_response(302 if redirect else code)
             if redirect:
                 self.send_header("Location", "/v1/should-not-follow")
+            self.send_header("anthropic-ratelimit-unified-7d-utilization", "0.42")
+            self.send_header("X-Private-Header", "hidden")
             self.end_headers()
             response = {"model": returned_model, "choices": [{"message": {"content": "", "tool_calls": list(tool_calls)},
                 "finish_reason": "tool_calls"}],
@@ -197,7 +199,13 @@ class BenchmarkTests(unittest.TestCase):
         self.assertEqual(answer["extra"]["actions"], [{"command": "echo ready", "tool_call_id": "call_1"}])
         self.assertEqual(answer["tool_calls"], [bash_call("echo ready")])
         self.assertNotIn("local-secret", json.dumps(model.serialize()))
-        self.assertNotIn("local-secret", (self.root / "audit.jsonl").read_text())
+        audit = json.loads((self.root / "audit.jsonl").read_text())
+        self.assertNotIn("local-secret", json.dumps(audit))
+        self.assertEqual(audit["rate_limit"], {"anthropic-ratelimit-unified-7d-utilization": "0.42"})
+        self.assertGreater(audit["latency_seconds"], 0)
+        self.assertEqual(audit["prompt_messages"], 4)
+        self.assertEqual(json.loads((self.root / "responses.jsonl").read_text())["model"], "exact-model")
+        self.assertIn("timestamp", answer["extra"])
 
     def test_missing_or_unknown_tool_call_raises_mini_format_error(self):
         c = self.load()
@@ -275,6 +283,16 @@ class BenchmarkTests(unittest.TestCase):
         self.assertIn("--noprofile --norc", command)
         self.assertIn("BASH_ENV=/dev/null", command)
         self.assertEqual(result["output"], "ok")
+        self.assertGreaterEqual(result["extra"]["duration_seconds"], 0)
+
+    def test_summarize_totals(self):
+        (self.root / "transport.jsonl").write_text(json.dumps({"usage": {"prompt_tokens": 100, "completion_tokens": 10,
+            "prompt_tokens_details": {"cached_tokens": 40}, "completion_tokens_details": {"reasoning_tokens": 3}}, "latency_seconds": 1.5}) + "\n"
+            + json.dumps({"usage": {"prompt_tokens": 50, "completion_tokens": 5}, "latency_seconds": 0.5}) + "\n")
+        (self.root / "trajectory.json").write_text(json.dumps({"messages": [
+            {"role": "tool", "extra": {"duration_seconds": 2.0}}, {"role": "tool", "extra": {"duration_seconds": 1.0}}, {"role": "assistant", "extra": {}}]}))
+        self.assertEqual(run.summarize(self.root), {"requests": 2, "prompt_tokens": 150, "cached_tokens": 40, "completion_tokens": 15,
+            "reasoning_tokens": 3, "model_seconds": 2.0, "sandbox_seconds": 3.0, "commands": 2})
 
     def archive(self, name, size=4, kind=tarfile.REGTYPE):
         path = self.root / "artifact.tar"
