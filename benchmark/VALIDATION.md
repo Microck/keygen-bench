@@ -89,3 +89,13 @@ targets: 7 turns, `Submitted`, `PLAYABLE_UNSCORED`, canonical render 51.8 s.
 `visualizer/visualizer.mp4`: 52 s, 1280x960, H.264 + AAC, 42.7 MB, window
 1264x800 at +8+80, audio offset 0.747 s. Frames show the pattern editor scrolling
 and scopes moving; the pointer sprite is parked off-window.
+
+## Prompt revision, 2026-09-24
+
+System prompt now states the step and time budget (filled from the frozen
+limits), names what this FT2 build cannot do (envelopes, note-to-sample
+mapping), says a keygen tune loops, and points at the render-and-inspect loop
+in place of the negated "you have not heard it". Task prompt unchanged.
+Smoke run `gpt-6-astra`, `reasoning_effort` low: 6 turns, `Submitted`,
+`PLAYABLE_UNSCORED`, 54.1 s; the model rendered a preview and measured peak,
+RMS and clipping before submitting. 26 tests pass.

@@ -102,6 +102,8 @@ class BenchmarkTests(unittest.TestCase):
     def test_campaign_configuration(self):
         c = self.load()
         self.assertIn("Choose the sound", c["task"])
+        self.assertIn("Budget: 100 commands and 30 minutes.", c["system"])
+        self.assertNotIn("<<", c["system"])
         self.assertFalse(c["proxy_policy"]["upstream_payload_verified"])
         self.assertNotIn("api-keys", json.dumps(c))
 
