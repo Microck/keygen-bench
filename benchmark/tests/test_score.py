@@ -66,7 +66,8 @@ class ScoreTests(unittest.TestCase):
 
     def test_craft_score_rewards_craft_not_baking(self):
         clean_st = {"song_seconds_nominal": 90.0, "longest_sample_seconds": 1.0, "sample_seconds_total": 8.0, "instruments_used": 8,
-                    "note_ons": 900, "channels_used": 8, "distinct_patterns_in_order": 12, "note_ons_per_second": 10.0}
+                    "note_ons": 900, "channels_used": 8, "distinct_patterns_in_order": 12, "note_ons_per_second": 10.0,
+                    "effects_used": ["0", "4", "A", "E", "F"]}
         clean_au = {"duration_seconds": 90.0, "silent_fraction": 0.0, "longest_silence_seconds": 0.0, "tail_silence_seconds": 0.0,
                     "full_scale_samples": 0, "lufs_integrated": -18.0, "true_peak_dbtp": -3.0, "dc_offset": 0.0001,
                     "block_rms_range_db": 12.0, "seam_jump_ratio": 1.0, "seam_rms_ratio_db": 1.0}
@@ -76,8 +77,8 @@ class ScoreTests(unittest.TestCase):
         baked_st = dict(clean_st, longest_sample_seconds=90.0, sample_seconds_total=90.0, instruments_used=1, channels_used=1,
                         distinct_patterns_in_order=1, note_ons_per_second=0.1)
         baked = score.craft_score(baked_st, clean_au, pt, {"failed_requests": 0})
-        self.assertLess(baked["craft_score"], 75.0)
-        self.assertEqual(baked["parts"]["structure"], 0.0)
+        self.assertLessEqual(baked["craft_score"], 40.0); self.assertTrue(baked["capped"])
+        self.assertLessEqual(baked["parts"]["structure"], 4.5)  # only the effects sub-part can survive baking
         self.assertEqual(sum(score.CRAFT_WEIGHTS.values()), 100)
 
     def test_process_tags(self):
