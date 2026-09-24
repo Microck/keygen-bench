@@ -8,14 +8,18 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import re
 import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import Any
 
-ACTION = re.compile(r"```mswea_bash_command\s*\n(.*?)\n```", re.DOTALL)
+from minisweagent.models.utils.actions_text import parse_regex_actions
+
+ACTION = r"```mswea_bash_command\s*\n(.*?)\n```"
+# mini's own text-action wording, so every model gets the same correction. DefaultAgent feeds
+# the FormatError back as a user message and ends the run after three in a row.
+FORMAT_ERROR = "Please always provide EXACTLY ONE action in triple backticks, found {{actions|length}} actions."
 MAX_RESPONSE = 16 * 1024 * 1024
 
 
@@ -85,11 +89,12 @@ class ProxyModel:
         content = choices[0].get("message", {}).get("content")
         if not isinstance(content, str):
             raise ValueError("Expected a text completion")
-        actions = ACTION.findall(content)
-        if len(actions) != 1 or not actions[0].strip():
-            raise ValueError("Expected exactly one nonempty mswea_bash_command block")
+        # Raises minisweagent FormatError when the reply has zero or several action blocks; the audit
+        # line above is already written, so the attempt still records the turn.
+        actions = parse_regex_actions(content, action_regex=ACTION, format_error_template=FORMAT_ERROR,
+                                      template_kwargs={"finish_reason": choices[0].get("finish_reason")})
         return {"role": "assistant", "content": content,
-                "extra": {"actions": [{"command": actions[0]}], "cost": 0.0,
+                "extra": {"actions": actions, "cost": 0.0,
                           "cost_status": "not_measured", **record,
                           "finish_reason": choices[0].get("finish_reason")}}
 
