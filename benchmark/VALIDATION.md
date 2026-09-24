@@ -99,3 +99,16 @@ in place of the negated "you have not heard it". Task prompt unchanged.
 Smoke run `gpt-6-astra`, `reasoning_effort` low: 6 turns, `Submitted`,
 `PLAYABLE_UNSCORED`, 54.1 s; the model rendered a preview and measured peak,
 RMS and clipping before submitting. 26 tests pass.
+
+## Review fixes, 2026-09-24
+
+Applied from docs/11-adversarial-review-2026-09-24.md: `RENDERED_UNSCORED` replaces
+`PLAYABLE_UNSCORED`; `status.json` carries `collection`, `render`, and `module`
+beside `status` and `termination`; failed requests get a transport line with
+their error and elapsed time and totals count them; the prompt says steps, not
+commands, and states that raw XM writing is allowed but the module must be a real
+tracker module; sandbox output keeps head and tail with a byte-count marker.
+Checked on the host: re-rendering both astra tunes gives PCM hashes identical to
+the stored ones (the render is deterministic for a fixed image); `module_info`
+reports 12 channels, 142 BPM, 24 and 32 order entries for them; a 40 KB command
+output arrives as 10 KB + marker + 10 KB with the final line intact. 30 tests pass.
