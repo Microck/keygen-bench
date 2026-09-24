@@ -19,6 +19,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from benchmark import run
 from benchmark.proxy import ProxyModel, request, validate_url
+from minisweagent.exceptions import FormatError
+from minisweagent.models.utils.actions_toolcall import BASH_TOOL
 
 
 @contextmanager
@@ -36,8 +38,12 @@ def environ(**values):
                 os.environ[key] = old
 
 
+def bash_call(command, call_id="call_1"):
+    return {"id": call_id, "type": "function", "function": {"name": "bash", "arguments": json.dumps({"command": command})}}
+
+
 @contextmanager
-def endpoint(code=200, returned_model="exact-model", redirect=False, content="```mswea_bash_command\necho ready\n```"):
+def endpoint(code=200, returned_model="exact-model", redirect=False, tool_calls=(bash_call("echo ready"),)):
     seen = []
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
@@ -50,8 +56,8 @@ def endpoint(code=200, returned_model="exact-model", redirect=False, content="``
             if redirect:
                 self.send_header("Location", "/v1/should-not-follow")
             self.end_headers()
-            response = {"model": returned_model, "choices": [{"message": {"content": content},
-                "finish_reason": "stop"}],
+            response = {"model": returned_model, "choices": [{"message": {"content": "", "tool_calls": list(tool_calls)},
+                "finish_reason": "tool_calls"}],
                 "usage": {"total_tokens": 10}}
             self.wfile.write(json.dumps(response).encode())
         def log_message(self, *args):
@@ -167,33 +173,53 @@ class BenchmarkTests(unittest.TestCase):
         with self.assertRaises(FileExistsError):
             run.reserve(self.root, "model")
 
-    def test_outbound_prompt_unmodified_no_native_tools(self):
+    def test_outbound_messages_and_single_bash_tool(self):
         c = self.load()
+        history = [{"role": "system", "content": "Exact original {{ text }}", "extra": {"private": 1}},
+                   {"role": "user", "content": "task"},
+                   {"role": "assistant", "content": "", "tool_calls": [bash_call("ls", "call_0")], "extra": {"actions": []}},
+                   {"role": "tool", "content": "<returncode>0</returncode>", "tool_call_id": "call_0", "extra": {"raw_output": "x"}}]
         with endpoint() as (url, seen), environ(CLIPROXY_CLIENT_KEY="local-secret", HTTP_PROXY="http://unreachable:1"):
             c["base_url"] = url
             model = ProxyModel(c, c["models"][0], self.root / "audit.jsonl")
-            answer = model.query([{"role": "system", "content": "Exact original {{ text }}", "extra": {"private": 1}}])
+            answer = model.query(history)
         self.assertEqual(len(seen), 1)
-        self.assertEqual(seen[0]["body"]["messages"], [{"role": "system", "content": "Exact original {{ text }}"}])
-        self.assertEqual(seen[0]["body"]["n"], 1)
-        self.assertNotIn("tools", seen[0]["body"])
-        self.assertEqual(answer["extra"]["actions"][0]["command"], "echo ready")
+        body = seen[0]["body"]
+        self.assertEqual(body["messages"], [{"role": "system", "content": "Exact original {{ text }}"},
+                                            {"role": "user", "content": "task"},
+                                            {"role": "assistant", "content": "", "tool_calls": [bash_call("ls", "call_0")]},
+                                            {"role": "tool", "content": "<returncode>0</returncode>", "tool_call_id": "call_0"}])
+        self.assertEqual(body["tools"], [BASH_TOOL])  # mini's one bash tool, nothing else
+        self.assertNotIn("tool_choice", body)
+        self.assertEqual(body["n"], 1)
+        self.assertEqual(answer["extra"]["actions"], [{"command": "echo ready", "tool_call_id": "call_1"}])
+        self.assertEqual(answer["tool_calls"], [bash_call("echo ready")])
         self.assertNotIn("local-secret", json.dumps(model.serialize()))
         self.assertNotIn("local-secret", (self.root / "audit.jsonl").read_text())
 
-    def test_multiple_actions_raise_mini_format_error(self):
-        from minisweagent.exceptions import FormatError
+    def test_missing_or_unknown_tool_call_raises_mini_format_error(self):
         c = self.load()
-        two = "```mswea_bash_command\nls\n``````mswea_bash_command\necho x\n```"
-        with endpoint(content=two) as (url, _), environ(CLIPROXY_CLIENT_KEY="secret"):
-            c["base_url"] = url
-            with self.assertRaises(FormatError) as caught:
-                ProxyModel(c, c["models"][0], self.root / "audit.jsonl").query([])
-        feedback = caught.exception.messages[0]
-        self.assertEqual(feedback["role"], "user")
-        self.assertIn("EXACTLY ONE action", feedback["content"])
-        self.assertEqual(feedback["extra"]["n_actions"], 2)
-        self.assertTrue((self.root / "audit.jsonl").exists())  # the turn is still audited
+        unknown = {"id": "call_9", "type": "function", "function": {"name": "python", "arguments": "{}"}}
+        for calls, expected in [((), "No tool calls found"), ((unknown,), "Unknown tool 'python'")]:
+            with endpoint(tool_calls=calls) as (url, _), environ(CLIPROXY_CLIENT_KEY="secret"):
+                c["base_url"] = url
+                with self.assertRaises(FormatError) as caught:
+                    ProxyModel(c, c["models"][0], self.root / "audit.jsonl").query([])
+            feedback = caught.exception.messages[0]
+            self.assertEqual(feedback["role"], "user")
+            self.assertIn(expected, feedback["content"])
+        self.assertEqual(len((self.root / "audit.jsonl").read_text().splitlines()), 2)  # both turns audited
+
+    def test_observations_are_tool_results(self):
+        c = self.load()
+        with environ(CLIPROXY_CLIENT_KEY="secret"):
+            model = ProxyModel(c, c["models"][0], self.root / "audit.jsonl")
+        turn = {"role": "assistant", "extra": {"actions": [{"command": "ls", "tool_call_id": "call_0"}]}}
+        [observation] = model.format_observation_messages(turn, [{"returncode": 0, "output": "a" * 30000}])
+        self.assertEqual((observation["role"], observation["tool_call_id"]), ("tool", "call_0"))
+        self.assertIn("<returncode>0</returncode>", observation["content"])
+        self.assertIn("[observation truncated]", observation["content"])
+        self.assertLess(len(observation["content"]), 21000)
 
     def test_error_not_retried(self):
         with endpoint(code=429) as (url, seen):
@@ -283,7 +309,7 @@ from minisweagent.exceptions import Submitted
 class Model(ProxyModel):
     def query(self, messages, **kwargs):
         assert messages[0]['content'] == 'Exact {{ untouched }}'
-        return {'role':'assistant','content':'done','extra':{'actions':[{'command':'submit'}]}}
+        return {'role':'assistant','content':'','tool_calls':[],'extra':{'actions':[{'command':'submit','tool_call_id':'c1'}]}}
 class Env:
     def get_template_vars(self, **kw): return {}
     def serialize(self): return {}

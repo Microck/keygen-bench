@@ -2,8 +2,9 @@
 
 This is the inference and artifact-collection foundation. It uses the actual
 `minisweagent.agents.default.DefaultAgent` from mini-swe-agent 2.4.6, not a
-look-alike agent loop. Every model uses the same frozen text-action protocol,
-creative prompt, resource budget, and offline FT2 environment.
+look-alike agent loop. Every model uses mini's default action protocol (one declared
+`bash` function tool), the same frozen creative prompt, resource budget, and offline
+FT2 environment.
 
 There are no Codex CLI or Claude Code backends. No skills, hooks, plugins,
 AGENTS.md discovery, saved conversations, or per-model system prompts are loaded
@@ -14,8 +15,8 @@ mini-swe-agent DefaultAgent (host, clean Python worker)
     -> no-retry Chat Completions adapter
     -> CLIProxyAPI (host, operator-configured upstream)
     -> model
-    -> one bash action in an offline FT2 container
-    -> text observation back to the same agent
+    -> bash tool calls run in an offline FT2 container
+    -> tool results back to the same agent
 ```
 
 ## What this adds, and what it does not
@@ -92,7 +93,8 @@ a different canonical response name; verify that mapping in a separate transport
 check before starting the official campaign. This check cannot authenticate the
 true weights behind a proxy-reported name.
 
-All models use the campaign's common `generation` object. Unsupported parameters
+All models use the campaign's common `generation` object. Reasoning models spend
+completion tokens on thinking before the tool call, so keep `max_tokens` generous. Unsupported parameters
 cause a failure rather than silent parameter removal or fallback. Choose settings
 supported by the intended models before freezing the campaign. There is no price-
 based stopping rule; subscription billing is not inferable from an API response.
@@ -177,10 +179,13 @@ attempt. Files from another model never enter that workspace.
 
 The adapter is small because it implements mini's Model protocol directly using
 one HTTP request per turn. It does not import LiteLLM routing or its retry layer.
-It sends the visible messages unchanged, with no native function-tool definitions
-or auxiliary prompts. A reply without exactly one action block gets mini's standard
+It sends the conversation unchanged and declares exactly one tool, mini's stock
+`bash` function, the protocol the shipped SWE-bench configs use. No other tools or
+auxiliary prompts. A reply with no tool call or an unknown tool gets mini's standard
 format-error message back; three in a row end the attempt as `RepeatedFormatError`.
-An HTTP error terminates the worker.
+An HTTP error terminates the worker. The legacy single-code-block text protocol was
+tried first: current codex-backend models answer it with a whole imagined session of
+commands in one reply, and Kimi K3 leaks tool-call tokens into the text.
 Rendering supplies files and numerical observations, not audio listening.
 
 Containers share the host kernel. For hostile workloads use a dedicated VM or
@@ -194,7 +199,7 @@ python -m unittest discover -s benchmark/tests -v
 python -m py_compile benchmark/run.py benchmark/proxy.py benchmark/bridge.py
 ```
 
-Offline tests cover raw outbound prompt preservation, authentication separation,
+Offline tests cover outbound message and tool preservation, authentication separation,
 HTTP retries/redirects, response-model mismatch, contaminated environment removal,
 container flags, duplicate model rejection, one-attempt reservation, campaign
 locking, archive validation, and technical audio observations. The real DefaultAgent
@@ -208,7 +213,7 @@ endorsements of subscription credential reuse.
 
 - [mini DefaultAgent 2.4.6](https://github.com/SWE-agent/mini-swe-agent/blob/v2.4.6/src/minisweagent/agents/default.py)
 - [mini initialization and Model/Environment protocols](https://github.com/SWE-agent/mini-swe-agent/blob/v2.4.6/src/minisweagent/__init__.py)
-- [mini text-action adapter](https://github.com/SWE-agent/mini-swe-agent/blob/v2.4.6/src/minisweagent/models/litellm_textbased_model.py)
+- [mini tool-call model and bash tool](https://github.com/SWE-agent/mini-swe-agent/blob/v2.4.6/src/minisweagent/models/litellm_model.py)
 - [CLIProxyAPI configuration inspected at a fixed revision](https://github.com/router-for-me/CLIProxyAPI/blob/5208aec703b5ce7e3445f6e9d91cc13b3e78003a/config.example.yaml)
 - [Existing FT2 workflow and limitations](../docs/10-agent-xm-workflow.md)
 - [Existing native acceptance checker](../tools/ft2_smoke.py)

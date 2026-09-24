@@ -60,3 +60,23 @@ Still not executed:
 
 Run the complete test suite and build on the intended benchmark host before an
 official attempt. No model results or musical scores are claimed.
+
+## Protocol change and first playable attempt, 2026-09-24
+
+Through the dedicated CLIProxyAPI instance (port 8417) on the benchmark host:
+
+- Text-block protocol, three smoke runs, all `FAILED`: `gemini-3.5-flash` (star
+  bridge timed out on the real prompt), `gpt-5.6-luna` and `kimi-k3-modal`
+  (`RepeatedFormatError`; codex models returned a whole imagined session of
+  commands per reply, Kimi exhausted its budget on reasoning then leaked
+  tool-call tokens).
+- Bash tool-call protocol, first-turn probes: gpt-5.5, gpt-5.6-luna,
+  gpt-6-astra, gpt-5.6-sol each one tool call; kimi-k3-modal two tool calls.
+- Bash tool-call protocol, smoke run `gpt-5.6-luna`, `max_tokens` 32768: 6 turns,
+  `Submitted`, `PLAYABLE_UNSCORED`. Canonical render 38.4 s stereo, peak 0.27,
+  RMS 0.059, no full-scale samples. The model created samples with NumPy,
+  loaded them through `ft2 call`, built patterns with `ft2 batch`, saved the XM,
+  and submitted. Recovered from one failed command (`python` vs `python3`).
+
+The proxy places the benchmark system prompt as a `developer` message under its
+own system framing for codex models; `upstream_payload_verified` stays false.
