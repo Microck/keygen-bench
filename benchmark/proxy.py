@@ -10,17 +10,22 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
 from types import SimpleNamespace
+
+Reply = SimpleNamespace  # request() result: .json, .headers, .seconds, .bytes
 from typing import Any
 
 from minisweagent.models.utils.actions_toolcall import (
     BASH_TOOL, format_toolcall_observation_messages, parse_toolcall_actions)
 
 MAX_RESPONSE = 16 * 1024 * 1024
+# Response headers kept per request for quota accounting; anything else is dropped unread.
+RATE_LIMIT_HEADERS = ("retry-after", "anthropic-ratelimit-", "x-ratelimit-", "x-codex-", "openai-processing-ms")
 # mini's stock LitellmModel defaults, so every model gets the same wording and observation shape.
 # DefaultAgent feeds a FormatError back as a user message and ends the run after three in a row.
 FORMAT_ERROR = "{{ error }}"
@@ -49,16 +54,21 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
         raise RuntimeError("Proxy redirect refused")
 
 
-def request(base: str, key: str, path: str, payload=None, timeout: float = 180) -> dict:
-    """Exactly one HTTP request, no ambient HTTP_PROXY, redirects, or retries."""
+def request(base: str, key: str, path: str, payload=None, timeout: float = 180) -> Reply:
+    """Exactly one HTTP request, no ambient HTTP_PROXY, redirects, or retries.
+
+    Returns .json (the decoded object), .headers (rate-limit subset), .seconds (wall time).
+    """
     body = None if payload is None else json.dumps(payload, allow_nan=False).encode()
     req = urllib.request.Request(validate_url(base) + path, data=body,
                                  headers={"Authorization": "Bearer " + key,
                                           "Content-Type": "application/json"})
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
+    started = time.monotonic()
     try:
         with opener.open(req, timeout=timeout) as response:
             raw = response.read(MAX_RESPONSE + 1)
+            headers = {k.lower(): v for k, v in response.headers.items() if k.lower().startswith(RATE_LIMIT_HEADERS)}
     except urllib.error.HTTPError as exc:
         # Do not persist upstream error bodies/headers: they can contain credentials.
         raise RuntimeError(f"Proxy HTTP {exc.code}; request not retried") from None
@@ -69,7 +79,7 @@ def request(base: str, key: str, path: str, payload=None, timeout: float = 180) 
     result = json.loads(raw)
     if not isinstance(result, dict):
         raise ValueError("Proxy response must be an object")
-    return result
+    return Reply(json=result, headers=headers, seconds=time.monotonic() - started, bytes=len(raw))
 
 
 def forward(message: dict) -> dict:
@@ -86,14 +96,21 @@ class ProxyModel:
         payload = {**self.config["generation"], "model": self.model["model"],
                    "messages": [forward(m) for m in messages], "tools": [BASH_TOOL],
                    "stream": False, "n": 1}
-        response = request(self.config["base_url"], self.key, "/chat/completions", payload,
-                           self.config["limits"]["request_seconds"])
+        started_at = time.time()
+        reply = request(self.config["base_url"], self.key, "/chat/completions", payload,
+                        self.config["limits"]["request_seconds"])
+        response = reply.json
         returned_model = response.get("model")
         record = {"request_sha256": digest(payload), "requested_model": self.model["model"],
                   "returned_model": returned_model, "id": response.get("id"),
-                  "usage": response.get("usage"), "system_fingerprint": response.get("system_fingerprint")}
+                  "usage": response.get("usage"), "system_fingerprint": response.get("system_fingerprint"),
+                  "started_at": started_at, "latency_seconds": reply.seconds, "response_bytes": reply.bytes,
+                  "prompt_messages": len(payload["messages"]), "rate_limit": reply.headers}
         with self.audit.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(record, allow_nan=False) + "\n")
+        # Whole upstream body (reasoning fields included) beside the audit line, one JSON per turn.
+        with self.audit.with_name("responses.jsonl").open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(response, allow_nan=False) + "\n")
         if returned_model != self.model["response_model"]:
             raise ValueError("Unexpected response model; possible alias or fallback")
         choices = response.get("choices", [])
@@ -114,7 +131,7 @@ class ProxyModel:
         return {"role": "assistant", "content": content if isinstance(content, str) else "",
                 "tool_calls": tool_calls,
                 "extra": {"actions": actions, "cost": 0.0, "cost_status": "not_measured", **record,
-                          "finish_reason": choices[0].get("finish_reason")}}
+                          "timestamp": time.time(), "finish_reason": choices[0].get("finish_reason")}}
 
     def format_message(self, **kwargs) -> dict:
         return kwargs
