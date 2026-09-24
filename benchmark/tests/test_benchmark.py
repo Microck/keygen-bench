@@ -104,7 +104,7 @@ class BenchmarkTests(unittest.TestCase):
     def test_campaign_configuration(self):
         c = self.load()
         self.assertIn("Choose the sound", c["task"])
-        self.assertIn("Budget: 100 commands and 30 minutes.", c["system"])
+        self.assertIn("Budget: 100 steps and 30 minutes", c["system"])
         self.assertNotIn("<<", c["system"])
         self.assertFalse(c["proxy_policy"]["upstream_payload_verified"])
         self.assertNotIn("api-keys", json.dumps(c))
@@ -260,6 +260,19 @@ class BenchmarkTests(unittest.TestCase):
                 request(url, "secret", "/chat/completions", {})
         self.assertEqual(len(seen), 1)
 
+    def test_failed_request_is_audited(self):
+        c = self.load()
+        with endpoint(code=500) as (url, _), environ(CLIPROXY_CLIENT_KEY="secret"):
+            c["base_url"] = url
+            with self.assertRaises(RuntimeError):
+                ProxyModel(c, c["models"][0], self.root / "audit.jsonl").query([{"role": "user", "content": "x"}])
+        record = json.loads((self.root / "audit.jsonl").read_text())
+        self.assertIn("Proxy HTTP 500", record["error"])
+        self.assertGreater(record["latency_seconds"], 0)
+        (self.root / "transport.jsonl").write_text(json.dumps(record) + "\n")
+        totals = run.summarize(self.root)
+        self.assertEqual((totals["requests"], totals["failed_requests"], totals["usage_unknown"]), (1, 1, 1))
+
     def test_redirect_not_followed(self):
         with endpoint(redirect=True) as (url, seen):
             with self.assertRaisesRegex(RuntimeError, "redirect"):
@@ -314,8 +327,8 @@ class BenchmarkTests(unittest.TestCase):
             + json.dumps({"usage": {"prompt_tokens": 50, "completion_tokens": 5}, "latency_seconds": 0.5}) + "\n")
         (self.root / "trajectory.json").write_text(json.dumps({"messages": [
             {"role": "tool", "extra": {"duration_seconds": 2.0}}, {"role": "tool", "extra": {"duration_seconds": 1.0}}, {"role": "assistant", "extra": {}}]}))
-        self.assertEqual(run.summarize(self.root), {"requests": 2, "prompt_tokens": 150, "cached_tokens": 40, "completion_tokens": 15,
-            "reasoning_tokens": 3, "model_seconds": 2.0, "sandbox_seconds": 3.0, "commands": 2})
+        self.assertEqual(run.summarize(self.root), {"requests": 2, "failed_requests": 0, "usage_unknown": 0, "prompt_tokens": 150,
+            "cached_tokens": 40, "completion_tokens": 15, "reasoning_tokens": 3, "model_seconds": 2.0, "sandbox_seconds": 3.0, "commands": 2})
 
     def archive(self, name, size=4, kind=tarfile.REGTYPE):
         path = self.root / "artifact.tar"
