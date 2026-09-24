@@ -178,7 +178,9 @@ attempt. Files from another model never enter that workspace.
 The adapter is small because it implements mini's Model protocol directly using
 one HTTP request per turn. It does not import LiteLLM routing or its retry layer.
 It sends the visible messages unchanged, with no native function-tool definitions
-or auxiliary prompts. A malformed action or HTTP error terminates the worker.
+or auxiliary prompts. A reply without exactly one action block gets mini's standard
+format-error message back; three in a row end the attempt as `RepeatedFormatError`.
+An HTTP error terminates the worker.
 Rendering supplies files and numerical observations, not audio listening.
 
 Containers share the host kernel. For hostile workloads use a dedicated VM or
