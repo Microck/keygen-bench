@@ -273,30 +273,38 @@ def band(x, zero_low, full_low, full_high, zero_high) -> float:
     return max(0.0, (zero_high - x) / (zero_high - full_high)) if zero_high > full_high else 0.0
 
 
+CAP_SUSPECTED_BAKED = 40  # ceiling when the sample evidence says pre-rendered playback
 CRAFT_WEIGHTS = {"loop": 25, "audio": 20, "silence": 10, "structure": 30, "dynamics": 5, "length": 5, "process": 5}
 
 
 def craft_score(st: dict, au: dict, pt: dict, totals: dict) -> dict:
     """0-100 technical craft, weights fixed in CRAFT_WEIGHTS. Measures tracker discipline and render
     integrity; says nothing about whether the music is good. Every input is a disclosed metric."""
-    loop = 25 * (0.4 * band(au["seam_jump_ratio"], 0, 0, 3, 30) + 0.32 * band(abs(au["seam_rms_ratio_db"]), 0, 0, 3, 15)
-                 + 0.28 * band(au["tail_silence_seconds"], 0, 0, 0, 2))
+    # Bands: full credit needs what a strong keygen module has, not what a first attempt has.
+    loop = 25 * (0.4 * band(au["seam_jump_ratio"], 0, 0, 1.5, 10) + 0.32 * band(abs(au["seam_rms_ratio_db"]), 0, 0, 1.5, 8)
+                 + 0.28 * band(au["tail_silence_seconds"], 0, 0, 0, 0.5))
     clip_fraction = au["full_scale_samples"] / max(1.0, au["duration_seconds"] * 44100 * 2)
-    audio = 20 * (0.4 * band(clip_fraction, 0, 0, 0, 0.001) + 0.3 * band(au["lufs_integrated"], -36, -24, -12, -6)
-                  + 0.15 * band(au["true_peak_dbtp"], -60, -60, -1, 0) + 0.15 * band(abs(au["dc_offset"]), 0, 0, 0.005, 0.05))
-    silence = 10 * (0.6 * band(au["silent_fraction"] or 0.0, 0, 0, 0.02, 0.2) + 0.4 * band(au["longest_silence_seconds"], 0, 0, 1, 4))
+    audio = 20 * (0.4 * band(clip_fraction, 0, 0, 0, 0.0001) + 0.3 * band(au["lufs_integrated"], -30, -20, -14, -8)
+                  + 0.15 * band(au["true_peak_dbtp"], -60, -60, -1, 0) + 0.15 * band(abs(au["dc_offset"]), 0, 0, 0.002, 0.02))
+    silence = 10 * (0.6 * band(au["silent_fraction"] or 0.0, 0, 0, 0, 0.05) + 0.4 * band(au["longest_silence_seconds"], 0, 0, 0.3, 2))
     song = st["song_seconds_nominal"] or au["duration_seconds"] or 1.0
-    structure_pts = 30 * (0.2 * band(st["channels_used"], 1, 4, 32, 32) + 0.2 * band(st["instruments_used"], 1, 4, 128, 128)
-                          + 0.2 * band(st["distinct_patterns_in_order"], 1, 4, 256, 256) + 0.2 * band(st["note_ons_per_second"], 0.2, 1, 12, 40)
-                          + 0.1 * band(st["longest_sample_seconds"], 0, 0, 4, 16) + 0.1 * band(st["sample_seconds_total"] / song, 0, 0, 0.25, 1.0))
-    dynamics = 5 * band(au["block_rms_range_db"], 0, 6, 24, 40)
-    length = 5 * band(au["duration_seconds"], 10, 30, 180, 300)
+    musical_effects = len(set(st.get("effects_used", [])) - {"F", "B", "D"})   # tempo and jumps are not sound design
+    structure_pts = 30 * (0.15 * band(st["channels_used"], 1, 8, 32, 32) + 0.15 * band(st["instruments_used"], 1, 8, 128, 128)
+                          + 0.2 * band(st["distinct_patterns_in_order"], 1, 8, 256, 256) + 0.15 * band(st["note_ons_per_second"], 0.5, 3, 12, 30)
+                          + 0.1 * band(st["longest_sample_seconds"], 0, 0, 2, 8) + 0.1 * band(st["sample_seconds_total"] / song, 0, 0, 0.1, 0.5)
+                          + 0.15 * band(musical_effects, 0, 4, 99, 99))
+    dynamics = 5 * band(au["block_rms_range_db"], 2, 8, 20, 36)
+    length = 5 * band(au["duration_seconds"], 20, 60, 180, 300)
     process = 5 * (0.3 * pt.get("used_ft2_tools", False) + 0.3 * pt.get("rendered_preview", False) + 0.2 * pt.get("inspected_preview", False)
                    + 0.2 * (not (totals or {}).get("failed_requests")))
     parts = {"loop": round(loop, 1), "audio": round(audio, 1), "silence": round(silence, 1), "structure": round(structure_pts, 1),
              "dynamics": round(dynamics, 1), "length": round(length, 1), "process": round(process, 1)}
-    return {"craft_score": round(sum(parts.values()), 1), "parts": parts, "weights": CRAFT_WEIGHTS,
-            "note": "technical craft and render integrity only; not musical quality"}
+    total = round(sum(parts.values()), 1)
+    # A module that plays pre-rendered audio can still render cleanly; cap it so clean playback of a
+    # baked sample cannot outscore real sequencing. Same evidence as PHRASE_SAMPLE / SAMPLE_HEAVY; a human decides.
+    capped = st["longest_sample_seconds"] > 8 or st["sample_seconds_total"] / song > 0.5
+    return {"craft_score": min(total, CAP_SUSPECTED_BAKED) if capped else total, "uncapped": total, "parts": parts,
+            "weights": CRAFT_WEIGHTS, "capped": capped, "note": "technical craft and render integrity only; not musical quality"}
 
 
 def profile_attempt(run_dir: Path) -> dict | None:
@@ -304,6 +312,8 @@ def profile_attempt(run_dir: Path) -> dict | None:
     if not status_path.exists():
         return None
     status = json.loads(status_path.read_text(encoding="utf-8"))
+    if "model" not in status:
+        return None  # RESERVED: the attempt is still running
     out = {"attempt": run_dir.name, "tier": run_dir.parent.name, "model": status["model"]["model"], "status": status["status"],
            "termination": (status.get("termination") or {}).get("exit_status") if isinstance(status.get("termination"), dict) else status.get("termination"),
            "totals": status.get("totals"), "wall_seconds": status.get("wall_seconds")}
