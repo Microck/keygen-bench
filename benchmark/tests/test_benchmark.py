@@ -37,7 +37,7 @@ def environ(**values):
 
 
 @contextmanager
-def endpoint(code=200, returned_model="exact-model", redirect=False):
+def endpoint(code=200, returned_model="exact-model", redirect=False, content="```mswea_bash_command\necho ready\n```"):
     seen = []
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
@@ -50,8 +50,8 @@ def endpoint(code=200, returned_model="exact-model", redirect=False):
             if redirect:
                 self.send_header("Location", "/v1/should-not-follow")
             self.end_headers()
-            response = {"model": returned_model, "choices": [{"message": {"content":
-                "```mswea_bash_command\necho ready\n```"}, "finish_reason": "stop"}],
+            response = {"model": returned_model, "choices": [{"message": {"content": content},
+                "finish_reason": "stop"}],
                 "usage": {"total_tokens": 10}}
             self.wfile.write(json.dumps(response).encode())
         def log_message(self, *args):
@@ -180,6 +180,20 @@ class BenchmarkTests(unittest.TestCase):
         self.assertEqual(answer["extra"]["actions"][0]["command"], "echo ready")
         self.assertNotIn("local-secret", json.dumps(model.serialize()))
         self.assertNotIn("local-secret", (self.root / "audit.jsonl").read_text())
+
+    def test_multiple_actions_raise_mini_format_error(self):
+        from minisweagent.exceptions import FormatError
+        c = self.load()
+        two = "```mswea_bash_command\nls\n``````mswea_bash_command\necho x\n```"
+        with endpoint(content=two) as (url, _), environ(CLIPROXY_CLIENT_KEY="secret"):
+            c["base_url"] = url
+            with self.assertRaises(FormatError) as caught:
+                ProxyModel(c, c["models"][0], self.root / "audit.jsonl").query([])
+        feedback = caught.exception.messages[0]
+        self.assertEqual(feedback["role"], "user")
+        self.assertIn("EXACTLY ONE action", feedback["content"])
+        self.assertEqual(feedback["extra"]["n_actions"], 2)
+        self.assertTrue((self.root / "audit.jsonl").exists())  # the turn is still audited
 
     def test_error_not_retried(self):
         with endpoint(code=429) as (url, seen):
