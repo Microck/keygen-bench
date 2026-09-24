@@ -263,6 +263,42 @@ def flags(st: dict, au: dict, pt: dict) -> list[str]:
     return out
 
 
+# --- craft score ---------------------------------------------------------------------------------
+
+def band(x, zero_low, full_low, full_high, zero_high) -> float:
+    """1.0 inside [full_low, full_high], linear to 0 at zero_low / zero_high, 0 outside."""
+    if x is None: return 0.0
+    if full_low <= x <= full_high: return 1.0
+    if x < full_low: return max(0.0, (x - zero_low) / (full_low - zero_low)) if full_low > zero_low else 0.0
+    return max(0.0, (zero_high - x) / (zero_high - full_high)) if zero_high > full_high else 0.0
+
+
+CRAFT_WEIGHTS = {"loop": 25, "audio": 20, "silence": 10, "structure": 30, "dynamics": 5, "length": 5, "process": 5}
+
+
+def craft_score(st: dict, au: dict, pt: dict, totals: dict) -> dict:
+    """0-100 technical craft, weights fixed in CRAFT_WEIGHTS. Measures tracker discipline and render
+    integrity; says nothing about whether the music is good. Every input is a disclosed metric."""
+    loop = 25 * (0.4 * band(au["seam_jump_ratio"], 0, 0, 3, 30) + 0.32 * band(abs(au["seam_rms_ratio_db"]), 0, 0, 3, 15)
+                 + 0.28 * band(au["tail_silence_seconds"], 0, 0, 0, 2))
+    clip_fraction = au["full_scale_samples"] / max(1.0, au["duration_seconds"] * 44100 * 2)
+    audio = 20 * (0.4 * band(clip_fraction, 0, 0, 0, 0.001) + 0.3 * band(au["lufs_integrated"], -36, -24, -12, -6)
+                  + 0.15 * band(au["true_peak_dbtp"], -60, -60, -1, 0) + 0.15 * band(abs(au["dc_offset"]), 0, 0, 0.005, 0.05))
+    silence = 10 * (0.6 * band(au["silent_fraction"] or 0.0, 0, 0, 0.02, 0.2) + 0.4 * band(au["longest_silence_seconds"], 0, 0, 1, 4))
+    song = st["song_seconds_nominal"] or au["duration_seconds"] or 1.0
+    structure_pts = 30 * (0.2 * band(st["channels_used"], 1, 4, 32, 32) + 0.2 * band(st["instruments_used"], 1, 4, 128, 128)
+                          + 0.2 * band(st["distinct_patterns_in_order"], 1, 4, 256, 256) + 0.2 * band(st["note_ons_per_second"], 0.2, 1, 12, 40)
+                          + 0.1 * band(st["longest_sample_seconds"], 0, 0, 4, 16) + 0.1 * band(st["sample_seconds_total"] / song, 0, 0, 0.25, 1.0))
+    dynamics = 5 * band(au["block_rms_range_db"], 0, 6, 24, 40)
+    length = 5 * band(au["duration_seconds"], 10, 30, 180, 300)
+    process = 5 * (0.3 * pt.get("used_ft2_tools", False) + 0.3 * pt.get("rendered_preview", False) + 0.2 * pt.get("inspected_preview", False)
+                   + 0.2 * (not (totals or {}).get("failed_requests")))
+    parts = {"loop": round(loop, 1), "audio": round(audio, 1), "silence": round(silence, 1), "structure": round(structure_pts, 1),
+             "dynamics": round(dynamics, 1), "length": round(length, 1), "process": round(process, 1)}
+    return {"craft_score": round(sum(parts.values()), 1), "parts": parts, "weights": CRAFT_WEIGHTS,
+            "note": "technical craft and render integrity only; not musical quality"}
+
+
 def profile_attempt(run_dir: Path) -> dict | None:
     status_path = run_dir / "status.json"
     if not status_path.exists():
@@ -283,18 +319,23 @@ def profile_attempt(run_dir: Path) -> dict | None:
         x, fs = read_wav(wav_path)
         out["audio"] = audio_metrics(x, fs)
     if "structure" in out and "audio" in out:
-        out["flags"] = flags(out["structure"], out["audio"], out.get("process") or {"wrote_xm_directly": False})
+        pt = out.get("process") or {"wrote_xm_directly": False}
+        out["flags"] = flags(out["structure"], out["audio"], pt)
+        out["craft"] = craft_score(out["structure"], out["audio"], pt, out.get("totals") or {})
+    else:
+        out["craft"] = {"craft_score": 0.0, "parts": {}, "note": "no rendered artifact; gate 0"}
     (run_dir / "profile.json").write_text(json.dumps(out, indent=2, allow_nan=False) + "\n", encoding="utf-8")
     return out
 
 
-COLUMNS = ["tier", "model", "status", "flags", "dur_s", "lufs", "tp_dbtp", "chans_used", "patterns", "note_ons", "instr", "samples",
+COLUMNS = ["tier", "model", "status", "craft", "flags", "dur_s", "lufs", "tp_dbtp", "chans_used", "patterns", "note_ons", "instr", "samples",
            "longest_sample_s", "sample_bytes", "pattern_bytes", "seam_jump", "tail_sil_s", "ft2_tools", "raw_xm", "rendered", "inspected", "edited_after", "commands", "compl_tok"]
 
 
 def row(p: dict) -> dict:
     st, au, pr, tot = p.get("structure") or {}, p.get("audio") or {}, p.get("process") or {}, p.get("totals") or {}
-    return {"tier": p["tier"], "model": p["model"], "status": p["status"], "flags": " ".join(p.get("flags", [])) or "-",
+    return {"tier": p["tier"], "model": p["model"], "status": p["status"], "craft": (p.get("craft") or {}).get("craft_score", 0.0),
+            "flags": " ".join(p.get("flags", [])) or "-",
             "dur_s": au.get("duration_seconds", ""), "lufs": au.get("lufs_integrated", ""), "tp_dbtp": au.get("true_peak_dbtp", ""),
             "chans_used": st.get("channels_used", ""), "patterns": st.get("distinct_patterns_in_order", ""), "note_ons": st.get("note_ons", ""),
             "instr": st.get("instruments_used", ""), "samples": st.get("samples", ""), "longest_sample_s": st.get("longest_sample_seconds", ""),
@@ -306,10 +347,13 @@ def row(p: dict) -> dict:
 
 def profile_all(out: Path) -> list[dict]:
     profiles = [p for d in sorted(out.glob("*/*/")) if (p := profile_attempt(d))]
+    profiles.sort(key=lambda p: -(p.get("craft") or {}).get("craft_score", 0.0))
     rows = [row(p) for p in profiles]
     (out / "profiles.json").write_text(json.dumps(profiles, indent=1, allow_nan=False) + "\n", encoding="utf-8")
     lines = ["| " + " | ".join(COLUMNS) + " |", "|" + "---|" * len(COLUMNS)] + ["| " + " | ".join(str(r[c]) for c in COLUMNS) + " |" for r in rows]
-    lines += ["", "Flags are evidence for adjudication, never exclusions. Rules:"] + [f"- `{k}`: {v}" for k, v in FLAG_RULES.items()]
+    lines += ["", "`craft` is a 0-100 technical craft score (weights: " + ", ".join(f"{k} {v}" for k, v in CRAFT_WEIGHTS.items())
+              + "); it measures tracker discipline and render integrity, not musical quality. Rows sort by it.",
+              "", "Flags are evidence for adjudication, never exclusions. Rules:"] + [f"- `{k}`: {v}" for k, v in FLAG_RULES.items()]
     (out / "profiles.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
     print(f"{len(profiles)} attempts profiled in {out / 'profiles.md'}")
     return profiles
