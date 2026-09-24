@@ -104,7 +104,10 @@ def load_config(path: Path) -> dict:
     value["proxy_policy"] = proxy_policy(proxy_path)
     if value["proxy_policy"]["port"] != urllib.parse.urlsplit(value["base_url"]).port:
         raise ValueError("Proxy config and endpoint ports differ")
-    value["system"] = (HERE / "prompts/system.txt").read_text(encoding="utf-8")
+    # The prompt states the budget so models can plan; the numbers come from the frozen limits.
+    value["system"] = ((HERE / "prompts/system.txt").read_text(encoding="utf-8")
+                       .replace("<<STEPS>>", str(value["limits"]["steps"]))
+                       .replace("<<MINUTES>>", str(value["limits"]["wall_seconds"] // 60)))
     value["task"] = (HERE / "prompts/task.txt").read_text(encoding="utf-8")
     value.pop("proxy_config")
     return value
