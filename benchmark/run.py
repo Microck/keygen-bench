@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 from array import array
+import fcntl
 import hashlib
 import importlib.metadata
 import json
@@ -475,8 +476,11 @@ def run_one(root: Path, config: dict, model: dict, docker: list[str], image: str
             result["render"] = "ok"
             result["status"] = "RENDERED_UNSCORED"
             # The video is presentation, not evaluation: a capture failure is recorded, not a status change.
+            # Capture is real time and CPU-bound, so concurrent runners take turns through one lock file.
             try:
-                result["video"] = visualize(docker, visualizer_image, run_dir, config, result["audio"]["duration_seconds"])
+                with (root / "video.lock").open("w") as lock:
+                    fcntl.flock(lock, fcntl.LOCK_EX)
+                    result["video"] = visualize(docker, visualizer_image, run_dir, config, result["audio"]["duration_seconds"])
             except (OSError, ValueError, subprocess.SubprocessError) as exc:
                 result["video"] = {"error": type(exc).__name__ + ": " + str(exc)[:500]}
         except (ValueError, wave.Error, EOFError) as exc:
@@ -530,6 +534,8 @@ def main() -> None:
     parser.add_argument("command", choices=["doctor", "run"])
     parser.add_argument("--campaign", required=True, type=Path)
     parser.add_argument("--out", type=Path, default=HERE / "runs/official")
+    parser.add_argument("--workers", type=int, default=1,
+                        help="run this many copies of the model loop at once; each reservation is atomic, so copies never share an attempt")
     args = parser.parse_args()
     config = load_config(args.campaign.resolve())
     key = os.environ.get(config["api_key_env"])
@@ -551,12 +557,23 @@ def main() -> None:
     root = args.out.resolve()
     root.mkdir(parents=True, exist_ok=True)
     lock_campaign(root / "campaign.lock.json", snapshot)
+    if args.workers > 1:
+        # Extra copies of this same command share the output directory; reserve() keeps them apart.
+        rest = [a for i, a in enumerate(sys.argv[1:]) if a != "--workers" and sys.argv[i] != "--workers"]
+        extra = [subprocess.Popen([sys.executable, "-I", str(HERE / "run.py")] + rest + ["--workers", "1"])
+                 for _ in range(args.workers - 1)]
     for model in config["models"]:
         if (root / model["id"]).exists():
             print(f"Skipping reserved attempt: {model['id']}", flush=True)
             continue
-        run_one(root, config, model, docker, snapshot["image_id"], snapshot["visualizer_image_id"])
+        try:
+            run_one(root, config, model, docker, snapshot["image_id"], snapshot["visualizer_image_id"])
+        except FileExistsError:
+            continue  # another worker reserved it first
         print(f"Finished: {model['id']}", flush=True)
+    if args.workers > 1:
+        for proc in extra:
+            proc.wait()
     print("Artifacts and audit records saved. No aesthetic ranking has been calculated.")
 
 
