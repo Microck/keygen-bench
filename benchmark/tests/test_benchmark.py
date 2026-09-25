@@ -104,7 +104,7 @@ class BenchmarkTests(unittest.TestCase):
     def test_campaign_configuration(self):
         c = self.load()
         self.assertIn("Choose the sound", c["task"])
-        self.assertIn("Budget: 100 steps and 30 minutes", c["system"])
+        self.assertIn("Budget: 100 steps, 30 minutes", c["system"])
         self.assertNotIn("<<", c["system"])
         self.assertFalse(c["proxy_policy"]["upstream_payload_verified"])
         self.assertNotIn("api-keys", json.dumps(c))
@@ -127,10 +127,15 @@ class BenchmarkTests(unittest.TestCase):
                     self.load()
 
     def test_bad_resource_budgets_rejected(self):
-        for value in [0, -1, True, 1.5]:
+        for value in [-1, True, 1.5]:
             self.config["limits"]["steps"] = value
             with self.assertRaises(ValueError):
                 self.load()
+        self.config["limits"]["steps"] = 0   # unlimited steps, wall clock only
+        self.assertIn("Budget: no limit on steps, 30 minutes", self.load()["system"])
+        self.config["limits"]["wall_seconds"] = 0   # the wall clock itself may not be unlimited
+        with self.assertRaises(ValueError):
+            self.load()
 
     def test_reserved_environment_names_rejected(self):
         self.config["api_key_env"] = "HOME"
