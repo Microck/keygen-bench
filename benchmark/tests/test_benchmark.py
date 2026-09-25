@@ -312,6 +312,18 @@ class BenchmarkTests(unittest.TestCase):
         self.assertTrue((self.root / "visualizer/visualizer.mp4").exists())
         self.assertEqual(commands[-1][1:3], ["rm", "-f"])
 
+    def test_ft2_rejection_is_an_invalid_artifact(self):
+        c = self.load()
+        (self.root / "submission").mkdir(); (self.root / "submission/tune.xm").write_bytes(b"Extended Module: broken")
+        commands = self.fake_shell(b'{"content": [{"type": "text", "text": "failed to load module"}], "isError": true}')
+        def shell(cmd, **kwargs):
+            commands.append(cmd)
+            rc = 1 if "call" in cmd else 0
+            return subprocess.CompletedProcess(cmd, rc, b'{"isError": true}' if rc else b"", b"")
+        run.shell = shell
+        with self.assertRaisesRegex(ValueError, "rejected the module"):
+            run.render(["docker"], "sha256:img", self.root, c)
+
     def test_shell_skips_profiles(self):
         commands = self.fake_shell(b"ok")
         result = run.Sandbox(["docker"], "container", 10).execute({"command": "echo ok"})

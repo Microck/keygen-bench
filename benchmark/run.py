@@ -303,17 +303,19 @@ def render(docker: list[str], image: str, run_dir: Path, config: dict) -> dict:
     name = "keygen-grade-" + uuid.uuid4().hex[:16]
     try:
         start_container(docker, image, name)
-        with xm.open("rb") as source:
-            result = subprocess.run(docker + ["exec", "-i", name, "python3", "-c",
-                    "import sys;open('/workspace/input.xm','wb').write(sys.stdin.buffer.read())"],
-                    stdin=source, capture_output=True, timeout=30, check=True)
+        shell(docker + ["exec", "-i", name, "python3", "-c",
+                        "import sys;open('/workspace/input.xm','wb').write(sys.stdin.buffer.read())"], input=xm.read_bytes())
         for tool, arguments in (
                 ("module_load", {"path": "/workspace/input.xm"}),
                 ("module_info", {}),
                 ("module_render", {"path": "/workspace/canonical.wav", "rate": 44100, "bits": 16, "amp": 8, "loops": 1})):
             result = shell(docker + ["exec", name, "ft2", "call", tool, json.dumps(arguments)],
-                           timeout=config["limits"]["render_seconds"])
+                           timeout=config["limits"]["render_seconds"], check=False)
             (run_dir / (tool + ".json")).write_bytes(result.stdout)
+            if result.returncode:
+                # The bridge exits 1 when FT2 reports isError (e.g. a hand-written XM it cannot load):
+                # that is the artifact's fault, so it is FAILED / render invalid, not an evaluation error.
+                raise ValueError(f"FT2 {tool} rejected the module: " + result.stdout.decode("utf-8", "replace")[:200].strip())
         collect(docker, name, "/workspace/canonical.wav", run_dir / "canonical", config["limits"]["artifact_bytes"])
         return wav_info(run_dir / "canonical/canonical.wav")
     finally:
