@@ -89,9 +89,10 @@ def load_config(path: Path) -> dict:
         raise ValueError("Invalid API key environment variable name")
     if not value["proxy_version"] or "REPLACE" in value["proxy_version"]:
         raise ValueError("Record the installed proxy version or commit")
+    # steps may be 0: mini's DefaultAgent then applies no step limit and the wall clock is the only budget.
     if set(value["limits"]) != LIMIT_KEYS or any(
-            type(n) is not int or n <= 0 for n in value["limits"].values()):
-        raise ValueError("All resource limits must be positive integers")
+            type(n) is not int or n < (0 if key == "steps" else 1) for key, n in value["limits"].items()):
+        raise ValueError("All resource limits must be positive integers (steps may be 0 for unlimited)")
     if not isinstance(value["generation"], dict) or set(value["generation"]) - PARAMS:
         raise ValueError("Unsupported generation parameters; no prompt, tools, or routing overrides")
     digest(value)  # Also rejects NaN/Infinity, which Python's JSON decoder accepts.
@@ -117,7 +118,7 @@ def load_config(path: Path) -> dict:
         raise ValueError("Proxy config and endpoint ports differ")
     # The prompt states the budget so models can plan; the numbers come from the frozen limits.
     value["system"] = ((HERE / "prompts/system.txt").read_text(encoding="utf-8")
-                       .replace("<<STEPS>>", str(value["limits"]["steps"]))
+                       .replace("<<STEPS>>", "no limit on" if value["limits"]["steps"] == 0 else str(value["limits"]["steps"]))
                        .replace("<<MINUTES>>", str(value["limits"]["wall_seconds"] // 60)))
     value["task"] = (HERE / "prompts/task.txt").read_text(encoding="utf-8")
     value.pop("proxy_config")

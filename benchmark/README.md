@@ -152,7 +152,8 @@ proxy config, or model list is refused for that output directory. There is no
 `--redo` flag. An operator can always create a new directory; publish the original
 campaign rather than silently cherry-picking a later one.
 
-The default budgets are examples, not musical requirements. No tempo, key,
+The default budgets are examples, not musical requirements. `steps: 0` removes the
+step limit and leaves the wall clock as the only budget. No tempo, key,
 instrument palette, form, or target tune duration is prescribed. Resource bounds
 still limit storage, request time, rendering time, CPU, and memory. Wall-clock
 limits include provider latency. Adjust budgets before starting, not per model.
