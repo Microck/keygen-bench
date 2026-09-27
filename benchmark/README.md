@@ -112,7 +112,9 @@ based stopping rule; subscription billing is not inferable from an API response.
 The adapter retries a request once, after 5 s, when the proxy answers 5xx or the
 connection fails; 4xx answers (auth, quota, rate limit) end the attempt. Both requests
 are audited in `transport.jsonl`, the first marked `retried`. Each step's last observation
-carries a `<time_left>` tag with the minutes left on the wall clock.
+carries a `<time_left>` tag with the minutes left on the wall clock. A submission is the exact
+`echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT` command, or, as in mini's stock environments, any
+command whose first output line is that marker with exit status 0.
 
 The proxy settings explicitly disable additional retry rounds, credential
 failover within a round, quota-based model switches, global Claude prompt cloaking,

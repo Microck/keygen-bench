@@ -183,9 +183,7 @@ class Sandbox:
     def execute(self, action: dict, cwd="") -> dict:
         command = action["command"]
         if command.strip() == FINISH:
-            from minisweagent.exceptions import Submitted
-            raise Submitted({"role": "exit", "content": "Submitted",
-                             "extra": {"exit_status": "Submitted", "submission": "submission/tune.xm"}})
+            self.submit()
         # Output is bounded by the container tmpfs; the host sees the first and last 10 KB with a
         # marker in between, so a long batch never hides its final error or save result.
         wrapper = (f"timeout --kill-after=2s {self.timeout}s /bin/bash --noprofile --norc -c "
@@ -197,9 +195,22 @@ class Sandbox:
         result = shell(self.docker + ["exec", "-w", "/workspace", "-e", "BASH_ENV=/dev/null",
                        "-e", "ENV=/dev/null", self.name, "/bin/bash", "--noprofile", "--norc", "-c", wrapper],
                        timeout=self.timeout + 10, check=False)
+        output = result.stdout.decode("utf-8", "replace")
+        # mini's stock environments also treat a command whose first output line is the marker (exit 0)
+        # as the submission, e.g. `cd /workspace && echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT`. Nine
+        # campaign attempts sent that form and were ignored; keep the two rules identical to mini's.
+        lines = output.lstrip().splitlines()
+        if result.returncode == 0 and lines and lines[0].strip() == FINISH.split(" ", 1)[1]:
+            self.submit()
         # mini copies `extra` onto the tool message, so the sandbox time lands in the trajectory.
-        return {"returncode": result.returncode, "output": result.stdout.decode("utf-8", "replace"),
+        return {"returncode": result.returncode, "output": output,
                 "extra": {"duration_seconds": time.monotonic() - started}}
+
+    @staticmethod
+    def submit():
+        from minisweagent.exceptions import Submitted
+        raise Submitted({"role": "exit", "content": "Submitted",
+                         "extra": {"exit_status": "Submitted", "submission": "submission/tune.xm"}})
 
     def get_template_vars(self, **kwargs) -> dict:
         return {}
