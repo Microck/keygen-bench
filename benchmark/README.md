@@ -12,7 +12,7 @@ by this runner. CLIProxyAPI is the transport, not the agent.
 
 ```text
 mini-swe-agent DefaultAgent (host, clean Python worker)
-    -> no-retry Chat Completions adapter
+    -> Chat Completions adapter (one retry on upstream 5xx)
     -> CLIProxyAPI (host, operator-configured upstream)
     -> model
     -> bash tool calls run in an offline FT2 container
@@ -108,6 +108,11 @@ completion tokens on thinking before the tool call, so keep `max_tokens` generou
 cause a failure rather than silent parameter removal or fallback. Choose settings
 supported by the intended models before freezing the campaign. There is no price-
 based stopping rule; subscription billing is not inferable from an API response.
+
+The adapter retries a request once, after 5 s, when the proxy answers 5xx or the
+connection fails; 4xx answers (auth, quota, rate limit) end the attempt. Both requests
+are audited in `transport.jsonl`, the first marked `retried`. Each step's last observation
+carries a `<time_left>` tag with the minutes left on the wall clock.
 
 The proxy settings explicitly disable additional retry rounds, credential
 failover within a round, quota-based model switches, global Claude prompt cloaking,
@@ -262,7 +267,7 @@ BASH_ENV/ENV startup files. Only the FT2 session and workspace persist within on
 attempt. Files from another model never enter that workspace.
 
 The adapter is small because it implements mini's Model protocol directly using
-one HTTP request per turn. It does not import LiteLLM routing or its retry layer.
+one HTTP request per turn, two when the first fails transiently. It does not import LiteLLM routing or its retry layer.
 It sends the conversation unchanged and declares exactly one tool, mini's stock
 `bash` function, the protocol the shipped SWE-bench configs use. No other tools or
 auxiliary prompts. A reply with no tool call or an unknown tool gets mini's standard
