@@ -17,7 +17,7 @@ import unittest
 import wave
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from benchmark import run
+from benchmark import proxy, run
 from benchmark.proxy import ProxyModel, request, validate_url
 from minisweagent.exceptions import FormatError
 from minisweagent.models.utils.actions_toolcall import BASH_TOOL
@@ -43,8 +43,10 @@ def bash_call(command, call_id="call_1"):
 
 
 @contextmanager
-def endpoint(code=200, returned_model="exact-model", redirect=False, tool_calls=(bash_call("echo ready"),)):
+def endpoint(code=200, returned_model="exact-model", redirect=False, tool_calls=(bash_call("echo ready"),), codes=None):
+    """A fake proxy. `codes` answers successive requests with those statuses, then falls back to `code`."""
     seen = []
+    pending = list(codes or [])
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
             self.do_POST()
@@ -52,7 +54,7 @@ def endpoint(code=200, returned_model="exact-model", redirect=False, tool_calls=
             raw = self.rfile.read(int(self.headers.get("Content-Length", 0)))
             seen.append({"path": self.path, "body": json.loads(raw) if raw else None,
                          "authorization": self.headers.get("Authorization")})
-            self.send_response(302 if redirect else code)
+            self.send_response(302 if redirect else (pending.pop(0) if pending else code))
             if redirect:
                 self.send_header("Location", "/v1/should-not-follow")
             self.send_header("anthropic-ratelimit-unified-7d-utilization", "0.42")
@@ -258,6 +260,14 @@ class BenchmarkTests(unittest.TestCase):
         self.assertIn("<returncode>0</returncode>", observation["content"])
         self.assertIn("[observation truncated]", observation["content"])
         self.assertLess(len(observation["content"]), 21000)
+        self.assertNotIn("<time_left>", observation["content"])
+        # With mini's template vars, only the step's last observation carries the minutes left.
+        turn["extra"]["actions"].append({"command": "pwd", "tool_call_id": "call_1"})
+        first, last = model.format_observation_messages(
+            turn, [{"returncode": 0, "output": "a"}, {"returncode": 0, "output": "b"}],
+            {"wall_time_limit_seconds": 7200, "elapsed_seconds": 125})
+        self.assertNotIn("<time_left>", first["content"])
+        self.assertTrue(last["content"].endswith("<output>\nb</output>\n<time_left>117 min</time_left>"))
 
     def test_error_not_retried(self):
         with endpoint(code=429) as (url, seen):
@@ -266,17 +276,41 @@ class BenchmarkTests(unittest.TestCase):
         self.assertEqual(len(seen), 1)
 
     def test_failed_request_is_audited(self):
+        # A 5xx gets exactly one more try; both requests are audited and both count in the totals.
         c = self.load()
-        with endpoint(code=500) as (url, _), environ(CLIPROXY_CLIENT_KEY="secret"):
+        proxy.RETRY_PAUSE_SECONDS = 0
+        with endpoint(code=500) as (url, seen), environ(CLIPROXY_CLIENT_KEY="secret"):
             c["base_url"] = url
-            with self.assertRaises(RuntimeError):
+            with self.assertRaisesRegex(RuntimeError, "Proxy HTTP 500"):
                 ProxyModel(c, c["models"][0], self.root / "audit.jsonl").query([{"role": "user", "content": "x"}])
-        record = json.loads((self.root / "audit.jsonl").read_text())
-        self.assertIn("Proxy HTTP 500", record["error"])
-        self.assertGreater(record["latency_seconds"], 0)
-        (self.root / "transport.jsonl").write_text(json.dumps(record) + "\n")
+        self.assertEqual(len(seen), 2)
+        first, second = [json.loads(line) for line in (self.root / "audit.jsonl").read_text().splitlines()]
+        self.assertEqual((first["retried"], second["retried"]), (True, False))
+        self.assertIn("Proxy HTTP 500", first["error"])
+        self.assertGreater(first["latency_seconds"], 0)
+        (self.root / "transport.jsonl").write_text(json.dumps(first) + "\n" + json.dumps(second) + "\n")
         totals = run.summarize(self.root)
-        self.assertEqual((totals["requests"], totals["failed_requests"], totals["usage_unknown"]), (1, 1, 1))
+        self.assertEqual((totals["requests"], totals["failed_requests"], totals["usage_unknown"]), (2, 2, 2))
+
+    def test_transient_error_retried_once_then_succeeds(self):
+        c = self.load()
+        proxy.RETRY_PAUSE_SECONDS = 0
+        with endpoint(codes=[503]) as (url, seen), environ(CLIPROXY_CLIENT_KEY="secret"):
+            c["base_url"] = url
+            reply = ProxyModel(c, c["models"][0], self.root / "audit.jsonl").query([{"role": "user", "content": "x"}])
+        self.assertEqual(len(seen), 2)
+        self.assertEqual(reply["extra"]["actions"][0]["command"], "echo ready")
+        failed, ok = [json.loads(line) for line in (self.root / "audit.jsonl").read_text().splitlines()]
+        self.assertEqual((failed["retried"], "error" in ok), (True, False))
+
+    def test_client_error_not_retried(self):
+        c = self.load()
+        with endpoint(code=401) as (url, seen), environ(CLIPROXY_CLIENT_KEY="secret"):
+            c["base_url"] = url
+            with self.assertRaisesRegex(RuntimeError, "Proxy HTTP 401"):
+                ProxyModel(c, c["models"][0], self.root / "audit.jsonl").query([{"role": "user", "content": "x"}])
+        self.assertEqual(len(seen), 1)
+        self.assertFalse(json.loads((self.root / "audit.jsonl").read_text())["retried"])
 
     def test_redirect_not_followed(self):
         with endpoint(redirect=True) as (url, seen):
