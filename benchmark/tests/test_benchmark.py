@@ -18,6 +18,7 @@ import wave
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from benchmark import proxy, run
+from minisweagent.exceptions import Submitted
 from benchmark.proxy import ProxyModel, request, validate_url
 from minisweagent.exceptions import FormatError
 from minisweagent.models.utils.actions_toolcall import BASH_TOOL
@@ -362,6 +363,20 @@ class BenchmarkTests(unittest.TestCase):
         run.shell = shell
         with self.assertRaisesRegex(ValueError, "rejected the module"):
             run.render(["docker"], "sha256:img", self.root, c)
+
+    def test_submit_detection_matches_mini(self):
+        # The exact command submits without running; so does any command whose first output line is the
+        # marker with exit 0 (mini's rule). A marker deeper in the output, or a non-zero exit, does not.
+        sandbox = run.Sandbox(["docker"], "container", 10)
+        commands = self.fake_shell(b"COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT\n")
+        with self.assertRaises(Submitted):
+            sandbox.execute({"command": "echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT"})
+        self.assertEqual(commands, [])
+        with self.assertRaises(Submitted):
+            sandbox.execute({"command": "cd /workspace && echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT"})
+        self.assertEqual(len(commands), 1)
+        self.fake_shell(b"tune.xm\nCOMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT\n")
+        self.assertEqual(sandbox.execute({"command": "ls; echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT"})["returncode"], 0)
 
     def test_shell_skips_profiles(self):
         commands = self.fake_shell(b"ok")
