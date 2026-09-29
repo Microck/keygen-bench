@@ -37,9 +37,11 @@ OBSERVATION = ("{% if output.exception_info %}<exception>{{output.exception_info
 # is configured with request-retry 0 so every upstream request appears in the audit exactly once.
 RETRY_PAUSE_SECONDS = 5
 TRANSIENT = ("Proxy HTTP 5", "Proxy transport failed")
-# Message keys forwarded upstream. Everything else (mini's `extra`, provider reasoning fields) stays local.
+# Keep provider reasoning state across tool turns; mini's local metadata stays local.
+REASONING_FIELDS = ("reasoning_content", "reasoning", "reasoning_details")
 FORWARDED = {"system": ("content",), "user": ("content",),
-             "assistant": ("content", "tool_calls"), "tool": ("content", "tool_call_id")}
+             "assistant": ("content", "tool_calls", *REASONING_FIELDS),
+             "tool": ("content", "tool_call_id")}
 
 
 def digest(value: Any) -> str:
@@ -151,6 +153,7 @@ class ProxyModel:
         content = message.get("content")
         return {"role": "assistant", "content": content if isinstance(content, str) else "",
                 "tool_calls": tool_calls,
+                **{key: message[key] for key in REASONING_FIELDS if key in message},
                 "extra": {"actions": actions, "cost": 0.0, "cost_status": "not_measured", **record,
                           "timestamp": time.time(), "finish_reason": choices[0].get("finish_reason")}}
 

@@ -1,312 +1,235 @@
-# Keygen benchmark: mini-swe-agent + CLIProxyAPI
+# Native mini-swe-agent benchmark
 
-This is the inference and artifact-collection foundation. It uses the actual
-`minisweagent.agents.default.DefaultAgent` from mini-swe-agent 2.4.6, not a
-look-alike agent loop. Every model uses mini's default action protocol (one declared
-`bash` function tool), the same frozen creative prompt, resource budget, and offline
-FT2 environment.
+Historical code, configurations, reports, web assets and runs are preserved under `../legacy/previous-work-20260930/`. Do not modify historical results or publish private archived configurations. Campaigns compiled from now on use prompt v2 (`campaign.PROMPT_VERSION`, recorded as `prompts.version`); earlier campaigns, which have no `version`, ran prompt v1. Prompt v2 changes only operational harness facts in `prompts/system.txt`: the per-command limit (exit code 124, or 137 if killed), output truncation over 20,000 bytes, `<time_left>` on every tool result, submission limits with dropped extras, and collection of the saved `tune.xm` when time runs out. It also drops "the module is judged as a file". `prompts/task.txt` is unchanged. The command limit and submission MiB are substituted from the frozen limits.
 
-There are no Codex CLI or Claude Code backends. No skills, hooks, plugins,
-AGENTS.md discovery, saved conversations, or per-model system prompts are loaded
-by this runner. CLIProxyAPI is the transport, not the agent.
+## Execution contract
 
-```text
-mini-swe-agent DefaultAgent (host, clean Python worker)
-    -> Chat Completions adapter (one retry on upstream 5xx)
-    -> CLIProxyAPI (host, operator-configured upstream)
-    -> model
-    -> bash tool calls run in an offline FT2 container
-    -> tool results back to the same agent
-```
+The runner uses upstream mini-swe-agent 2.4.6 `DefaultAgent` and its original `LitellmModel` or `LitellmResponseModel`. There is no custom ProxyModel, replacement agent loop, parser, history truncation or coding-client wrapper. Native provider history, including signed thinking and encrypted Responses reasoning, remains in the upstream trajectory. Controller credentials never enter the offline model-command sandbox.
 
-## What this adds, and what it does not
+Future GPT/OpenAI configurations require Codex OAuth through the authorized loopback Responses bridge. Claude/Anthropic configurations require Anthropic OAuth through the authorized loopback Messages bridge. Use the existing approved CLIProxyAPI executable and exact model IDs, with no Vercel fallback or checkpoint substitution. For other model families, prefer OpenCode Go wherever the exact identity is supported and native-qualified; retain Vercel AI Gateway for remaining approved models pending funding. Cloudflare AI Gateway is excluded. Go is the paid `/zen/go/v1` endpoint, not OpenCode Zen. Gemini bridge and local Kimi pool routes are excluded. Devin is held until quota renewal. Actual Cursor Composer 2.5 is not available through an approved raw inference route; an xAI model with a Composer label is not a substitute.
 
-One reserved attempt per model. Within that single trajectory the model may
-compose, render and revise. Submission, a resource limit, or a terminal error
-ends the attempt. The last workspace artifact is frozen; there is no best-of-N,
-second attempt, post-submission editing, or automatic task restart.
+`MODEL-TEST-PLAN.json` preserves historical inventory mappings. Both the campaign compiler and driver now default to `MODEL-TEST-PLAN.oauth-first.json`; neither file is executable campaign configuration. The prospective inventory keeps all 74 identities, blocks exact OAuth checkpoints absent from the authenticated catalog, and blocks Claude Opus 5.5's failed native qualification. The route audit is `runs/oauth-route-audit-20261001.json`. Default CLI compilation rejects the four old OpenAI Vercel selections before inference without requiring an explicit inventory flag. Native readiness proof is still required for catalog-present models. Only CLI defaults changed, so the native proof fingerprints remain valid; new campaign provenance records the changed compiler/driver hashes. Historical frozen execution requires retained original controller source. No historical campaign, proof or result is rewritten, and no cancelled campaign is resumed. `config/campaign.example.json` intentionally has pending readiness and cannot be run as a verified campaign.
 
-A fresh, trusted FT2 process renders the saved XM. This is independent of the
-agent's process and preview WAV, not an independent replay engine. Entirely
-silent or invalid output fails the validity gate. Duration, RMS, peak, DC offset,
-and full-scale sample counts are reported as technical observations only.
+The four formerly Vercel-routed OpenAI checkpoints were requested by exact ID through the original native three-turn offline-tool workflow. All four failed on their first local Responses request with `NotFoundError` and `provider_request_error`. The actual body is CLIProxyAPI's `unknown provider for model <ID>` / `model_not_found` registry rejection before upstream execution, not a Codex account entitlement rejection. No fallback or successful model response occurred. `runs/oauth-exact-qualification-20261001/summary.json` retains the results and removed-sandbox evidence; `exact-model-registration-investigation.json` in that directory explains supported configuration and static-bearer risks. The models remain blocked on the current bridge. Their upstream OAuth availability is unknown.
 
-After the canonical render, a second trusted container records the FT2 clone GUI
-playing the module: Xvfb at 1280x960, the tracker's 1264x800 window stretched to
-4:3 the way FT2 filled a CRT, 30 fps H.264. The audio track is what the mixer
-played in real time through SDL's disk driver at 48 kHz, aligned to the frame the
-grab started on. It is presentation; canonical.wav is the artifact a later evaluator would use.
-Capture length is capped by `video_seconds`, and a capture failure is recorded in
-`status.json` without changing the attempt's status.
+The precise blocker is missing approved-bridge OAuth registration for these exact IDs. Self-alias configuration does not register them; aliasing a different model would substitute a checkpoint. The investigated static OAuth-bearer API-key-kind path was declined. Do not duplicate tokens, change headers/auth lifecycle, restart the shared bridge or substitute models. Upstream account entitlement remains UNTESTED, and the existing 18 qualified OAuth routes are unchanged.
 
-There is deliberately no invented music-quality score. `RENDERED_UNSCORED`
-means the trusted FT2 process rendered a non-silent WAV from the file, nothing
-more. No ordering of models follows from it. The previously
-claimed scoring package was not present in the reviewed repository. Domain-fit,
-structural, originality, and aesthetic ranking are not implemented in this PR.
-The collection records are intended for a separate frozen artifact evaluator.
+The replacement Go credential is installed privately on both trusted controllers. The existing native three-turn offline-tool qualification for `qwen3.8-flash` passed; `runs/full-launch-20260930/new-go-key-validation.json` links its proof and states the limited scope. This does not establish the remaining balance. The user subsequently authorized history-preserving continuation of runnable unfinished Go/OAuth work and requested a hosted preview of available results. The original cancelled campaigns remain historical evidence. Do not rerun already eligible model inference or reset the three-attempt budget. Vercel work remains held pending funding; no Cloudflare route is authorized. Minecraft must remain stopped, and Paris's old restoration watchdog remains disabled.
 
-## Setup
+New campaigns use `keygen-native-campaign-3` (revision 2 cohorts remain readable for reports), `max_attempts: 3` and `attempt_selection: first_success_up_to_three_attempts`. Each model's attempts run sequentially and stop after the first eligible success. First attempts for different models can run concurrently within the frozen worker and provider limits. Every attempted outcome remains visible. Predetermined later slots become `SKIPPED_AFTER_SUCCESS`, link to the selected attempt and have null scores and usage. The retained numeric `repetition` field is an attempt ordinal, not an independent-repetition claim. This adaptive experiment does not support three-trial medians, ranges or musical-quality rankings. Previously compiled campaign artifacts remain unchanged.
 
-Run from the repository root on a machine with a local Docker daemon and
-Python 3.10 or newer. Use a dedicated virtual environment.
+The experiment is `declared_native_configurations_fixed_resources`, not a claim of universally maximum provider capability. Explicit generation parameters, exact API route, returned identity, backend provenance, request timeout, retry policy, native model class and effective settings are frozen. Unknown provider-side handling is recorded, not asserted as verified.
 
-```sh
-python3 -m venv benchmark/.venv
-. benchmark/.venv/bin/activate
-python -m pip install -r benchmark/requirements.txt
-python -m unittest discover -s benchmark/tests -v
+## Failures, retries and submissions
 
-docker build -f benchmark/Dockerfile --target agent -t keygen-ft2-benchmark:local .
-docker build -f benchmark/Dockerfile --target visualizer -t keygen-ft2-visualizer:local .
-cp benchmark/config/cliproxyapi.example.yaml benchmark/config/cliproxyapi.local.yaml
-cp benchmark/config/campaign.example.json benchmark/config/campaign.local.json
-```
+- **Account faults (QUOTA, AUTH).** Quota, funds, usage-limit and HTTP 429 failures are classified as `QUOTA` (status `QUOTA_ERROR`), an infrastructure category. This holds under any SDK error class: `Insufficient account funds`, `usage limit exceeded`/`GoUsageLimitError` and `positive credit balance` bodies all count. A `QUOTA` or `AUTH` attempt stops that model's sequence. Later slots stay `RESERVED`, and `<model>-attempts.json` records `stopped_after` and `reserved`. Fix the account, then `recover` and run an explicit `retry`.
+- **Transport retries.** `native.retries` (0–2; the drafts use 2) sets LiteLLM's own transport-only `retry_policy` per HTTP request. Timeouts, HTTP 500 (connection resets map here) and 503 are re-sent. 4xx responses (429 included), 502 and unmapped errors never start a retry. LiteLLM decides from the first error only; once a retry has started, a later re-send counts toward the same bound whatever its error. mini's own query retry is always off, and a failed request produces no observation. `status.totals.transport_retries` counts re-sent requests.
+- **Submission collection.** `tune.xm` is collected on its own. Optional extras are then collected only if the whole `submission/` directory fits the limits (`artifact_bytes`, 4096 regular files, no links). Otherwise they are dropped and `status.submission_extras` records the reason. A missing, irregular or oversize `tune.xm` is still a model failure.
+- **Truncated replies.** When a reply ends at the output cap with no valid tool call (`finish_reason` `length`), the format-error message says so.
+- **Output caps.** When a model's documented output limit is not separate from its context window (at least 95% of it), `run_output_cap` is `min(documented, context // 2)`. The rule is in `tier-spec.json` `run_output_cap_rule`.
+- **OAuth concurrency.** The drafts bound `codex_oauth` and `anthropic_oauth` to 4 concurrent attempts each. Go stays at 12 across four keys (3 per key), NIM at 3.
+- **Cohort labels.** Reports and the site label each row with its cohort and tier. Max-tier rows read "highest declared tier: <level>, <cap> output" and schema-2 rows read "provider default effort, 32k output", each with its prompt version. Every cohort gets its own table and is never ranked together with another. The highest declared tier is the highest documented reasoning control on that exact route, not equal compute. Each published score is one quality sample, the first valid attempt.
 
-The Docker build runs the repository's native FT2 acceptance checker and fails
-if author/edit/save/reload/render does not pass. The final runtime image contains
-only its transport portion, not its demonstration notes or the repository's
-creative prompts. The FT2 source revision is pinned by the existing build script.
-The base OS/package repositories are not bit-for-bit locked: build once and reuse
-the resulting images. The runner locks both immutable image IDs, source hashes,
-Python/package versions, prompts, parameters, and proxy-config digest per campaign.
+## Declared tiers
 
-The requirements pin mini itself. Transitive Python dependencies are recorded,
-not a complete reproducible-install lock. Keep the same virtual environment for
-the campaign; changing a dependency or image prevents a mixed-condition resume.
+Every model declares `tier: {level, reasoning, spec_sha256}` taken from a per-model tier spec (`runs/next-launch-prep-20261001/tier-spec.json`). `level` is an effort (`minimal`…`max`), `thinking-on` (boolean thinking switch), `thinking-budget` (budget-only thinking) or `none-available`; `reasoning` is exactly the generation's reasoning fields. There is no default tier. `campaign.py --tier-spec` refuses to compile a model whose spec entry is missing, `blocked-unknown` or for another protocol, whose tier or spec digest differs, or whose generation lacks the reasoning control the entry requires. The declared tier replaces the pinned LiteLLM capability map as the xhigh/max gate.
 
-## Configure the proxy and models
+Validation is fail-closed against the pinned SDK: a route is rejected if LiteLLM would drop, alter or refuse the declared control (for example `output_config` xhigh/max on non-Claude names) or silently reroute Chat to Responses (GPT-5.4+ with tools and reasoning). Wire forms: Chat `reasoning_effort`; Responses `reasoning.effort`; Anthropic Messages top-level `thinking` and `output_config.effort` (Go Messages adds LiteLLM's `allowed_openai_params` opt-in for non-Claude thinking); NVIDIA NIM `extra_body.chat_template_kwargs` (or a documented top-level `reasoning_effort`). The audit records `extra_body` expanded as sent, and readiness fails unless the tier's reasoning control is present in every recorded request. Output caps are each model's documented maximum, clamped to the route catalog; budget-thinking models reserve 16,384 tokens for the answer.
 
-Start a dedicated CLIProxyAPI instance with the local YAML file. Set its local
-client API key to a newly generated random value. Configure only upstream access
-you are authorized to use. Authentication, subscription eligibility, OAuth login,
-and token extraction are outside this package. It neither launches native coding
-clients nor implements subscription authentication or bypasses provider controls.
+The only exception is `native_models.CAPABILITY_OVERRIDES`, a user-approved (2026-10-01) per-route declaration for Go Messages `qwen3.8-flash` and `qwen3.8-max` at `output_config.effort` `xhigh`, which Go documents for these models. `validate_model` registers `supports_xhigh_reasoning_effort` for exactly those names through LiteLLM's `register_model`, so the unmodified SDK gate accepts and transmits the declared effort; transmission is not patched. Each tier-spec entry mirrors it as `capability_override: {effort, approved_by, date}`, and `validate-tier-spec.py`/`build-drafts.py` reject any entry whose field differs from the code. The same names on another route or at another effort are rejected, and every other non-Claude name stays behind the SDK gate. Effective settings record the override as `sdk_capability_override`.
 
-Set the same local client key in the host environment, not in the campaign JSON:
+NVIDIA NIM (`https://integrate.api.nvidia.com/v1`, `NVIDIA_NIM_API_KEY`) is used only for exact models Go cannot serve at their tier, or as Go overflow. Its account limit (~40 RPM) is shared, so the provider bound is 3.
+
+## Go key pool
+
+`concurrency.key_pools` maps a route's declared `api_key_env` to member key names and per-key caps, e.g. `{"OPENCODE_GO_API_KEY": {"OPENCODE_GO_API_KEY": 3, "OPENCODE_GO_API_KEY_1": 3, …}}`. Each attempt takes the least-loaded member under its cap (ties in declared order) before its sandbox starts, uses only that key for the whole model run and releases it when the worker exits; keys never switch mid-attempt, so native history and billing provenance stay with one credential. `status.json` records only `credential_env` (the key name). Caps must sum to at least the provider bound, so an admitted attempt never waits for a key; the drafts split the Go bound of 12 evenly over four keys (3 each). Locks are per controller, so run every Go route from one controller. Keys live only in the controller's private `ROOT/.private/controller.env.json` (mode 600).
+
+## Readiness and campaign compilation
+
+Readiness must come from a real multi-turn native protocol pilot with an executed tool result, not a catalog entry or one-turn completion. The saved nonsecret proof binds the route, native effective settings, backend implementation and upstream source hashes to its native trajectory and request/response audit. Compilation verifies its artifact digest and freezes the proof. Changing settings, route or native executable source requires another exact readiness gate. Historical proof hashes are never rewritten to match new code.
+
+`native_models.build_probe_model` bootstraps qualification through the same upstream constructors, callbacks, parser and native history as production. It does not pretend that an unqualified model has verified readiness. Production `build_model` still requires verified readiness, and the compiler checks the actual recorded proof.
+
+The reusable pilot CLI accepts a sanitized JSON object with `model`, `config` containing only `native`, an immutable Docker `image`, and optional `limits` containing `steps`, `wall_seconds` and `command_seconds`. The model declares the exact route, generation settings, credential environment variable name and `backend_provenance`. Set only that route's credential in the controller environment. For OAuth, pass the actual bridge executable with `--bridge-executable`; its file digest must match the declared backend provenance.
 
 ```sh
-export CLIPROXY_CLIENT_KEY='your-local-proxy-client-key'
-curl --fail --silent http://127.0.0.1:8317/v1/models \
-  -H "Authorization: Bearer $CLIPROXY_CLIENT_KEY"
+benchmark/.venv/bin/python -I benchmark/native_readiness.py \
+  --spec /absolute/pilot-spec.json --out /absolute/new-proof-directory
 ```
 
-Replace every `REPLACE_...` value in the campaign and proxy files. Record the
-installed CLIProxyAPI version or commit. Add one object per exact model ID:
+The pilot uses a credential-free, network-disabled, read-only 128 MiB Docker workspace with a private tmpfs volume and a 32 MiB read-only export helper. Use an immutable minimal image with Bash, GNU tar and sleep, such as the approved Python slim image. This is a protocol test, not FT2 acceptance. Only the isolated upstream model worker receives the route's canonical API credential. Other controller environment variables and credential files are not inherited. Default pilot bounds are five turns, 180 wall seconds and 15 command seconds. The declared native request timeout stays unchanged; the controller kills a hung worker at the outer wall deadline.
 
-```json
-{"id": "model-a", "model": "exact-request-model-id", "response_model": "exact-response-model-id"}
-```
+A successful pilot writes a unique file on its first turn. On a second turn it reads the file back and tests it with two bash tool calls in one reply, because real campaigns allow several tool calls per reply. It then submits, exports the exact file and confirms removal of all owned containers and the volume. `proof.json` contains the compiler-validated native trajectory and wire audit. `readiness.json` contains the selection-ready readiness object, including the actual proof-file SHA256 and immutable payload. Success requires exact returned identities, complete alternating native wire exchanges (a transport-retried request is not a clean proof), executed successful tool results including one multi-call reply, and exact transmitted settings. Endpoint-delivery knowledge remains explicitly unknown. `pilot-spec.json`, `runtime-provenance.json`, `sandbox.json`, `sandbox-preflight.json`, `worker-result.json`, `trajectory.json`, `transport.jsonl`, `worker.log`, `submission/readiness.txt` and `cleanup.json` retain the nonsecret evidence that was reached. Early failures may lack files for stages they never reached. Any setup, API, protocol, task, provenance or cleanup failure writes a nonverified `proof.json`, `readiness.json` and `blocker.json`; it never switches models or routes. Private SDK history and logs are redacted before export and then removed.
 
-`response_model` is checked against the completion response. Some gateways use
-a different canonical response name; verify that mapping in a separate transport
-check before starting the official campaign. This check cannot authenticate the
-true weights behind a proxy-reported name.
+`--probe long-generation` runs a separate probe with the same spec form and exactly `steps` 3, `wall_seconds` 3600, `command_seconds` 60. One reply asks for a long literal file. It writes only `probe.json`, never readiness evidence. The outcome is `pass` when a response has more than 32,768 output tokens or more than 600 s latency with the exact settings, and `fail` on a transport drop, retry, timeout or gateway error. Anything else is `inconclusive`. The qualification plan lists one probe per route family under `pilot-specs/long-generation/`. A failing family's caps drop to 64,000. Streaming is not an option: mini-swe-agent 2.4.6 calls the SDK without `stream`.
 
-All models use the campaign's common `generation` object. Reasoning models spend
-completion tokens on thinking before the tool call, so keep `max_tokens` generous. Unsupported parameters
-cause a failure rather than silent parameter removal or fallback. Choose settings
-supported by the intended models before freezing the campaign. There is no price-
-based stopping rule; subscription billing is not inferable from an API response.
+The bootstrap constructor change invalidates the five earlier native proofs for current execution. Those immutable artifacts remain historical evidence and require real requalification before a new campaign can use the changed native source.
 
-The adapter retries a request once, after 5 s, when the proxy answers 5xx or the
-connection fails; 4xx answers (auth, quota, rate limit) end the attempt. Both requests
-are audited in `transport.jsonl`, the first marked `retried`. Each step's last observation
-carries a `<time_left>` tag with the minutes left on the wall clock. A submission is the exact
-`echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT` command, or, as in mini's stock environments, any
-command whose first output line is that marker with exit status 0.
+Install the pinned Python requirements into `benchmark/.venv`. Build images with `benchmark/Dockerfile` once and use their immutable SHA256 IDs. Image builds run the native FT2 author/edit/save/reload/render acceptance checker. The Debian base digest and FT2 source revision are pinned; actual image, binary and package identities are recorded. Do not treat mutable image tags as campaign identities.
 
-The proxy settings explicitly disable additional retry rounds, credential
-failover within a round, quota-based model switches, global Claude prompt cloaking,
-model-list cloaking, image-tool injection, plugins, and payload overrides. These
-are a configuration check, not proof of the provider-facing payload. Per-credential
-settings, aliases inside upstream definitions, proxy translation, and provider-side
-instructions can still change a request. Use a dedicated, fixed route per model;
-audit the upstream payload without publishing credentials. The report retains
-`upstream_payload_verified: false` rather than claiming otherwise.
-
-No rotating accounts, auto-model names, model fallbacks, or native CLI agent
-scaffolds belong in a ranked campaign. This package does not configure them.
-
-## Run
+Run these commands from the repository root, with explicit absolute paths:
 
 ```sh
-python -I benchmark/run.py doctor --campaign benchmark/config/campaign.local.json
-python -I benchmark/run.py run --campaign benchmark/config/campaign.local.json \
-  --out benchmark/runs/official
+benchmark/.venv/bin/python -I benchmark/campaign.py \
+  --inventory /absolute/MODEL-TEST-PLAN.oauth-first.json \
+  --selection /absolute/verified-selection.json \
+  --tier-spec /absolute/tier-spec.json \
+  --out /absolute/campaign.json
+benchmark/.venv/bin/python -I benchmark/run.py doctor \
+  --campaign /absolute/campaign.json --out /absolute/local-spool
+benchmark/.venv/bin/python -I benchmark/run.py run \
+  --campaign /absolute/campaign.json --out /absolute/local-spool --workers 1
+benchmark/.venv/bin/python -I benchmark/drive.py summary --out /absolute/local-spool
 ```
 
-`doctor` checks configuration, installed mini version, both Docker images, and the
-proxy's model list. It makes no completion request. It does not certify an active
-proxy is using the supplied config file; start that instance explicitly.
+The worker count must equal the frozen campaign. Doctor checks route eligibility, installed provenance, immutable images and resource/storage readiness before inference. The local spool supports atomic publication and file locks; do not use a cloud FUSE mount as the live attempt directory. Global and provider-specific inference limits are independent of render and video limits. Use conservative concurrency on a constrained controller; model waiting time is not evidence that sandbox memory can be overcommitted.
 
-To run a roster selection (one row per model and tier, as exported by the roster page)
-as one campaign per tier, in order, with a results table at the end:
+`config/campaign.verified.json` freezes five live-qualified protocol representatives and fifteen original attempts: Go Qwen Chat, Go Grok Responses, Vercel Mercury Chat, Codex Responses and Anthropic Messages. Its exact readiness settings use 1,024 output tokens (Anthropic 512; Codex low reasoning), not maximum-effort configurations or the full inventory. It freezes one worker, 100 steps, 1,800 agent seconds and a fresh Boat VM loading the verified local image bundle. Doctor passed with 800,382,976 available RAM bytes against the 536,870,912-byte controller reserve. Supply approved credential environment variables before running it; the private YAML is not a campaign input.
+
+Credentials are supplied by the controller through each model's declared environment variable. Native SDK canonical variables exist only in the isolated worker environment. Do not put key values, token files or private proxy YAML contents in campaign JSON, proofs or exported artifacts. SDK echoes and trajectories are sanitized before persistence. Bridge provenance identifies the executable implementation and digest; it does not prove which hidden upstream checkpoint an alias serves.
+
+## Reservations and recovery
+
+Campaign and attempt publication is atomic and locked. A reservation has enough model/cohort metadata to be summarized before a worker starts. Interrupted reservations and running attempts remain visible as infrastructure states with unknown usage, not zero-score musical failures. Recovery preserves the original outcome. An explicit retry has a separate identity and cannot replace a predetermined campaign slot or its selected first success. An existing campaign cannot silently acquire different prompts, limits, dependencies, settings or image IDs.
+
+## Artifact storage
+
+`benchmark/artifacts.py` supports dedicated local storage and verified rclone storage. The configured remote is `gdrive2:keygen-benchmark-artifacts`. Live work stays on the local spool. Admission accounts for a local reserve and each simultaneous attempt's declared peak, plus remote capacity.
+
+Terminal attempts are scored before export. Bundles include allowlisted result metadata, trajectories, submitted modules, canonical audio, previews and immutable evaluation generations. Controller homes, private configurations and credential files are excluded. Content manifests and compressed-file hashes are checked against the remote object before local bulk eviction. Failed verification retains local data. Eviction cannot modify legacy work.
+
+`archive.json` is retained separately from the hashed bundle. Evaluation can restore a verified bundle when bulk data is needed, create a new evaluation generation, re-export and evict again. Reporting reads retained metadata and never silently downloads, renders or rescores. Remote archival is not a substitute for checking available local staging space.
+
+## Boat execution
+
+`benchmark/boat.py` provisions credential-free Boat VMs with explicit TTL, pinned SSH host keys and controller-only private keys. Commands use direct SSH with binary stdin/stdout and native exit status, not the API execution timeout. Only the five allowlisted build sources are uploaded during image preparation. Provider credentials are not uploaded or mounted.
+
+Use a runtime-verified warm snapshot or a fresh VM loading a verified image bundle. Boat configuration declares `backend: boat`, explicit `ttl_seconds`, immutable `images.agent` and `images.visualizer`, and its exact allocation source. A VM stop is verified and recorded. TTL is a deadman for abrupt controller loss; killing SSH alone does not prove the remote command stopped.
+
+The agent has a writable tmpfs-backed workspace. A separate export helper mounts the same live volume read-only. After the agent is frozen, export streams GNU tar through the helper. Docker cp cannot reliably collect tmpfs-mounted workspace data and is not used. Archive paths, expanded sizes, deadlines and binary bytes are checked. Containers and owned volumes are removed before the VM is stopped.
 
 ```sh
-python -I benchmark/drive.py plan --selection benchmark/config/selection.local.json
-python -I benchmark/drive.py run  --selection benchmark/config/selection.local.json --out benchmark/runs/official
+benchmark/.venv/bin/python -m benchmark.boat prepare \
+  --config /absolute/prepare-transport.json --audit-dir /absolute/preparation \
+  --verify --snapshot keygen-ft2-native-amd64
+benchmark/.venv/bin/python -m benchmark.boat smoke \
+  --config /absolute/warm-transport.json --audit-dir /absolute/transport-proof
 ```
 
-Each tier gets `campaign-<tier>.local.json` and `runs/official/<tier>/`. Tiers that are not a
-`reasoning_effort` value run with no parameter. The driver refreshes a Vercel OIDC token
-between campaigns when it has under six hours left; credential values are excluded from the
-proxy-config digest, so a rotated key does not count as a changed condition.
+Boat snapshots are not canonical result storage. Actual warm restoration reported missing provider image files even after a clean stopped snapshot. Do not treat a healthy/provisioned flag or snapshot completion as restored image readiness.
 
-Reissuing the same `run` command skips every reserved model, including failed or
-interrupted ones. A changed prompt, dependency set, generation setting, image,
-proxy config, or model list is refused for that output directory. There is no
-`--redo` flag. An operator can always create a new directory; publish the original
-campaign rather than silently cherry-picking a later one.
+The alternative is a fresh VM with a verified Docker-save image bundle. Preparation can export both immutable images with `--image-bundle-out /absolute/native-images.tar`. Preserve the returned `controller_path`, SHA256, byte count and exact image-ID pair. Configure `transport.boat.mode: new`, no snapshot, and `transport.boat.image_bundle` with that metadata. The controller checks bytes and hash before allocation, streams the bundle through raw SSH Docker load, checks remote disk capacity and verifies both installed image IDs before inference. Rclone credentials stay on the controller; never upload them to the VM.
 
-The default budgets are examples, not musical requirements. `steps: 0` removes the
-step limit and leaves the wall clock as the only budget. No tempo, key,
-instrument palette, form, or target tune duration is prescribed. Resource bounds
-still limit storage, request time, rendering time, CPU, and memory. Wall-clock
-limits include provider latency. Adjust budgets before starting, not per model.
+amd64 Boat images and arm64 local images are different experimental conditions. Native acceptance does not establish cross-architecture bit-identical replay.
 
-```text
-benchmark/runs/official/
-  campaign.lock.json
-  model-a/
-    spec.json
-    trajectory.json
-    transport.jsonl
-    responses.jsonl
-    worker-result.json
-    status.json
-    submission/tune.xm
-    canonical/canonical.wav
-    visualizer/visualizer.mp4
-```
+## Evaluation and publication
 
-`transport.jsonl` records, per request: outbound request hash, requested and reported
-model IDs, usage, start time, latency, response size, prompt message count, and the
-rate-limit headers the proxy passed through. `responses.jsonl` keeps each whole
-upstream body, reasoning fields included. Tool results carry the sandbox time of
-their command. `status.json` adds attempt start and end times and per-attempt totals
-(requests, failed requests, requests with unknown usage, prompt/cached/completion/
-reasoning tokens, model seconds, sandbox seconds, commands). A request that fails
-still gets a transport line with its error and elapsed time. The trajectory preserves visible messages and executed
-actions. Authentication headers and API keys are never placed in prompts or
-serialized model config. Keep these local audit files private unless reviewed.
-No automatic leaderboard or aesthetic ranking is emitted.
+A fresh trusted FT2 process renders the saved XM. This is independent of the agent process and its preview audio, not an independent replay engine. Video is presentation; canonical audio is the evaluation input. A video failure does not change the musical artifact's validity.
 
-Statuses distinguish `FAILED`, `INFRA_ERROR`, `EVALUATION_ERROR`, `INTERRUPTED`,
-and `RENDERED_UNSCORED`. Beside the status, `termination` says how the agent
-ended, `collection` whether a submission was found, `render` whether the file
-rendered (`ok`, `invalid`, `error`), and `module` what FT2 reports about it
-(channels, patterns, instruments). A worker timing out may leave a renderable
-final artifact; its termination reason is retained separately. A render/infrastructure error is
-not silently turned into a zero musical score. None causes a second model attempt.
+Craft-v7 is an auxiliary tonal-development heuristic, not a musical-quality ranking or task-compliance score. Its numeric formula is unchanged. The original task lets the model choose duration freely. The heuristic's duration factor saturates at 30 first-pass audible seconds; short duration is an auxiliary preference, not noncompliance. Silence and repeated later playback do not add duration credit. Human/listener validation is still required before aesthetic claims.
 
-## Profiles and listening packets (no score)
+Infrastructure, provider transport and evaluator failures have null craft values and explicit categories. Genuine model-produced invalid artifacts are distinct model failures. Reports retain all predetermined slots and expose eligibility and failure denominators. Skipped slots are not attempts, failures or zero-score evaluations. Publication selects the earliest matching predetermined attempt with `render: ok`, status eligibility, a valid eligible cached profile and no protocol, infrastructure, evaluation or finalization error. A craft score of zero can still be an eligible success; there is no craft threshold. Later successes and extra retry artifacts remain visible but cannot replace the first success. Every model shows its attempted count and a success, exhausted, interrupted or pending state. Unknown or missing slots are never inferred to have succeeded.
 
-`score.py` is the automatic layer that runs over collected attempts. It never ranks
-and never excludes; it produces evidence columns and blind listening material.
+Report schema `keygen-cohort-report-2` binds exact configuration IDs, routes, resource settings and campaign fingerprints. Each row retains its evaluator fingerprint, even when another attempt used a different evaluator generation. The selected attempt exposes its own auxiliary craft-v7 diagnostic, not an aggregate median or range. Malformed skip links and attempts after a success are reported as policy errors rather than silently discarded.
+
+The scoring fingerprint includes actual NumPy and SciPy implementations, loaded numerical libraries, Python/CPU identity, reference inputs, renderer and ffmpeg identities. An unchanged valid profile is reused. A changed dependency or `--force` creates another immutable evaluation generation; historical previews, traces and profiles are retained. `profile.json` is only the latest alias.
 
 ```sh
-python -I benchmark/score.py profile --out benchmark/runs/official
-python -I benchmark/score.py packets --out benchmark/runs/official
+benchmark/.venv/bin/python -m benchmark.score profile --out /absolute/local-spool --workers 1
+benchmark/.venv/bin/python -m benchmark.score profile --out /absolute/local-spool --force
+benchmark/.venv/bin/python -m benchmark.score aggregate --out /absolute/local-spool
 ```
 
-`profile` writes `profile.json` per attempt and `profiles.{json,md}` at the root:
-XM structure (channels used, distinct patterns in the order, note-ons, instruments,
-sample seconds at root pitch, sample versus pattern bytes, effects, jumps), canonical
-audio metrics (BS.1770 integrated loudness, true peak, silence map, tail silence,
-block RMS range, seam jump across end to start), process tags from the trajectory
-(FT2 tools used, XM written directly, preview rendered, inspected, edited after
-inspection), and craft flags. Every flag rule is disclosed in `FLAG_RULES` and in
-the table footer. A flag is a reason for a human to look, not a verdict; the known
-gaming vector (one long pre-rendered sample) shows up as `PHRASE_SAMPLE` and
-`SAMPLE_HEAVY` and is adjudicated by a person against the prompt's rule.
+`aggregate` uses cached profiles only. Scoring workers are separately bounded by RAM, disk and trace size. Provenance has a 120-second budget; a complete evaluation has a 3,600-second budget, and subprocesses respect the remaining deadline. There is one aggregate writer per output root. No scoring command reruns model inference.
 
-`packets` renders each tune again with its restart sequence appended to the order
-table, so FT2 plays a real restart with carried tempo, volume and effect state
-(disclosed limitation: with a nonzero restart position the tail wraps to order 0
-after the end). The first part of the render must be byte-identical to
-`canonical.wav` or no packet is written. The packet gets one constant gain to
--18 LUFS with a -1 dBTP ceiling and no limiter, a 50 ms end fade, and
-`packet.json` with hashes, gain, and any loudness shortfall. Packets are what a
-blind listener hears; `canonical.wav` stays the reference artifact.
-
-`craft` is the one number: 0 to 100, weights fixed in `CRAFT_WEIGHTS` (loop 25,
-audio 20, silence 10, structure 30, dynamics 5, length 5, process 5), every input a
-column from the same table, every band disclosed in `craft_score()`. Full credit is
-set at what a strong keygen module has (8 channels and instruments in use, 8 distinct
-patterns, four kinds of effect commands, samples under 2 s, a clean seam within
-1.5 dB, 60 to 180 s), so a first attempt lands in the middle, not at 100. It measures
-tracker discipline and render integrity. A clean-looping, well-levelled,
-multi-channel module scores high whether or not the music is any good; a
-one-sample playback of pre-rendered audio scores low on structure whatever it
-sounds like, and when the sample evidence says pre-rendered playback (longest sample
-over 8 s or sample seconds over half the song) the score is capped at 40 until a
-person adjudicates. Rows sort by it. Treat it as "how well was the tracker used", never
-as "how good is the tune".
-
-What this layer cannot do is judge music. A ranking needs blind listening by a
-person (the protocol in `docs/12-scoring-ideation-2026-09-24.md` is the current
-plan); an audio-language judge would have to be validated against those labels
-first.
-
-## Isolation details
-
-The worker runs Python with `-I` and an allowlisted environment. Its HOME, XDG
-config and `MSWEA_GLOBAL_CONFIG_DIR` are new directories. This matters because
-mini's package initializer loads a global `.env` even when using its Python API.
-We instantiate DefaultAgent directly with two explicit templates; no mini CLI
-configuration merging or native-client configuration occurs.
-
-The model executes commands only inside a non-root, network-disabled, read-only
-container with bounded writable tmpfs storage. The workspace is a private,
-tmpfs-backed Docker-managed volume, not a host directory. A non-agent, read-only
-export helper keeps it mounted and reads files while the agent is paused; ordinary
-`docker cp` cannot reliably copy tmpfs data. Helpers and volumes are removed after
-collection. No repository, host home,
-Docker socket, API keys, proxy auth directory, evaluator, reference music, or
-skill folder is bind-mounted. Bash runs with `--noprofile --norc` and disabled
-BASH_ENV/ENV startup files. Only the FT2 session and workspace persist within one
-attempt. Files from another model never enter that workspace.
-
-The adapter is small because it implements mini's Model protocol directly using
-one HTTP request per turn, two when the first fails transiently. It does not import LiteLLM routing or its retry layer.
-It sends the conversation unchanged and declares exactly one tool, mini's stock
-`bash` function, the protocol the shipped SWE-bench configs use. No other tools or
-auxiliary prompts. A reply with no tool call or an unknown tool gets mini's standard
-format-error message back; three in a row end the attempt as `RepeatedFormatError`.
-An HTTP error terminates the worker. The legacy single-code-block text protocol was
-tried first: current codex-backend models answer it with a whole imagined session of
-commands in one reply, and Kimi K3 leaks tool-call tokens into the text.
-Rendering supplies files and numerical observations, not audio listening.
-
-Containers share the host kernel. For hostile workloads use a dedicated VM or
-stronger sandbox, and treat a custom image as trusted infrastructure that requires
-review. Isolation is not a claim that upstream model/provider internals are visible.
-
-## Tests and verification
+Publication reads retained metadata only. It never restores archives, renders or rescores. Audio, video and download links appear only for files that exist locally; there are no replacement media assets.
 
 ```sh
-python -m unittest discover -s benchmark/tests -v
-python -m py_compile benchmark/run.py benchmark/proxy.py benchmark/bridge.py
+benchmark/.venv/bin/python -m benchmark.report \
+  --root /absolute/local-spool \
+  --cohort /absolute/local-spool/campaign.lock.json \
+  --out /absolute/publication/report.json \
+  --html /absolute/publication/index.html
 ```
 
-Offline tests cover outbound message and tool preservation, authentication separation,
-HTTP retries/redirects, response-model mismatch, contaminated environment removal,
-container flags, duplicate model rejection, one-attempt reservation, campaign
-locking, archive validation, and technical audio observations. The real DefaultAgent
-contract test runs only when mini-swe-agent is installed; a skip is not a pass.
-See [VALIDATION.md](VALIDATION.md) for what was actually run during preparation.
 
-## Primary implementation references
+## Verification evidence
 
-Source inspection date: 2026-09-05. These are implementation references, not
-endorsements of subscription credential reuse.
+Targeted setup proofs are retained under `runs/setup-verification/`. A test passing against a local protocol peer does not establish live provider readiness. A successful image build does not establish working binary export. Require each actual runtime proof before enabling its route or transport. The setup review records implementation and runtime gates separately. No full campaign is authorized by the setup repair itself.
 
-- [mini DefaultAgent 2.4.6](https://github.com/SWE-agent/mini-swe-agent/blob/v2.4.6/src/minisweagent/agents/default.py)
-- [mini initialization and Model/Environment protocols](https://github.com/SWE-agent/mini-swe-agent/blob/v2.4.6/src/minisweagent/__init__.py)
-- [mini tool-call model and bash tool](https://github.com/SWE-agent/mini-swe-agent/blob/v2.4.6/src/minisweagent/models/litellm_model.py)
-- [CLIProxyAPI configuration inspected at a fixed revision](https://github.com/router-for-me/CLIProxyAPI/blob/5208aec703b5ce7e3445f6e9d91cc13b3e78003a/config.example.yaml)
-- [Existing FT2 workflow and limitations](../docs/10-agent-xm-workflow.md)
-- [Existing native acceptance checker](../tools/ft2_smoke.py)
-- [Docker copy limitations](https://docs.docker.com/reference/cli/docker/container/cp/)
-- [Docker-managed volumes](https://docs.docker.com/engine/storage/volumes/)
+Final verification passed 184 benchmark tests (one opt-in local-Docker skip) and 22 repository tests. Boat 1.0.36 matches the current official production binary byte-for-byte. Fresh image-bundle loading, native FT2, binary paused export, command deadline and archived cleanup passed. Two bounded original-task smokes produced a Go transport timeout and a Mercury ten-step model failure, not successful music submissions. Evidence is retained without replacing original outcomes.
+
+## Approved full-launch status
+
+The user approved the 57 exact-qualified configurations from the 66 runnable candidates in `runs/setup-verification/full-launch-candidates.json`. The qualified scope is 18 OAuth, 16 OpenCode Go and 23 Vercel configurations. Nine candidates remain blocked and visible; they are not silently omitted or replaced. Entries held or excluded outside these 66 candidates are not authorized by this approval.
+
+The original qualification scope merges the OAuth summary with `runs/full-launch-20260930/oauth-qualification-v2-summary.json`, the original Ashburn summary's 16 Go successes, and the original Paris summary with its v2 and v3 overrides. All summaries remain under `runs/full-launch-20260930/`; successful and blocked proof files remain at the paths each summary records. Controller locations are retained in `ashburn-deployment.json` and `paris-deployment.json` in that directory.
+
+Fresh source-provenance qualification subsequently passed for all 33 configurations in `runs/full-launch-20260930/ashburn-qualification-v4-summary.json`. The current 57-model proof roster is `runs/full-launch-20260930/collected-proofs/index-current-provenance.json`, which records immutable proof hashes, collected paths and controller origins. Original proof files and summaries remain unchanged.
+
+The blocked Go proofs are on the trusted Ashburn controller under `/home/ubuntu/keygen-full.OGHjBAkO/qualification/`. The blocked OAuth proof is local under `runs/full-launch-20260930/qualification-v2/`.
+
+| Blocked configuration | Recorded native outcome | Retained proof path relative to the stated root |
+| --- | --- | --- |
+| `go-glm-5.2` | `BadRequestError`, `provider_request_error` | `go-glm-5.2/proof.json` |
+| `go-glm-5.3` | `BadRequestError`, `provider_request_error` | `go-glm-5.3/proof.json` |
+| `go-kimi-k2.6` | `APIError`, `native_model_error` | `go-kimi-k2.6/proof.json` |
+| `go-minimax-m2.5` | `APIError`, `native_model_error` | `go-minimax-m2.5/proof.json` |
+| `go-minimax-m2.7` | `BadRequestError`, `provider_request_error` | `go-minimax-m2.7/proof.json` |
+| `go-omen-alpha` | `APIError`, `native_model_error` | `go-omen-alpha/proof.json` |
+| `go-qwen3.6-plus` | `APIError`, `native_model_error` | `go-qwen3.6-plus/proof.json` |
+| `go-qwen3.7-max` | `APIError`, `native_model_error` | `go-qwen3.7-max/proof.json` |
+| `anthropic_oauth-claude-opus-5-5` | `RepeatedFormatError`, `artifact_export_error` | `anthropic_oauth-claude-opus-5-5/proof.json` |
+
+The launch policy is up to three sequential attempts per model, stopping at the first eligible success. This permits at most 171 executed attempts across the 57 qualified configurations, not three independent repetitions. Every attempted outcome and later `SKIPPED_AFTER_SUCCESS` slot remains visible. The declared output cap is 32,768 tokens except Vercel Command A, whose exact-qualified cap is 8,192. These are declared native settings, not universally maximum provider capability.
+
+Both controllers stopped after provider funding failures: Vercel required a positive gateway credit balance, and multiple Go models explicitly reported insufficient account funds. The main campaign has 29 end-to-end completed models: 17 on Ashburn and 12 on Paris. Ashburn also has one eligible result without a cloud archive, producing the earlier total of 30 eligible results rather than 30 fully completed models. There are 67 verified attempt archive roundtrips and all 53 owned Boat VMs are archived. Four unarchived attempt directories remain locally retained. Minecraft was restored during shutdown, then stopped at the user's request; the Paris watchdog was disabled to prevent automatic benchmark restoration. Do not start or restore Minecraft without a new explicit user request. No top-up, provider substitution or inference rerun was performed. All 57 main-campaign model statuses are in `runs/full-launch-20260930/model-status-list.json`; terminal evidence is `{ashburn,paris}-night-watch-terminal.json` in the same directory.
+
+The initial actual musical pilot failed before inference on all three attempts when image loading exceeded the 120-second startup deadline. All three Boat VMs were confirmed archived. `runs/full-launch-20260930/live-pilot-failed-statuses.json` retains the original `FINALIZATION_ERROR` / `TimeoutExpired` outcomes with `model_failure: false`.
+
+A separate ArtifactStore scanner error treated the nonsecret `KEYGEN_FT2_ANALYSIS` setting as a credential. The classification fix passed nine artifact tests. An actual failed-pilot cloud archive then passed SHA256 verification; `runs/full-launch-20260930/archive-scanner-runtime-smoke.json` records that proof and the unchanged original `FINALIZATION_ERROR` status. This is archive evidence, not musical success.
+
+The immutable revision-4 manifests in `runs/full-launch-20260930/qualified-manifest-index-v4.json` freeze a 600-second startup deadline, 120-second stop deadline, 10,800-second Boat TTL and at least 121 seconds between allocations per controller. The Boat startup fix prevents an individual readiness wait from shortening the shared image-loading deadline. The integrated suite passed 205 tests on Ashburn, with one opt-in local-Docker skip (`runs/full-launch-20260930/integrated-tests-remote.log`).
+
+The revision-4 Qwen3.8 Flash pilot succeeded on its first attempt; later slots were `SKIPPED_AFTER_SUCCESS`. `runs/full-launch-20260930/live-pilot-acceptance-v4.json` records the verified 985,003-byte XM, 116.497-second nonzero trusted PCM, eligible evaluation, 117.035-second H.264 video at 1280×960, normal Boat archival and SHA256-verified cloud restoration. Its auxiliary craft diagnostic is 56.6, not a listener quality judgment.
+
+Both supervisors and original runners were observed alive in `RUNNING` state; `ashburn-main-observed-v4.json` and `paris-main-observed-v4.json` retain that evidence. Resource sampling runs every 15 seconds. Guards stop owned work for sustained available RAM below 1 GiB, disk below 2 GiB, excessive resolver memory/configuration, cancellation or the campaign deadline. Paris records its Minecraft restoration obligation and restores the service after its owned runner terminates. Restoration has not yet occurred for this running campaign.
+
+Inspect either persistent controller with:
+
+```sh
+python3 benchmark/runs/full-launch-20260930/launch-supervisor.py status \
+  --plan benchmark/runs/full-launch-20260930/ashburn-supervisor-plan-v4.json
+python3 benchmark/runs/full-launch-20260930/launch-supervisor.py status \
+  --plan benchmark/runs/full-launch-20260930/paris-supervisor-plan-v4.json
+```
+
+### Overnight monitoring
+
+Each controller was equipped with the user service `keygen-full-20260930-night-watch.service` and lingering enabled. The independent watchdog checked progress every 60 seconds alongside the original 15-second resource guard. Both watchdogs exited successfully after terminal verification. Paris's watchdog is now disabled at the user's request to prevent automatic Minecraft restoration; Ashburn's unit remains enabled but inactive.
+
+Controller-local evidence is under `ROOT/launch-control/night-watch/`: `snapshot.json` for current progress, `health.json` for the latest monitor heartbeat and `alerts.jsonl` for retained issues. Installation and two advancing live heartbeats were verified in `runs/full-launch-20260930/{ashburn,paris}-night-watch-installed.json`. Request/scoring boundary checks are recorded in `night-watch-boundary-smoke.json`.
+
+The watchdog safely finalizes a lost supervisor using owned PID/start-time checks, requests a safe stop for repeated finalization failures across distinct models, and verifies or retries Paris Minecraft restoration only after the owned runner stops. It does not change prompts, native history, settings or the three-attempt policy, and does not rerun completed inference. Both monitoring agents finished after terminal cleanup verification. Alerts are retained here; no phone, email or other out-of-band notification channel is configured.
+
+Remaining work requires restoring the Go/Vercel funding prerequisites and explicit history-preserving recovery. One unaffected OAuth Opus5 attempt was interrupted by authorized Ashburn-wide cancellation; its trajectory remains archived and the interruption is not a musical failure. The campaign-owned OAuth reverse tunnel is stopped. Final VPS checks confirmed healthy available memory and Minecraft active; Paris's growing resolver was restarted after workload shutdown, dropping RSS from 459,411,456 to 13,615,104 bytes, with provider DNS resolution verified (`final-host-health.json`).
+
+The original deployed watchdog recorded an expected heartbeat gap during Ashburn's orderly `STOPPING` phase, when the supervisor pauses sampling while draining workers. No extra kill or recovery was applied. Future watchdog deployments restrict heartbeat-stall detection to `RUNNING`; transition boundaries passed the actual predicate smoke in `night-watch-shutdown-smoke.json`. Original deployed watcher files and alert history remain unchanged.
+
+
+## Hosted current-results preview
+
+The public HTTPS preview is [Keygen Bench](https://ubuntu-paris.tailc896c6.ts.net/?page=ranking). It publishes an immutable current-results snapshot, not a live campaign dashboard. The final published snapshot contains 38 playable rows: 30 original main first successes, six native continuation successes, one archive-only GPT-5.4 recovery and one separately labeled Qwen3.8 Flash musical pilot. Main availability is 37/57; the retained pilot stays outside that numerator. The continuation cutoff is 2026-10-01 11:08:25 UTC on Ashburn and 11:08:27 UTC on Paris. Later outcomes require an explicit refresh. Original routing remains in private evidence; the public projection preserves model/cohort/artifact provenance without exposing access routes.
+
+The tracker serves original XM and canonical WAV downloads, derived listening MP3s, and sanitized evaluation summaries. Public browser verification exercised Results-to-Tracker navigation, real audio playback, midpoint seeking and Stop. All 38 XMs matched hashes and parsed through the actual website parser; all 152 download links returned correct byte ranges with HTTP 206. Anonymous public ingress returned the exact final snapshot hash. Controller credentials, source files and directory listings were inaccessible. Initial and recovery-view parent evidence is `runs/preview-hosting-20261001/parent-browser-smoke.json`; final snapshot, system-scoped service and browser evidence is `../web/prototype/publication-20261001.json`. Minecraft must remain stopped.
+
+## Authorized history-preserving continuation
+
+The user authorized continuation on 2026-10-01 with OpenCode Go preferred wherever the exact non-OAuth model is supported and qualified. `runs/continuation-20261001/` retains frozen selections, manifests, original-history ledgers, qualification outcomes and recovery records. `continuation-20261001-ashburn-native-v1` launches twelve unfinished Go identities and Anthropic OAuth Claude Opus 5 using 24 remaining original attempt ordinals. `continuation-20261001-paris-muse-go-v1` launches the two exact Muse Spark Contributor identities through newly qualified native Go Responses, using only their original third ordinals. No completed model inference or compatible Qwen3.8 Flash musical pilot is rerun.
+
+The orchestration calls the immutable original native runner. Model histories, original creative prompts, image/runtime provenance and generation settings remain frozen. The supervisors enforce resource and deadline guards; independent terminal guards identify owned processes by PID/start ticks, clean owned detached workers and Boat machines, and make bounded archive-only recovery attempts. The owned OAuth reverse tunnel closes after terminal cleanup. All continuation plans forbid Minecraft restoration.
+
+The four previously missing historical archives were recovered in separate staging with verified roundtrips and zero model requests. Original statuses, profiles and selected outcomes remain unchanged, including GPT-6 Astra's original second-attempt selection. GPT-5.4 recovery reconstructs only its profile-pinned prearchive status and remains labeled historical Vercel inference, not a new OAuth run.
+
+Go-blocked exact models with retained Vercel catalog candidates remain held for funding and exact native qualification; see `runs/continuation-20261001/pending-vercel-candidates.json`. No Vercel funding probes, Cloudflare requests, model substitution or automatic provider fallback ran.
+

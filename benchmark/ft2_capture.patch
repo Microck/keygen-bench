@@ -1,0 +1,304 @@
+diff --git a/src/ft2_config.c b/src/ft2_config.c
+index 3493b8a..75e6878 100644
+--- a/src/ft2_config.c
++++ b/src/ft2_config.c
+@@ -682,6 +682,12 @@ static void setConfigFileLocation(void) // kinda hackish
+ 
+ void loadConfigOrSetDefaults(void)
+ {
++	// A benchmark render must not depend on a user's saved FT2 configuration.
++	if (getenv("KEYGEN_FT2_CAPTURE_FRAMES") != NULL)
++	{
++		setDefaultConfigSettings();
++		return;
++	}
+ 	setConfigFileLocation();
+ 	if (editor.configFileLocationU == NULL)
+ 	{
+diff --git a/src/ft2_replayer.c b/src/ft2_replayer.c
+index 26a4eca..2753d38 100644
+--- a/src/ft2_replayer.c
++++ b/src/ft2_replayer.c
+@@ -28,6 +28,7 @@
+ #include "ft2_tables.h"
+ #include "ft2_structs.h"
+ #include "mixer/ft2_windowed_sinc.h"
++#include "ft2_wav_renderer.h"
+ 
+ static uint32_t logTab[4*12*16], frequencyMulFactor, frequencyDivFactor;
+ static uint64_t songTickDuration52fp[(MAX_BPM-MIN_BPM)+1];
+@@ -770,6 +771,8 @@ static void E_Effects_TickZero(channel_t *ch, uint8_t param)
+ 
+ static void positionJump(channel_t *ch, uint8_t param)
+ {
++	if (ft2CaptureActive)
++		ft2CaptureCommands |= FT2_CAPTURE_BXX;
+ 	if (playMode != PLAYMODE_PATT && playMode != PLAYMODE_RECPATT)
+ 	{
+ 		const int16_t pos = (int16_t)param - 1;
+@@ -787,6 +790,8 @@ static void positionJump(channel_t *ch, uint8_t param)
+ 
+ static void patternBreak(channel_t *ch, uint8_t param)
+ {
++	if (ft2CaptureActive)
++		ft2CaptureCommands |= FT2_CAPTURE_DXX;
+ 	param = ((param >> 4) * 10) + (param & 0x0F);
+ 	if (param <= 63)
+ 		song.pBreakPos = param;
+@@ -2291,6 +2296,12 @@ static void getNextPos(void)
+ 	if (song.tick != 1)
+ 		return;
+ 
++	if (ft2CaptureActive)
++	{
++		ft2CaptureTransitions |= ft2CaptureCommands;
++		ft2CaptureCommands = 0;
++	}
++
+ 	song.row++;
+ 
+ 	if (song.pattDelTime > 0)
+@@ -2308,6 +2319,8 @@ static void getNextPos(void)
+ 
+ 	if (song.pBreakFlag)
+ 	{
++		if (ft2CaptureActive)
++			ft2CaptureTransitions |= FT2_CAPTURE_E6;
+ 		song.pBreakFlag = false;
+ 		song.row = song.pBreakPos;
+ 	}
+@@ -2328,6 +2341,8 @@ static void getNextPos(void)
+ 			else if (++song.songPos >= song.songLength)
+ 			{
+ 				editor.wavReachedEndFlag = true;
++				if (ft2CaptureActive)
++					ft2CaptureTransitions |= FT2_CAPTURE_RESTART;
+ 				song.songPos = song.songLoopStart;
+ 			}
+ 
+@@ -2410,6 +2425,8 @@ void tickReplayer(void) // periodically called from audio callback
+ 			getNewNote(ch, p);
+ 			updateVolPanAutoVib(ch);
+ 		}
++		if (ft2CaptureActive)
++			ft2CaptureRow();
+ 	}
+ 	else
+ 	{
+diff --git a/src/ft2_wav_renderer.c b/src/ft2_wav_renderer.c
+index 71d88d4..a34608b 100644
+--- a/src/ft2_wav_renderer.c
++++ b/src/ft2_wav_renderer.c
+@@ -6,6 +6,9 @@
+ #include <stdio.h>
+ #include <stdint.h>
+ #include <stdbool.h>
++#include <errno.h>
++#include <stdlib.h>
++#include <string.h>
+ #include "ft2_header.h"
+ #include "ft2_audio.h"
+ #include "ft2_gui.h"
+@@ -45,6 +48,63 @@ static int16_t WDAmp;
+ static uint32_t WDFrequency = 44100;
+ static SDL_Thread *thread;
+ 
++bool ft2CaptureActive;
++uint8_t ft2CaptureCommands, ft2CaptureTransitions;
++static FILE *captureTrace;
++static uint32_t captureFrame;
++static int16_t capturePreviousOrder, capturePreviousRow;
++
++void ft2CaptureRow(void)
++{
++	// These are latched before effects. Bxx can mutate song.songPos immediately,
++	// and speed 1 can advance song.row before the tick has produced any samples.
++	const int16_t order = song.curReplayerSongPos;
++	const int16_t row = song.curReplayerRow;
++	const uint8_t flags = ft2CaptureTransitions;
++	const char *transition = "row";
++	if (capturePreviousOrder < 0)
++		transition = "start";
++	else if (flags & FT2_CAPTURE_BXX)
++	{
++		const int32_t source = capturePreviousOrder * 256 + capturePreviousRow;
++		const int32_t target = order * 256 + row;
++		transition = target < source ? "bxx_backward" :
++			(target > source ? "bxx_forward" : "bxx_self");
++	}
++	else if (flags & FT2_CAPTURE_RESTART)
++		transition = "natural_restart";
++	else if (flags & FT2_CAPTURE_DXX)
++		transition = "dxx_break";
++	else if (flags & FT2_CAPTURE_E6)
++		transition = "e6_loop";
++	else if (order != capturePreviousOrder)
++		transition = "next_order";
++
++	fprintf(captureTrace,
++		"{\"kind\":\"row\",\"frame\":%u,\"order\":%d,\"row\":%d,"
++		"\"pattern\":%u,\"speed\":%u,\"bpm\":%u,\"transition\":\"%s\","
++		"\"from_order\":%d,\"from_row\":%d,\"to_order\":%d,\"to_row\":%d,"
++		"\"bxx\":%s,\"dxx\":%s,\"e6\":%s,\"natural_restart\":%s,",
++		captureFrame, order, row, song.curReplayerPattNum, song.speed, song.BPM,
++		transition, capturePreviousOrder, capturePreviousRow, order, row,
++		(flags & FT2_CAPTURE_BXX) ? "true" : "false",
++		(flags & FT2_CAPTURE_DXX) ? "true" : "false",
++		(flags & FT2_CAPTURE_E6) ? "true" : "false",
++		(flags & FT2_CAPTURE_RESTART) ? "true" : "false");
++	// Sequencer state distinguishes finite E6 repetitions from an endless cycle.
++	// Voice phase is deliberately excluded: it does not control future row flow.
++	fprintf(captureTrace, "\"control_state\":[%d,%d,%d,%d,%d,%d,%d,%d,%d,%d",
++		order, row, song.songPos, song.speed, song.BPM, song.pattDelTime,
++		song.pattDelTime2, song.pBreakPos, song.pBreakFlag, song.posJumpFlag);
++	for (int32_t i = 0; i < song.numChannels; i++)
++		fprintf(captureTrace, ",%d,%d", channel[i].patternLoopStartRow,
++			channel[i].patternLoopCounter);
++	fputs("]}\n", captureTrace);
++	capturePreviousOrder = order;
++	capturePreviousRow = row;
++	ft2CaptureTransitions = 0;
++}
++
+ void cbToggleWavRenderIndividualTracks(void)
+ {
+ 	renderIndividualTracks ^= 1;
+@@ -824,6 +884,111 @@ void rbWavRenderBitDepth32(void)
+ 	WDBitDepth = 32;
+ }
+ 
++// Fixed-duration benchmark capture. Only entry/exit initialize/close the dump;
++// every intervening restart and effect is executed by the unmodified replayer.
++static bool captureModuleToWav(const char *outputPath, const char *budgetText,
++	uint32_t freq, uint8_t bitDepth, int16_t amp, uint8_t startPos,
++	uint32_t *outTotalSamples)
++{
++	char *end;
++	errno = 0;
++	const unsigned long long budget = strtoull(budgetText, &end, 10);
++	const char *tracePath = getenv("KEYGEN_FT2_CAPTURE_TRACE");
++	if (errno || *budgetText == '\0' || *end != '\0' || budget < 1 ||
++		budget > 44100ULL * 900 || tracePath == NULL || *tracePath == '\0' ||
++		freq != 44100 || bitDepth != 16 || amp != 8 || startPos != 0)
++		return false;
++
++	int32_t solo = -1;
++	const char *soloText = getenv("KEYGEN_FT2_CAPTURE_SOLO");
++	if (soloText != NULL)
++	{
++		errno = 0;
++		const long value = strtol(soloText, &end, 10);
++		if (errno || *soloText == '\0' || *end != '\0' ||
++			value < 0 || value >= song.numChannels)
++			return false;
++		solo = (int32_t)value;
++	}
++
++	FILE *f = fopen(outputPath, "wb");
++	if (f == NULL)
++		return false;
++	captureTrace = fopen(tracePath, "wb");
++	if (captureTrace == NULL)
++	{
++		fclose(f);
++		return false;
++	}
++	WDFrequency = freq;
++	WDBitDepth = bitDepth;
++	WDAmp = amp;
++	WDStartPos = 0;
++	pauseAudio();
++	if (fseek(f, sizeof (wavHeader_t), SEEK_SET) != 0 ||
++		!dump_Init(WDFrequency, WDAmp, WDStartPos))
++	{
++		fclose(captureTrace);
++		captureTrace = NULL;
++		fclose(f);
++		resumeAudio();
++		return false;
++	}
++
++	for (int32_t i = 0; i < song.numChannels; i++)
++		channel[i].dontRenderThisChannel = solo >= 0 && i != solo;
++	// A fresh-process canonical export starts from this same dither seed.
++	resetAudioDither();
++	captureFrame = 0;
++	capturePreviousOrder = capturePreviousRow = -1;
++	ft2CaptureCommands = ft2CaptureTransitions = 0;
++	ft2CaptureActive = true;
++	fprintf(captureTrace,
++		"{\"kind\":\"header\",\"schema\":1,\"sample_rate\":44100,"
++		"\"channels\":2,\"module_channels\":%d,\"frame_budget\":%llu,"
++		"\"solo_channel\":%d}\n", song.numChannels, budget, solo);
++
++	bool ok = true;
++	uint64_t tickSamplesFrac = 0;
++	while (captureFrame < budget)
++	{
++		// Deliberately do not call dump_EndOfTune() or consult visited rows.
++		// songLoopStart, Bxx, Dxx, E6x, envelopes and voice tails remain live.
++		dump_TickReplayer();
++		uint32_t tickSamples = audio.samplesPerTickInt;
++		tickSamplesFrac += audio.samplesPerTickFrac;
++		if (tickSamplesFrac >= BPM_FRAC_SCALE)
++		{
++			tickSamplesFrac &= BPM_FRAC_MASK;
++			tickSamples++;
++		}
++		if (tickSamples > budget - captureFrame)
++			tickSamples = (uint32_t)(budget - captureFrame);
++		mixReplayerTickToBuffer(tickSamples, wavRenderBuffer, WDBitDepth);
++		if (fwrite(wavRenderBuffer, sizeof (int16_t) * 2, tickSamples, f) != tickSamples)
++		{
++			ok = false;
++			break;
++		}
++		captureFrame += tickSamples;
++	}
++	ft2CaptureActive = false;
++	fprintf(captureTrace, "{\"kind\":\"end\",\"frames\":%u}\n", captureFrame);
++	ok = !ferror(captureTrace) && ok;
++	if (fclose(captureTrace) != 0)
++		ok = false;
++	captureTrace = NULL;
++	if (fflush(f) != 0)
++		ok = false;
++	dump_Close(f, captureFrame * 2);
++	for (int32_t i = 0; i < song.numChannels; i++)
++		channel[i].dontRenderThisChannel = false;
++	resumeAudio();
++	if (outTotalSamples != NULL)
++		*outTotalSamples = captureFrame * 2;
++	return ok;
++}
++
+ // headless song-to-WAV render (no GUI/threads). Reuses the real dump_* helpers
+ // and mixer. Returns true on success. Engine must already be initialized and a
+ // module loaded. bitDepth must be 16 or 32.
+@@ -831,6 +996,11 @@ bool renderModuleToWavFileHeadless(const char *outputPath, uint32_t freq,
+ 	uint8_t bitDepth, int16_t amp, uint8_t startPos, uint8_t stopPos,
+ 	uint16_t maxLoops, uint32_t *outTotalSamples)
+ {
++	const char *captureBudget = getenv("KEYGEN_FT2_CAPTURE_FRAMES");
++	if (captureBudget != NULL)
++		return outputPath != NULL && captureModuleToWav(outputPath, captureBudget,
++			freq, bitDepth, amp, startPos, outTotalSamples);
++
+ 	if (outputPath == NULL)
+ 		return false;
+ 
+diff --git a/src/ft2_wav_renderer.h b/src/ft2_wav_renderer.h
+index 4e918e6..b9a5136 100644
+--- a/src/ft2_wav_renderer.h
++++ b/src/ft2_wav_renderer.h
+@@ -33,3 +33,10 @@ void rbWavRenderBitDepth32(void);
+ bool renderModuleToWavFileHeadless(const char *outputPath, uint32_t freq,
+ 	uint8_t bitDepth, int16_t amp, uint8_t startPos, uint8_t stopPos,
+ 	uint16_t maxLoops, uint32_t *outTotalSamples);
++
++// Opt-in benchmark observation only; never used to drive the replayer.
++enum { FT2_CAPTURE_BXX = 1, FT2_CAPTURE_DXX = 2, FT2_CAPTURE_E6 = 4,
++	FT2_CAPTURE_RESTART = 8 };
++extern bool ft2CaptureActive;
++extern uint8_t ft2CaptureCommands, ft2CaptureTransitions;
++void ft2CaptureRow(void);

@@ -1,0 +1,84 @@
+{
+  "repair_runtime": {
+    "scope": "Later credential-free native FT2 preparation and bounded original-task smoke; baseline sections below retain their original timestamp.",
+    "latest_official_cli": "1.0.36",
+    "installed_equals_official_download_sha256": "b71b8d383b6b34a34463f9b319c6744f7daf032f462299dd77398b5bd281c8d5",
+    "version_evidence": "benchmark/runs/setup-verification/boat-version.json",
+    "specific_snapshot_restore_failures": "Provider reported Restore incomplete, 4/9 image files missing; all affected VMs confirmed archived.",
+    "verified_alternative": "Fresh VM, exact SHA256 Docker-save bundle, exact image-ID verification, native FT2, binary paused export and command deadline passed.",
+    "image_bundle_sha256": "7e5f7cd4dbd5631c33d1a7a7c9efca2f32190176b023d295923039ab4c96e0a9",
+    "image_bundle_bytes": 230204928,
+    "fresh_vm": "bx_yst49w3d",
+    "fresh_vm_final_state": "archived",
+    "evidence": "benchmark/runs/setup-verification/loaded-image-original-task",
+    "full_campaign_launched": false
+  },
+  "checked_at_utc": "2026-09-30T10:39:10.911068+00:00",
+  "scope": "Feasibility exploration only; one credential-free VM command smoke. No model campaigns or image builds launched.",
+  "account_preflight": {
+    "authenticated": true,
+    "credit_seconds": 384592,
+    "credit_hours": 106.83,
+    "active_sandboxes_before": 0,
+    "max_active_sandboxes": 100,
+    "creation_limits": {
+      "per_minute": 12,
+      "per_hour": 60,
+      "per_day": 200
+    }
+  },
+  "capability_smoke": {
+    "sandbox": "bx_t2hj62hp",
+    "allocation": "boat new --type small --ttl 300 --no-env --no-update --json",
+    "architecture": "x86_64",
+    "vcpus": 2,
+    "memory_total_kB": 4009876,
+    "os": "Ubuntu 24.04.4 LTS",
+    "docker": "29.7.0",
+    "docker_daemon_reachable": true,
+    "filesystem_command_smoke": "passed",
+    "benchmark_container_smoke": "not run; no suitable preinstalled image",
+    "repository_or_credentials_uploaded": false,
+    "stop_command": "boat stop bx_t2hj62hp --no-update --json",
+    "stop_exit_code": 0,
+    "confirmed_state": "stopped",
+    "snapshot_completed_at": "2026-09-30T10:34:36.723Z"
+  },
+  "historical_timing": {
+    "profiles_with_usable_timing": 158,
+    "median_model_fraction": 0.9458698561484113,
+    "median_sandbox_fraction": 0.010303508028177928,
+    "scope": "Historical attempt profiles, including repeats; not a Boat benchmark and not a guaranteed per-model speedup."
+  },
+  "existing_parallelism": {
+    "command_help_exercised": "benchmark/.venv/bin/python benchmark/run.py run --help",
+    "workers_flag_present": true,
+    "atomic_model_reservations": true,
+    "tier_driver_forwards_workers": false,
+    "sources": [
+      "benchmark/run.py:432-435,548-549,571-587",
+      "benchmark/drive.py:75-85"
+    ]
+  },
+  "recommendation": {
+    "initial_concurrency": 4,
+    "layout": "Trusted controller hosts upstream mini-swe-agent and provider model calls. One model-controlled offline Docker container per credential-free small Boat VM; bounded artifact collection back to controller. Keep canonical render/video local initially; bound that queue separately.",
+    "provider_limits": "Start with at most one active attempt per approved auth route; increase only after observing rate/quota behavior. Devin remains paused until renewal.",
+    "no_speedup_claim": "94.6% median historical wall-time fraction was model requests. Parallelism targets campaign throughput, not individual model latency. No Boat campaign makespan measured.",
+    "warm_template": "Prepare compatible pinned x86_64 images in a trusted credential-free template, stop/snapshot, fork workers with --no-env and explicit TTL. Clear per-attempt state and never fork a dirty agent workspace.",
+    "lifecycle": "TTL longer than each frozen attempt budget plus export/cleanup margin; stop explicitly on every exit path. The 300s TTL was only for the capability probe.",
+    "integration_required": "Existing Docker/local-loopback lifecycle is not a drop-in remote runner. Review remote command timeouts, freeze/export, binary streams, image identity, FT2 ENTRYPOINT compatibility, and cleanup. Native upstream model migration is still pending.",
+    "architecture": "Host is ARM64; observed Boat is x86_64. Build compatible images and record separate execution provenance. Do not claim cross-architecture PCM bit equivalence."
+  },
+  "restrictions": [
+    "No local Kimi pool",
+    "No Gemini bridge",
+    "No OpenCode Zen",
+    "No Cursor agent wrapper or xAI Composer substitute",
+    "Devin waits for renewal",
+    "No provider or Boat credentials in untrusted containers",
+    "Do not expose loopback inference proxy publicly",
+    "Maintain network-none, non-root, read-only root, cap-drop, no-new-privileges and bounded resources"
+  ],
+  "security_note": "Remote scoring must get an explicitly clean environment and artifacts only; do not copy the host scorer ambient environment to Boat."
+}
