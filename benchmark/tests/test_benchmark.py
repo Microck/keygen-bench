@@ -1,421 +1,360 @@
-"""Offline contract tests. They do not use subscriptions, Docker, or the FT2 mixer."""
+"""Offline consumer-visible campaign, recovery and artifact boundaries."""
 from __future__ import annotations
 
-from contextlib import contextmanager
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import ExitStack
 import copy
-import importlib.util
 import io
 import json
-import os
 from pathlib import Path
+import shutil
 import struct
-import subprocess
 import tarfile
 import tempfile
 import threading
 import unittest
+from unittest.mock import patch
 import wave
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from benchmark import proxy, run
-from minisweagent.exceptions import Submitted
-from benchmark.proxy import ProxyModel, request, validate_url
-from minisweagent.exceptions import FormatError
-from minisweagent.models.utils.actions_toolcall import BASH_TOOL
-
-
-@contextmanager
-def environ(**values):
-    """Set process environment variables for one block, then restore the originals."""
-    saved = {key: os.environ.get(key) for key in values}
-    os.environ.update(values)
-    try:
-        yield
-    finally:
-        for key, old in saved.items():
-            if old is None:
-                os.environ.pop(key, None)
-            else:
-                os.environ[key] = old
-
-
-def bash_call(command, call_id="call_1"):
-    return {"id": call_id, "type": "function", "function": {"name": "bash", "arguments": json.dumps({"command": command})}}
-
-
-@contextmanager
-def endpoint(code=200, returned_model="exact-model", redirect=False, tool_calls=(bash_call("echo ready"),), codes=None):
-    """A fake proxy. `codes` answers successive requests with those statuses, then falls back to `code`."""
-    seen = []
-    pending = list(codes or [])
-    class Handler(BaseHTTPRequestHandler):
-        def do_GET(self):
-            self.do_POST()
-        def do_POST(self):
-            raw = self.rfile.read(int(self.headers.get("Content-Length", 0)))
-            seen.append({"path": self.path, "body": json.loads(raw) if raw else None,
-                         "authorization": self.headers.get("Authorization")})
-            self.send_response(302 if redirect else (pending.pop(0) if pending else code))
-            if redirect:
-                self.send_header("Location", "/v1/should-not-follow")
-            self.send_header("anthropic-ratelimit-unified-7d-utilization", "0.42")
-            self.send_header("X-Private-Header", "hidden")
-            self.end_headers()
-            response = {"model": returned_model, "choices": [{"message": {"content": "", "tool_calls": list(tool_calls)},
-                "finish_reason": "tool_calls"}],
-                "usage": {"total_tokens": 10}}
-            self.wfile.write(json.dumps(response).encode())
-        def log_message(self, *args):
-            pass
-    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    try:
-        yield f"http://127.0.0.1:{server.server_port}/v1", seen
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join()
+from benchmark import campaign, drive, run
 
 
 class BenchmarkTests(unittest.TestCase):
     def setUp(self):
-        temp = tempfile.TemporaryDirectory()
-        self.addCleanup(temp.cleanup)
-        self.root = Path(temp.name)
-        self.config = json.loads((run.HERE / "config/campaign.example.json").read_text())
-        self.config["proxy_version"] = "test-version"
-        self.config["models"] = [{"id": "test-model", "model": "exact-model", "response_model": "exact-model"}]
-        self.path = self.root / "campaign.json"
-        self.proxy_file = self.root / "cliproxyapi.local.yaml"
-        self.proxy_file.write_text((run.HERE / "config/cliproxyapi.example.yaml").read_text())
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.model = {"id": "verified", "inventory_id": "exact-model", "model": "exact-model", "response_model": "exact-model",
+                      "provider": "go", "api": "chat", "base_url": "https://opencode.ai/zen/go/v1", "api_key_env": "TEST_GO_KEY",
+                      "generation": {"max_tokens": 4096, "reasoning_effort": "max"},
+                      "readiness": {"status": "verified", "evidence": "offline-fixture", "verified_at": "2026-09-30"}}
+        self.model["backend_provenance"] = {"service_revision": None, "bridge": None}
+        self.tier_spec_path = self.root / "tier-spec.json"
+        self.tier_spec_path.write_text(json.dumps({"entries": [
+            {"provider": "go", "api": "chat", "model": "exact-model", "tier": "max",
+             "reasoning": {"reasoning_effort": "max"}}]}))
+        self.model["tier"] = {"level": "max", "reasoning": {"reasoning_effort": "max"},
+                              "spec_sha256": campaign.file_digest(self.tier_spec_path)}
+        self.selection = json.loads((run.HERE / "config/campaign.example.json").read_text())
+        self.selection["models"] = [self.model]
+        self.selection["image"] = "sha256:" + "a" * 64
+        self.selection["visualizer_image"] = "sha256:" + "b" * 64
+        self.selection["storage"] = {"backend": "local", "directory": str(self.root / "archive"), "reserve_bytes": 1,
+                                     "peak_bytes_per_attempt": 1073741824, "evict_after_archive": False}
+        effective = campaign.normalize_native(self.selection, [self.model])[0]
+        route = {key: self.model[key] for key in ("provider", "api", "base_url", "model", "response_model", "backend_provenance")}
+        # A synthetic native trace exercises proof validation, not provider readiness.
+        from minisweagent.models.utils.actions_toolcall import BASH_TOOL
+        call = {"id": "c1", "type": "function", "function": {"name": "bash", "arguments": '{"command":"echo ready"}'}}
+        messages = [{"role": "system", "content": "Protocol probe"}, {"role": "user", "content": "Run a tool then submit"},
+                    {"role": "assistant", "content": "", "tool_calls": [call],
+                     "extra": {"response": {"model": "exact-model", "usage": {"prompt_tokens": 3}},
+                               "actions": [{"command": "echo ready", "tool_call_id": "c1"}]}},
+                    {"role": "tool", "tool_call_id": "c1", "content": "ready", "extra": {"returncode": 0}},
+                    {"role": "assistant", "content": "", "extra": {"response": {"model": "exact-model", "usage": {"prompt_tokens": 4}},
+                                                                 "actions": [{"command": run.FINISH, "tool_call_id": "c2"}]}}]
+        self.proof = {"schema": "keygen-native-readiness-1", "route": route, "effective_settings": effective,
+                      "native_source_sha256": campaign.file_digest(run.HERE / "native_models.py"),
+                      "upstream_source_sha256": campaign.upstream_provenance("chat"),
+                      "trajectory": {"info": {"config": {"agent_type": "minisweagent.agents.default.DefaultAgent",
+                                                        "model_type": "minisweagent.models.litellm_model.LitellmModel"}}, "messages": messages},
+                      "transport": [{"event": "request", "input_sha256": campaign.digest(messages[:2]),
+                                     "tools_sha256": campaign.digest([BASH_TOOL]), "settings": effective["expected_transmitted_generation"]},
+                                    {"event": "response", "identity_status": "identity_match"},
+                                    {"event": "request", "input_sha256": campaign.digest(messages[:4]),
+                                     "tools_sha256": campaign.digest([BASH_TOOL]), "settings": effective["expected_transmitted_generation"]},
+                                    {"event": "response", "identity_status": "identity_match"}]}
+        self.proof_path = self.root / "proof.json"
+        self.proof_path.write_text(json.dumps(self.proof))
+        self.model["readiness"]["evidence"] = {"evidence_path": str(self.proof_path),
+                                             "artifact_sha256": campaign.file_digest(self.proof_path),
+                                             "provider_received_settings_verified": False}
+        self.inventory = {"models": [{"model": "exact-model", "provider": "OpenCode Go", "status": "pending-model-smoke",
+                                      "upstream_model": "exact-model", "proxy_request_model": "exact-model"}]}
+        self.inventory_path = self.root / "inventory.json"
+        self.selection_path = self.root / "selection.json"
 
-    def load(self):
-        self.path.write_text(json.dumps(self.config))
-        return run.load_config(self.path)
+    def compile(self):
+        self.inventory_path.write_text(json.dumps(self.inventory))
+        self.selection_path.write_text(json.dumps(self.selection))
+        return campaign.compile_campaign(self.inventory_path, self.selection_path, self.root / "campaign.json", self.tier_spec_path)
 
-    def fake_shell(self, stdout=b""):
-        """Replace run.shell with a recorder so no Docker command runs; returns the recorded argv list."""
-        commands = []
-        def shell(cmd, **kwargs):
-            commands.append(cmd)
-            return subprocess.CompletedProcess(cmd, 0, stdout, b"")
-        self.addCleanup(setattr, run, "shell", run.shell)
-        run.shell = shell
-        return commands
+    def test_held_and_excluded_routes_rejected_without_credentials(self):
+        for provider, status in [("Devin", "held-until-devin-renewal"), ("OpenCode Zen", "ready"), ("OpenCode Go", "blocked-original-checkpoint-unproven")]:
+            with self.subTest(provider=provider, status=status):
+                self.inventory["models"][0].update(provider=provider, status=status)
+                with self.assertRaisesRegex(ValueError, "held|Excluded"):
+                    self.compile()
+        self.assertFalse((self.root / "campaign.json").exists())
 
-    def test_campaign_configuration(self):
-        c = self.load()
-        self.assertIn("Choose the sound", c["task"])
-        self.assertIn("Budget: 100 steps, 30 minutes", c["system"])
-        self.assertNotIn("<<", c["system"])
-        self.assertFalse(c["proxy_policy"]["upstream_payload_verified"])
-        self.assertNotIn("api-keys", json.dumps(c))
+    def test_unverified_native_route_rejected(self):
+        self.model["readiness"]["status"] = "pending"
+        with self.assertRaisesRegex(ValueError, "readiness"):
+            self.compile()
 
-    def test_duplicate_models_rejected(self):
-        self.config["models"].append({**self.config["models"][0], "id": "other"})
-        with self.assertRaisesRegex(ValueError, "Duplicate model"):
-            self.load()
+    def test_claimed_readiness_without_real_proof_file_rejected(self):
+        self.proof_path.unlink()
+        with self.assertRaisesRegex(ValueError, "existing bounded"):
+            self.compile()
 
-    def test_model_prompt_overrides_rejected(self):
-        self.config["models"][0]["system"] = "skill instructions"
+    def test_readiness_hash_single_turn_and_missing_tool_result_rejected(self):
+        original = copy.deepcopy(self.proof)
+        for mutation in ("hash", "single_turn", "no_tool"):
+            self.proof = copy.deepcopy(original)
+            if mutation == "single_turn":
+                self.proof["trajectory"]["messages"] = self.proof["trajectory"]["messages"][:4]
+            elif mutation == "no_tool":
+                self.proof["trajectory"]["messages"].pop(3)
+            self.proof_path.write_text(json.dumps(self.proof))
+            self.model["readiness"]["evidence"]["artifact_sha256"] = (
+                "b" * 64 if mutation == "hash" else campaign.file_digest(self.proof_path))
+            with self.subTest(mutation=mutation), self.assertRaises(ValueError):
+                self.compile()
+
+    def test_readiness_bound_to_native_source_and_exact_transmitted_settings(self):
+        original = copy.deepcopy(self.proof)
+        for mutation in ("source", "settings"):
+            self.proof = copy.deepcopy(original)
+            if mutation == "source":
+                self.proof["native_source_sha256"] = "0" * 64
+            else:
+                self.proof["transport"][0]["settings"] = {"max_tokens": 1}
+            self.proof_path.write_text(json.dumps(self.proof))
+            self.model["readiness"]["evidence"]["artifact_sha256"] = campaign.file_digest(self.proof_path)
+            with self.subTest(mutation=mutation), self.assertRaises(ValueError):
+                self.compile()
+
+    def test_first_success_contract_preserves_exact_prompts(self):
+        config = self.compile()
+        self.assertEqual(config["max_attempts"], 3)
+        self.assertEqual(config["policies"]["attempt_selection"], "first_success_up_to_three_attempts")
+        changed = copy.deepcopy(config)
+        changed["max_attempts"] = True
         with self.assertRaises(ValueError):
-            self.load()
+            campaign.validate(changed)
+        changed = copy.deepcopy(config)
+        changed["prompts"]["task"] += "Prefer tonal music"
+        with self.assertRaisesRegex(ValueError, "Creative prompts"):
+            campaign.validate(changed)
 
-    def test_tools_and_router_parameters_rejected(self):
-        for parameter in ["messages", "tools", "api_base", "fallbacks", "n", "num_retries"]:
-            with self.subTest(parameter=parameter):
-                self.config["generation"] = {parameter: []}
-                with self.assertRaises(ValueError):
-                    self.load()
-
-    def test_bad_resource_budgets_rejected(self):
-        for value in [-1, True, 1.5]:
-            self.config["limits"]["steps"] = value
-            with self.assertRaises(ValueError):
-                self.load()
-        self.config["limits"]["steps"] = 0   # unlimited steps, wall clock only
-        self.assertIn("Budget: no limit on steps, 30 minutes", self.load()["system"])
-        self.config["limits"]["wall_seconds"] = 0   # the wall clock itself may not be unlimited
+    def test_model_mapping_and_effective_settings_cannot_be_faked(self):
+        self.model["response_model"] = "substitute"
+        with self.assertRaisesRegex(ValueError, "identity differs"):
+            self.compile()
+        self.model["response_model"] = "exact-model"
+        config = self.compile()
+        config["models"][0]["effective_settings"]["output_limit"] = 999999
+        evidence = config["models"][0]["readiness"]["evidence"]
+        evidence["payload"]["effective_settings"]["output_limit"] = 999999
+        evidence["payload_sha256"] = campaign.digest(evidence["payload"])
         with self.assertRaises(ValueError):
-            self.load()
+            campaign.validate(config)
 
-    def test_reserved_environment_names_rejected(self):
-        self.config["api_key_env"] = "HOME"
+    def test_inventory_is_not_executable_and_manifest_is_immutable(self):
         with self.assertRaises(ValueError):
-            self.load()
-
-    def test_nan_rejected(self):
-        self.config["generation"]["temperature"] = float("nan")
+            campaign.load(self.inventory_path) if self.inventory_path.exists() else campaign.validate(self.inventory)
+        config = self.compile()
+        envelope = json.loads((self.root / "campaign.json").read_text())
+        envelope["campaign"]["limits"]["steps"] = 1
+        (self.root / "campaign.json").write_text(json.dumps(envelope))
+        with self.assertRaisesRegex(ValueError, "immutable"):
+            campaign.load(self.root / "campaign.json")
         with self.assertRaises(ValueError):
-            self.load()
+            campaign.publish(self.root / "campaign.json", {"sha256": campaign.digest(config), "campaign": config})
 
-    def test_proxy_retries_and_prompt_rewrite_rejected(self):
-        original = self.proxy_file.read_text()
-        for old, new in [("request-retry: 0", "request-retry: 1"),
-                         ("disable-claude-cloak-mode: true", "disable-claude-cloak-mode: false"),
-                         ("switch-preview-model: false", "switch-preview-model: true"),
-                         ("payload: {}", "payload: {override: something}")]:
-            self.proxy_file.write_text(original.replace(old, new))
-            with self.assertRaises(ValueError):
-                self.load()
-
-    def test_local_endpoint_only(self):
-        for url in ["https://example.com/v1", "http://user:secret@127.0.0.1:8317/v1",
-                    "http://127.0.0.1:8317/v1?x=1", "http://localhost:8317/v1"]:
-            with self.assertRaises(ValueError):
-                validate_url(url)
-        self.assertEqual(validate_url("http://127.0.0.1:8317/v1/"), "http://127.0.0.1:8317/v1")
-
-    def test_no_ambient_configuration_forwarded(self):
-        with environ(CLIPROXY_CLIENT_KEY="secret", BASH_ENV="/tmp/skills", MSWEA_DEFAULT_MODEL="other",
-                     ANTHROPIC_API_KEY="private", PYTHONPATH="/tmp/injected"):
-            env = run.isolated_env(self.root, "CLIPROXY_CLIENT_KEY")
-        for key in ["BASH_ENV", "MSWEA_DEFAULT_MODEL", "ANTHROPIC_API_KEY", "PYTHONPATH"]:
-            self.assertNotIn(key, env)
-        self.assertEqual(env["HOME"], str(self.root))
-        self.assertEqual(env["MSWEA_GLOBAL_CONFIG_DIR"], str(self.root / "mini-config"))
-
-    def test_policy_digest_ignores_credentials(self):
-        first = self.load()["proxy_policy"]["config_sha256"]
-        self.proxy_file.write_text(self.proxy_file.read_text().replace("REPLACE_WITH_RANDOM_LOCAL_CLIENT_KEY", "rotated-key"))
-        self.assertEqual(self.load()["proxy_policy"]["config_sha256"], first)
-        self.proxy_file.write_text(self.proxy_file.read_text().replace("port: 8317", "port: 8318"))
-        self.config["base_url"] = "http://127.0.0.1:8318/v1"
-        self.assertNotEqual(self.load()["proxy_policy"]["config_sha256"], first)
-
-    def test_drive_plan_one_campaign_per_tier(self):
-        from benchmark import drive
-        self.path.write_text(json.dumps(self.config))
-        selection = self.root / "selection.json"
-        selection.write_text(json.dumps([{"id": "a-low", "model": "a", "response_model": "a", "tier": "low"},
-                                         {"id": "b-low", "model": "devin/b", "response_model": "devin/b", "tier": "low"},
-                                         {"id": "c", "model": "c", "response_model": "c", "tier": "thinking-on"}]))
-        campaigns = dict(drive.plan(selection, self.path, self.root / "out"))
-        low = json.loads(campaigns["low"].read_text())
-        self.assertEqual(low["generation"]["reasoning_effort"], "low")
-        self.assertEqual([m["id"] for m in low["models"]], ["a", "devin-b"])
-        self.assertNotIn("reasoning_effort", json.loads(campaigns["thinking-on"].read_text())["generation"])
-        for path in campaigns.values():
-            run.load_config(path)  # every generated campaign passes the runner's validation
-
-    def test_lock_and_one_attempt(self):
-        run.lock_campaign(self.root / "lock.json", {"prompt": "original"})
-        run.lock_campaign(self.root / "lock.json", {"prompt": "original"})
+    def test_atomic_lock_publication_under_concurrent_starts(self):
+        path = self.root / "lock.json"
+        start = threading.Barrier(12)
+        def publish():
+            start.wait()
+            run.lock_campaign(path, {"condition": "fixed"})
+            return json.loads(path.read_text())["snapshot"]
+        with ThreadPoolExecutor(max_workers=12) as pool:
+            results = list(pool.map(lambda _: publish(), range(12)))
+        self.assertEqual(results, [{"condition": "fixed"}] * 12)
         with self.assertRaises(ValueError):
-            run.lock_campaign(self.root / "lock.json", {"prompt": "changed"})
-        run.reserve(self.root, "model")
+            run.lock_campaign(path, {"condition": "changed"})
+
+    def test_atomic_repeat_reservations_preserve_identity(self):
+        def reserve(repetition):
+            try:
+                run.reserve(self.root, self.model, repetition, f"verified-rep-{repetition}")
+                return True
+            except FileExistsError:
+                return False
+        with ThreadPoolExecutor(max_workers=12) as pool:
+            results = list(pool.map(reserve, [1, 2, 3] * 4))
+        self.assertEqual(sum(results), 3)
+        rows = drive.summary(self.root)
+        self.assertEqual({row["repetition"] for row in rows}, {1, 2, 3})
+        self.assertEqual({row["model"] for row in rows}, {"exact-model"})
+        self.assertTrue(all(row["status"] == "RESERVED" and row["eligible"] is False for row in rows))
+
+    def test_recovery_finalizes_without_rerun_and_keeps_unknown_usage(self):
+        directory = run.reserve(self.root, self.model, 1, "verified-rep-1")
+        self.assertEqual(run.recover_attempts(self.root, self.selection, []), ["verified-rep-1"])
+        status = json.loads((directory / "status.json").read_text())
+        self.assertEqual(status["status"], "INTERRUPTED")
+        self.assertEqual(status["model"], self.model)
+        self.assertTrue(status["totals"]["in_flight_usage_unknown"])
+        self.assertEqual(status["failure_category"], "INFRA")
         with self.assertRaises(FileExistsError):
-            run.reserve(self.root, "model")
+            run.reserve(self.root, self.model, 1, "verified-rep-1")
+        retry = run.reserve(self.root, self.model, 1, "retry-explicit", retry_of="verified-rep-1")
+        self.assertEqual(json.loads((retry / "status.json").read_text())["retry_of"], "verified-rep-1")
+        self.assertEqual(json.loads((directory / "status.json").read_text())["status"], "INTERRUPTED")
 
-    def test_outbound_messages_and_single_bash_tool(self):
-        c = self.load()
-        history = [{"role": "system", "content": "Exact original {{ text }}", "extra": {"private": 1}},
-                   {"role": "user", "content": "task"},
-                   {"role": "assistant", "content": "", "tool_calls": [bash_call("ls", "call_0")], "extra": {"actions": []}},
-                   {"role": "tool", "content": "<returncode>0</returncode>", "tool_call_id": "call_0", "extra": {"raw_output": "x"}}]
-        with endpoint() as (url, seen), environ(CLIPROXY_CLIENT_KEY="local-secret", HTTP_PROXY="http://unreachable:1"):
-            c["base_url"] = url
-            model = ProxyModel(c, c["models"][0], self.root / "audit.jsonl")
-            answer = model.query(history)
-        self.assertEqual(len(seen), 1)
-        body = seen[0]["body"]
-        self.assertEqual(body["messages"], [{"role": "system", "content": "Exact original {{ text }}"},
-                                            {"role": "user", "content": "task"},
-                                            {"role": "assistant", "content": "", "tool_calls": [bash_call("ls", "call_0")]},
-                                            {"role": "tool", "content": "<returncode>0</returncode>", "tool_call_id": "call_0"}])
-        self.assertEqual(body["tools"], [BASH_TOOL])  # mini's one bash tool, nothing else
-        self.assertNotIn("tool_choice", body)
-        self.assertEqual(body["n"], 1)
-        self.assertEqual(answer["extra"]["actions"], [{"command": "echo ready", "tool_call_id": "call_1"}])
-        self.assertEqual(answer["tool_calls"], [bash_call("echo ready")])
-        self.assertNotIn("local-secret", json.dumps(model.serialize()))
-        audit = json.loads((self.root / "audit.jsonl").read_text())
-        self.assertNotIn("local-secret", json.dumps(audit))
-        self.assertEqual(audit["rate_limit"], {"anthropic-ratelimit-unified-7d-utilization": "0.42"})
-        self.assertGreater(audit["latency_seconds"], 0)
-        self.assertEqual(audit["prompt_messages"], 4)
-        self.assertEqual(json.loads((self.root / "responses.jsonl").read_text())["model"], "exact-model")
-        self.assertIn("timestamp", answer["extra"])
+    def test_summary_handles_old_unidentified_interruption(self):
+        directory = self.root / "old-reserved"
+        directory.mkdir()
+        (directory / "status.json").write_text('{"status":"RESERVED"}')
+        rows = drive.summary(self.root)
+        self.assertIsNone(rows[0]["model"])
+        self.assertFalse(rows[0]["eligible"])
+        self.assertIsNone(rows[0]["requests"])
 
-    def test_missing_or_unknown_tool_call_raises_mini_format_error(self):
-        c = self.load()
-        unknown = {"id": "call_9", "type": "function", "function": {"name": "python", "arguments": "{}"}}
-        for calls, expected in [((), "No tool calls found"), ((unknown,), "Unknown tool 'python'")]:
-            with endpoint(tool_calls=calls) as (url, _), environ(CLIPROXY_CLIENT_KEY="secret"):
-                c["base_url"] = url
-                with self.assertRaises(FormatError) as caught:
-                    ProxyModel(c, c["models"][0], self.root / "audit.jsonl").query([])
-            feedback = caught.exception.messages[0]
-            self.assertEqual(feedback["role"], "user")
-            self.assertIn(expected, feedback["content"])
-        self.assertEqual(len((self.root / "audit.jsonl").read_text().splitlines()), 2)  # both turns audited
+    def test_identity_mismatch_and_native_usage_remain_separate(self):
+        trajectory = {"info": {"model_stats": {"api_calls": 2}}, "messages": [
+            {"role": "assistant", "extra": {"response": {"model": "different", "usage": {"prompt_tokens": 100, "completion_tokens": 10,
+                "completion_tokens_details": {"reasoning_tokens": 3}}}}},
+            {"role": "tool", "extra": {"duration_seconds": 2.0}}]}
+        (self.root / "trajectory.json").write_text(json.dumps(trajectory))
+        totals = run.summarize(self.root, self.model, interrupted=True)
+        self.assertTrue(totals["identity_mismatch"])
+        self.assertEqual(totals["prompt_tokens"], 100)
+        self.assertEqual(totals["reasoning_tokens"], 3)
+        self.assertEqual(totals["requests"], 2)
+        self.assertEqual(totals["usage_unknown"], 2)
+        self.assertEqual(totals["sandbox_seconds"], 2.0)
 
-    def test_observations_are_tool_results(self):
-        c = self.load()
-        with environ(CLIPROXY_CLIENT_KEY="secret"):
-            model = ProxyModel(c, c["models"][0], self.root / "audit.jsonl")
-        turn = {"role": "assistant", "extra": {"actions": [{"command": "ls", "tool_call_id": "call_0"}]}}
-        [observation] = model.format_observation_messages(turn, [{"returncode": 0, "output": "a" * 30000}])
-        self.assertEqual((observation["role"], observation["tool_call_id"]), ("tool", "call_0"))
-        self.assertIn("<returncode>0</returncode>", observation["content"])
-        self.assertIn("[observation truncated]", observation["content"])
-        self.assertLess(len(observation["content"]), 21000)
-        self.assertNotIn("<time_left>", observation["content"])
-        # With mini's template vars, only the step's last observation carries the minutes left.
-        turn["extra"]["actions"].append({"command": "pwd", "tool_call_id": "call_1"})
-        first, last = model.format_observation_messages(
-            turn, [{"returncode": 0, "output": "a"}, {"returncode": 0, "output": "b"}],
-            {"wall_time_limit_seconds": 7200, "elapsed_seconds": 125})
-        self.assertNotIn("<time_left>", first["content"])
-        self.assertTrue(last["content"].endswith("<output>\nb</output>\n<time_left>117 min</time_left>"))
+    def test_environment_does_not_forward_ambient_configuration(self):
+        with patch.dict("os.environ", {"BASH_ENV": "/injected", "PYTHONPATH": "/injected", "ANTHROPIC_API_KEY": "private"}):
+            env = run.isolated_env(self.root, {"OPENAI_API_KEY": "required"})
+        self.assertNotIn("BASH_ENV", env)
+        self.assertNotIn("PYTHONPATH", env)
+        self.assertNotIn("ANTHROPIC_API_KEY", env)
+        self.assertEqual(env["OPENAI_API_KEY"], "required")
+        with self.assertRaises(ValueError):
+            run.isolated_env(self.root, {"HOME": "/override"})
 
-    def test_error_not_retried(self):
-        with endpoint(code=429) as (url, seen):
-            with self.assertRaisesRegex(RuntimeError, "429"):
-                request(url, "secret", "/chat/completions", {})
-        self.assertEqual(len(seen), 1)
+    def test_controller_credentials_reject_unapproved_route_or_reserved_identity(self):
+        original = {**self.model, "effective_settings": self.proof["effective_settings"]}
+        for mutation in ({"provider": "devin"}, {"provider": "go", "api": "messages"},
+                         {"api_key_env": "HOME"}, {"base_url": "https://unapproved.example/v1"},
+                         {"effective_settings": {"model_name": "anthropic/exact-model"}}):
+            with (self.subTest(mutation=mutation), patch.dict("os.environ", {"TEST_GO_KEY": "synthetic-only"}),
+                  self.assertRaises(ValueError)):
+                run.worker_credentials(self.selection, {**original, **mutation})
 
-    def test_failed_request_is_audited(self):
-        # A 5xx gets exactly one more try; both requests are audited and both count in the totals.
-        c = self.load()
-        proxy.RETRY_PAUSE_SECONDS = 0
-        with endpoint(code=500) as (url, seen), environ(CLIPROXY_CLIENT_KEY="secret"):
-            c["base_url"] = url
-            with self.assertRaisesRegex(RuntimeError, "Proxy HTTP 500"):
-                ProxyModel(c, c["models"][0], self.root / "audit.jsonl").query([{"role": "user", "content": "x"}])
-        self.assertEqual(len(seen), 2)
-        first, second = [json.loads(line) for line in (self.root / "audit.jsonl").read_text().splitlines()]
-        self.assertEqual((first["retried"], second["retried"]), (True, False))
-        self.assertIn("Proxy HTTP 500", first["error"])
-        self.assertGreater(first["latency_seconds"], 0)
-        (self.root / "transport.jsonl").write_text(json.dumps(first) + "\n" + json.dumps(second) + "\n")
-        totals = run.summarize(self.root)
-        self.assertEqual((totals["requests"], totals["failed_requests"], totals["usage_unknown"]), (2, 2, 2))
+    def test_compiler_requires_the_spec_tier_and_its_reasoning_control(self):
+        undeclared = copy.deepcopy(self.model)
+        del undeclared["tier"]
+        silent = copy.deepcopy(self.model)
+        del silent["generation"]["reasoning_effort"]  # provider default instead of the spec's max
+        silent["tier"] = {**silent["tier"], "level": "none-available", "reasoning": {}}
+        lowered = copy.deepcopy(self.model)
+        lowered["generation"]["reasoning_effort"] = "high"
+        lowered["tier"] = {**lowered["tier"], "level": "high", "reasoning": {"reasoning_effort": "high"}}
+        for name, model in (("undeclared", undeclared), ("silent", silent), ("lowered", lowered)):
+            self.selection["models"] = [model]
+            with self.subTest(name), self.assertRaisesRegex(ValueError, "tier"):
+                self.compile()
+        self.assertFalse((self.root / "campaign.json").exists())
+        blocked = {"entries": [{"provider": "go", "api": "chat", "model": "exact-model", "tier": "blocked-unknown", "reasoning": {}}]}
+        self.tier_spec_path.write_text(json.dumps(blocked))
+        self.selection["models"] = [self.model]
+        with self.assertRaisesRegex(ValueError, "blocked"):
+            self.compile()
 
-    def test_transient_error_retried_once_then_succeeds(self):
-        c = self.load()
-        proxy.RETRY_PAUSE_SECONDS = 0
-        with endpoint(codes=[503]) as (url, seen), environ(CLIPROXY_CLIENT_KEY="secret"):
-            c["base_url"] = url
-            reply = ProxyModel(c, c["models"][0], self.root / "audit.jsonl").query([{"role": "user", "content": "x"}])
-        self.assertEqual(len(seen), 2)
-        self.assertEqual(reply["extra"]["actions"][0]["command"], "echo ready")
-        failed, ok = [json.loads(line) for line in (self.root / "audit.jsonl").read_text().splitlines()]
-        self.assertEqual((failed["retried"], "error" in ok), (True, False))
+    def test_key_pool_assigns_least_loaded_key_under_caps_and_records_only_names(self):
+        config = {"native": {"timeout_seconds": 1, "retries": 0},
+                  "concurrency": {"key_pools": {"TEST_GO_KEY": {"TEST_GO_KEY_1": 2, "TEST_GO_KEY_2": 1}}}}
+        model = {**self.model, "effective_settings": self.proof["effective_settings"]}
+        with ExitStack() as stack:
+            held = [stack.enter_context(run.credential_lease(self.root, config, model)) for _ in range(3)]
+            # Least loaded first (ties in declared order), never beyond a key's cap.
+            self.assertEqual(held, ["TEST_GO_KEY_1", "TEST_GO_KEY_2", "TEST_GO_KEY_1"])
+            blocked = threading.Event()
+            def fourth():
+                with run.credential_lease(self.root, config, model):
+                    blocked.set()
+            waiter = threading.Thread(target=fourth, daemon=True)
+            waiter.start()
+            self.assertFalse(blocked.wait(0.3))
+        waiter.join(2)
+        self.assertTrue(blocked.is_set())
+        with patch.dict("os.environ", {"TEST_GO_KEY_2": "synthetic-two"}, clear=True):
+            self.assertEqual(run.worker_credentials(config, model, "TEST_GO_KEY_2")["OPENAI_API_KEY"], "synthetic-two")
+            for key in (None, "TEST_GO_KEY", "OTHER_KEY"):
+                with self.subTest(key=key), self.assertRaises(ValueError):
+                    run.worker_credentials(config, model, key)
 
-    def test_client_error_not_retried(self):
-        c = self.load()
-        with endpoint(code=401) as (url, seen), environ(CLIPROXY_CLIENT_KEY="secret"):
-            c["base_url"] = url
-            with self.assertRaisesRegex(RuntimeError, "Proxy HTTP 401"):
-                ProxyModel(c, c["models"][0], self.root / "audit.jsonl").query([{"role": "user", "content": "x"}])
-        self.assertEqual(len(seen), 1)
-        self.assertFalse(json.loads((self.root / "audit.jsonl").read_text())["retried"])
+    def test_key_pool_caps_must_cover_provider_bound(self):
+        self.selection["concurrency"]["providers"]["go"] = 4
+        self.selection["concurrency"]["workers"] = 4
+        self.selection["concurrency"]["key_pools"] = {"TEST_GO_KEY": {"TEST_GO_KEY_1": 1, "TEST_GO_KEY_2": 2}}
+        with self.assertRaisesRegex(ValueError, "Per-key caps"):
+            self.compile()
 
-    def test_redirect_not_followed(self):
-        with endpoint(redirect=True) as (url, seen):
-            with self.assertRaisesRegex(RuntimeError, "redirect"):
-                request(url, "secret", "/chat/completions", {})
-        self.assertEqual(len(seen), 1)
+    def test_global_slot_bounds_concurrent_evaluation(self):
+        active = peak = 0
+        guard = threading.Lock()
+        ready = threading.Barrier(8)
+        def work(_):
+            nonlocal active, peak
+            ready.wait()
+            with run.slot(self.root, "render", 2):
+                with guard:
+                    active += 1
+                    peak = max(peak, active)
+                threading.Event().wait(0.03)
+                with guard:
+                    active -= 1
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            list(pool.map(work, range(8)))
+        self.assertEqual(peak, 2)
 
-    def test_model_switch_fails(self):
-        c = self.load()
-        with endpoint(returned_model="unexpected") as (url, _), environ(CLIPROXY_CLIENT_KEY="secret"):
-            c["base_url"] = url
-            with self.assertRaisesRegex(ValueError, "Unexpected response model"):
-                ProxyModel(c, c["models"][0], self.root / "audit").query([])
+    def test_local_artifact_root_rejects_relative_and_preserved_alias(self):
+        with self.assertRaises(ValueError):
+            run.artifact_root(Path("relative"))
+        alias = self.root / "legacy-alias"
+        alias.symlink_to(run.HERE.parent / "legacy")
+        with self.assertRaisesRegex(ValueError, "Preserved legacy"):
+            run.artifact_root(alias)
 
-    def test_sandbox_flags_no_host_mounts(self):
-        commands = self.fake_shell()
-        run.start_container(["/usr/bin/docker"], "sha256:test", "test")
-        cmd = next(c for c in commands if "--name" in c and c[c.index("--name") + 1] == "test")
-        for value in ["--read-only", "--cap-drop", "--network", "none", "--user", "10001:10001"]:
-            self.assertIn(value, cmd)
-        self.assertIn("type=volume,source=test-work,target=/workspace,volume-nocopy", cmd)
-        self.assertNotIn("type=bind", " ".join(cmd))
-        for value in ["-v", "--volume", "--env-file", "--privileged"]:
-            self.assertNotIn(value, cmd)
+    def test_binary_export_bound_removes_partial_file(self):
+        import sys
+        output = self.root / "preview.mp4"
+        with self.assertRaisesRegex(ValueError, "byte limit"):
+            run.bounded_stream([sys.executable, "-I", "-c", "import os;os.write(1,b'x'*4096)"], output, 1024, 5)
+        self.assertFalse(output.exists())
 
-    def test_visualizer_container_is_isolated_and_capped(self):
-        c = self.load()
-        (self.root / "submission").mkdir(); (self.root / "submission/tune.xm").write_bytes(b"Extended Module: x")
-        commands = self.fake_shell(b"")
-        video = run.visualize(["docker"], "sha256:vis", self.root, c, duration=100000.0)
-        start = next(cmd for cmd in commands if cmd[1] == "run")
-        for value in ["--network", "none", "--read-only", "--cap-drop", "--user", "10001:10001"]:
-            self.assertIn(value, start)
-        self.assertNotIn("type=bind", " ".join(start))
-        capture = next(cmd for cmd in commands if "/opt/keygen/visualize.sh" in cmd)
-        self.assertEqual(capture[-2], str(c["limits"]["video_seconds"]))  # duration capped by the campaign limit
-        self.assertEqual(video["seconds"], c["limits"]["video_seconds"])
-        self.assertTrue((self.root / "visualizer/visualizer.mp4").exists())
-        self.assertEqual(commands[-1][1:3], ["rm", "-f"])
-
-    def test_ft2_rejection_is_an_invalid_artifact(self):
-        c = self.load()
-        (self.root / "submission").mkdir(); (self.root / "submission/tune.xm").write_bytes(b"Extended Module: broken")
-        commands = self.fake_shell(b'{"content": [{"type": "text", "text": "failed to load module"}], "isError": true}')
-        def shell(cmd, **kwargs):
-            commands.append(cmd)
-            rc = 1 if "call" in cmd else 0
-            return subprocess.CompletedProcess(cmd, rc, b'{"isError": true}' if rc else b"", b"")
-        run.shell = shell
-        with self.assertRaisesRegex(ValueError, "rejected the module"):
-            run.render(["docker"], "sha256:img", self.root, c)
-
-    def test_submit_detection_matches_mini(self):
-        # The exact command submits without running; so does any command whose first output line is the
-        # marker with exit 0 (mini's rule). A marker deeper in the output, or a non-zero exit, does not.
-        sandbox = run.Sandbox(["docker"], "container", 10)
-        commands = self.fake_shell(b"COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT\n")
-        with self.assertRaises(Submitted):
-            sandbox.execute({"command": "echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT"})
-        self.assertEqual(commands, [])
-        with self.assertRaises(Submitted):
-            sandbox.execute({"command": "cd /workspace && echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT"})
-        self.assertEqual(len(commands), 1)
-        self.fake_shell(b"tune.xm\nCOMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT\n")
-        self.assertEqual(sandbox.execute({"command": "ls; echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT"})["returncode"], 0)
-
-    def test_shell_skips_profiles(self):
-        commands = self.fake_shell(b"ok")
-        result = run.Sandbox(["docker"], "container", 10).execute({"command": "echo ok"})
-        command = " ".join(commands[-1])
-        self.assertIn("--noprofile --norc", command)
-        self.assertIn("BASH_ENV=/dev/null", command)
-        self.assertEqual(result["output"], "ok")
-        self.assertGreaterEqual(result["extra"]["duration_seconds"], 0)
-
-    def test_summarize_totals(self):
-        (self.root / "transport.jsonl").write_text(json.dumps({"usage": {"prompt_tokens": 100, "completion_tokens": 10,
-            "prompt_tokens_details": {"cached_tokens": 40}, "completion_tokens_details": {"reasoning_tokens": 3}}, "latency_seconds": 1.5}) + "\n"
-            + json.dumps({"usage": {"prompt_tokens": 50, "completion_tokens": 5}, "latency_seconds": 0.5}) + "\n")
-        (self.root / "trajectory.json").write_text(json.dumps({"messages": [
-            {"role": "tool", "extra": {"duration_seconds": 2.0}}, {"role": "tool", "extra": {"duration_seconds": 1.0}}, {"role": "assistant", "extra": {}}]}))
-        self.assertEqual(run.summarize(self.root), {"requests": 2, "failed_requests": 0, "usage_unknown": 0, "prompt_tokens": 150,
-            "cached_tokens": 40, "completion_tokens": 15, "reasoning_tokens": 3, "model_seconds": 2.0, "sandbox_seconds": 3.0, "commands": 2})
+    def test_binary_export_deadline_reaps_process_and_removes_partial_file(self):
+        import sys
+        output = self.root / "preview.mp4"
+        with self.assertRaises(TimeoutError):
+            run.bounded_stream([sys.executable, "-I", "-c", "import time;time.sleep(30)"], output, 1024, 1)
+        self.assertFalse(output.exists())
 
     def archive(self, name, size=4, kind=tarfile.REGTYPE):
         path = self.root / "artifact.tar"
-        with tarfile.open(path, "w") as tf:
+        with tarfile.open(path, "w") as archive:
             item = tarfile.TarInfo(name)
             item.type, item.size = kind, size if kind == tarfile.REGTYPE else 0
-            tf.addfile(item, io.BytesIO(b"a" * size) if kind == tarfile.REGTYPE else None)
+            archive.addfile(item, io.BytesIO(b"a" * size) if kind == tarfile.REGTYPE else None)
         return path
 
-    def test_artifact_paths_and_links_rejected(self):
+    def test_artifact_paths_links_and_size_rejected(self):
         for name, kind in [("../escape", tarfile.REGTYPE), ("/absolute", tarfile.REGTYPE), ("link", tarfile.SYMTYPE)]:
-            with self.assertRaises(ValueError):
+            with self.subTest(name=name), self.assertRaises(ValueError):
                 run.safe_unpack(self.archive(name, kind=kind), self.root / "out", 100)
-
-    def test_artifact_byte_limit(self):
         with self.assertRaises(ValueError):
             run.safe_unpack(self.archive("tune.xm", 100), self.root / "out", 20)
 
-    def test_regular_artifact_extracted(self):
+    def test_regular_artifact_extracted_without_untrusted_modes(self):
         run.safe_unpack(self.archive("tune.xm"), self.root / "out", 100)
         self.assertEqual((self.root / "out/tune.xm").read_bytes(), b"aaaa")
+        self.assertFalse((self.root / "out/tune.xm").stat().st_mode & 0o111)
 
     def wav(self, values):
         path = self.root / "audio.wav"
@@ -424,41 +363,243 @@ class BenchmarkTests(unittest.TestCase):
             wav.writeframes(struct.pack("<" + "h" * len(values), *values))
         return path
 
-    def test_audio_is_not_an_aesthetic_judge(self):
+    def test_audio_technical_facts_not_aesthetic_grade(self):
         result = run.wav_info(self.wav([32767, -32768, 1000, -1000] * 50))
         self.assertIsNone(result["quality_score"])
         self.assertEqual(result["full_scale_samples"], 100)
-
-    def test_silent_audio_fails(self):
         with self.assertRaisesRegex(ValueError, "silent"):
             run.wav_info(self.wav([0] * 100))
 
-    @unittest.skipUnless(importlib.util.find_spec("minisweagent"), "Pinned mini-swe-agent not installed")
-    def test_real_mini_agent_worker_contract(self):
-        # Run in a subprocess so real mini cannot read the test host's global .env.
-        program = '''
-import sys
-from pathlib import Path
-sys.path.insert(0, sys.argv[1])
-from proxy import ProxyModel
-from minisweagent.agents.default import DefaultAgent
-from minisweagent.exceptions import Submitted
-class Model(ProxyModel):
-    def query(self, messages, **kwargs):
-        assert messages[0]['content'] == 'Exact {{ untouched }}'
-        return {'role':'assistant','content':'','tool_calls':[],'extra':{'actions':[{'command':'submit','tool_call_id':'c1'}]}}
-class Env:
-    def get_template_vars(self, **kw): return {}
-    def serialize(self): return {}
-    def execute(self, action):
-        raise Submitted({'role':'exit','content':'done','extra':{'exit_status':'Submitted'}})
-m=object.__new__(Model);m.config={'generation':{}};m.model={'model':'fake'}
-a=DefaultAgent(m,Env(),system_template='{{ frozen }}',instance_template='{{ task }}',cost_limit=0,step_limit=1)
-assert a.run('Create music',frozen='Exact {{ untouched }}')['exit_status']=='Submitted'
-'''
-        env = {"PATH": os.environ["PATH"], "HOME": str(self.root),
-               "MSWEA_GLOBAL_CONFIG_DIR": str(self.root / "empty-mini"), "MSWEA_SILENT_STARTUP": "1"}
-        run.shell([__import__("sys").executable, "-I", "-c", program, str(run.HERE)], env=env)
+
+class ModelSequenceTests(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.model = {"id": "model", "model": "exact", "provider": "go"}
+        self.config = {"max_attempts": 3, "policies": campaign.POLICIES}
+        self.invoked = []
+        run.STOP.clear()
+        self.addCleanup(run.STOP.clear)
+        for ordinal in range(1, 4):
+            run.reserve(self.root, self.model, ordinal, f"model-rep-{ordinal}")
+
+    def status(self, ordinal):
+        return json.loads((self.root / f"model-rep-{ordinal}" / "status.json").read_text())
+
+    def execute(self, outcomes):
+        def attempt(root, config, model, docker, image, visualizer, ordinal, attempt_id, store):
+            self.invoked.append(ordinal)
+            directory = root / attempt_id
+            status = self.status(ordinal)
+            status.update(status="RENDERED_UNSCORED", render="ok", eligible=True,
+                          failure_category=None, totals={"requests": 1, "completion_tokens": ordinal})
+            if outcomes[ordinal - 1] == "failure":
+                status.update(status="MODEL_FAILED", eligible=False, failure_category="MODEL")
+            elif outcomes[ordinal - 1] == "protocol":
+                status.update(status="PROTOCOL_ERROR", failure_category="PROTOCOL")
+            elif outcomes[ordinal - 1] in {"QUOTA", "AUTH", "TRANSPORT"}:
+                status.update(status=outcomes[ordinal - 1] + "_ERROR", eligible=False,
+                              failure_category=outcomes[ordinal - 1], model_failure=False)
+            run.write_json(directory / "status.json", status)
+            run.write_json(directory / "profile.json", {
+                "eligible": True, "evaluation_status": "evaluated", "cacheable": True,
+                "status": status["status"], "model": model["model"], "craft": {"craft_score": 0}})
+            if outcomes[ordinal - 1] == "finalization":
+                run.write_json(directory / "finalization-error.json", {"error": "ArchiveFailed"})
+                raise RuntimeError("archive failed")
+        with patch.object(run, "run_one", side_effect=attempt):
+            return run.run_model_sequence(self.root, self.config, self.model, None, "image", "video", None)
+
+    def test_first_success_prevents_remaining_invocations_and_preserves_null_slots(self):
+        result = self.execute(["success", "failure", "failure"])
+        self.assertEqual(self.invoked, [1])
+        self.assertEqual(result["selected_attempt_id"], "model-rep-1")
+        self.assertEqual(result["skipped"], ["model-rep-2", "model-rep-3"])
+        for ordinal in (2, 3):
+            status = self.status(ordinal)
+            self.assertEqual(status["status"], "SKIPPED_AFTER_SUCCESS")
+            self.assertEqual(status["selected_attempt_id"], "model-rep-1")
+            self.assertIsNone(status["totals"])
+            self.assertIsNone(status["quality_score"])
+        rows = drive.summary(self.root)
+        self.assertEqual([row["requests"] for row in rows], [1, None, None])
+        self.assertEqual([row["usage_unknown"] for row in rows], [False, None, None])
+        self.assertEqual(json.loads((self.root / "model-attempts.json").read_text()), result)
+
+    def test_failure_advances_once_and_retains_original_outcome(self):
+        result = self.execute(["failure", "success", "failure"])
+        self.assertEqual(self.invoked, [1, 2])
+        self.assertEqual(self.status(1)["status"], "MODEL_FAILED")
+        self.assertEqual(self.status(1)["totals"]["completion_tokens"], 1)
+        self.assertEqual(result["selected_attempt_id"], "model-rep-2")
+
+    def test_protocol_and_finalization_errors_with_rendered_profile_do_not_succeed(self):
+        result = self.execute(["protocol", "finalization", "success"])
+        self.assertEqual(self.invoked, [1, 2, 3])
+        self.assertEqual(result["selected_attempt_id"], "model-rep-3")
+        self.assertEqual(result["errors"], [{"attempt_id": "model-rep-2", "error": "RuntimeError"}])
+        self.assertEqual(self.status(1)["render"], "ok")
+        self.assertTrue((self.root / "model-rep-2/finalization-error.json").exists())
+
+    def test_three_failures_exhaust_slots_without_selecting_or_replacing_any(self):
+        result = self.execute(["failure", "failure", "failure"])
+        self.assertEqual(self.invoked, [1, 2, 3])
+        self.assertIsNone(result["selected_attempt_id"])
+        self.assertEqual(result["skipped"], [])
+        self.assertEqual([self.status(n)["status"] for n in (1, 2, 3)], ["MODEL_FAILED"] * 3)
+
+    def test_quota_or_auth_stops_sequence_and_leaves_later_slots_reserved(self):
+        result = self.execute(["failure", "QUOTA", "success"])
+        self.assertEqual(self.invoked, [1, 2])
+        self.assertEqual(result["stopped_after"], {"attempt_id": "model-rep-2", "failure_category": "QUOTA"})
+        self.assertEqual(result["reserved"], ["model-rep-3"])
+        self.assertIsNone(result["selected_attempt_id"])
+        self.assertEqual(result["skipped"], [])
+        self.assertEqual(self.status(2)["model_failure"], False)
+        self.assertEqual(self.status(3)["status"], "RESERVED")
+
+    def test_auth_failure_on_first_slot_consumes_only_that_slot(self):
+        result = self.execute(["AUTH", "success", "success"])
+        self.assertEqual(self.invoked, [1])
+        self.assertEqual(result["reserved"], ["model-rep-2", "model-rep-3"])
+        self.assertEqual([self.status(n)["status"] for n in (2, 3)], ["RESERVED", "RESERVED"])
+
+    def test_transport_failure_still_advances_to_the_next_slot(self):
+        result = self.execute(["TRANSPORT", "success", "failure"])
+        self.assertEqual(self.invoked, [1, 2])
+        self.assertIsNone(result["stopped_after"])
+        self.assertEqual(result["selected_attempt_id"], "model-rep-2")
+
+    def test_funds_usage_limit_and_rate_limit_errors_are_quota_not_protocol(self):
+        import litellm
+        for error in (litellm.APIError(status_code=500, message="Upstream request failed: Insufficient account funds",
+                                       llm_provider="openai", model="x"),
+                      litellm.RateLimitError(message="Go usage limit exceeded", llm_provider="openai", model="x"),
+                      litellm.APIError(status_code=402, message="A positive credit balance is required",
+                                       llm_provider="openai", model="x")):
+            with self.subTest(error=str(error)[:60]):
+                self.assertEqual(run.failure_category(error), "QUOTA")
+        self.assertEqual(run.failure_category(litellm.BadRequestError(message="bad", llm_provider="openai", model="x")), "PROTOCOL")
+
+    def test_transport_retries_counted_from_unanswered_requests(self):
+        directory = self.root / "retried"
+        directory.mkdir()
+        events = ["request", "request", "response", "request", "response", "request", "request", "request"]
+        (directory / "transport.jsonl").write_text("".join(json.dumps({"event": e}) + "\n" for e in events))
+        self.assertEqual(run.summarize(directory)["transport_retries"], 3)
+
+    def test_existing_interrupted_or_unknown_slots_are_never_run_or_hidden(self):
+        for outcome in ("INTERRUPTED", "UNKNOWN"):
+            status = self.status(2)
+            status.update(status=outcome, eligible=False)
+            run.write_json(self.root / "model-rep-2/status.json", status)
+            with patch.object(run, "run_one") as execute, self.assertRaises(ValueError):
+                run.run_model_sequence(self.root, self.config, self.model, None, "image", "video", None)
+            execute.assert_not_called()
+            rows = drive.summary(self.root)
+            self.assertEqual(rows[1]["status"], outcome)
+            self.assertTrue(rows[1]["usage_unknown"])
+
+    def test_finalization_failure_invalidates_run_even_with_eligible_profile(self):
+        directory = self.root / "model-rep-1"
+        status = self.status(1)
+        status.update(status="RENDERED_UNSCORED", render="ok", eligible=True)
+        run.write_json(directory / "status.json", status)
+        class Store:
+            def archive_attempt(self, run_dir):
+                raise OSError("storage unavailable")
+        with patch("score.profile_attempt", return_value={"eligible": True}), self.assertRaises(OSError):
+            run.finalize_attempt(directory, Store())
+        failed = self.status(1)
+        self.assertEqual(failed["status"], "FINALIZATION_ERROR")
+        self.assertFalse(failed["eligible"])
+        self.assertEqual(failed["finalization_error"]["failure_category"], "EVAL")
+
+    def test_interrupted_finalization_remains_explicit_and_never_eligible(self):
+        directory = self.root / "model-rep-1"
+        status = self.status(1)
+        status.update(status="RENDERED_UNSCORED", render="ok", eligible=True)
+        run.write_json(directory / "status.json", status)
+        class Store:
+            def archive_attempt(self, run_dir):
+                raise KeyboardInterrupt()
+        with patch("score.profile_attempt", return_value={"eligible": True}), self.assertRaises(KeyboardInterrupt):
+            run.finalize_attempt(directory, Store())
+        failed = self.status(1)
+        self.assertEqual(failed["status"], "INTERRUPTED")
+        self.assertFalse(failed["eligible"])
+        self.assertEqual(failed["finalization_error"]["failure_category"], "INFRA")
+
+    def test_success_requires_actual_eligible_profile_not_render_or_craft_score_alone(self):
+        status = {"status": "RENDERED_UNSCORED", "render": "ok", "eligible": True,
+                  "model": self.model}
+        profile = {"eligible": True, "evaluation_status": "evaluated", "cacheable": True,
+                   "status": status["status"], "model": self.model["model"], "craft": {"craft_score": 0}}
+        self.assertTrue(run.attempt_succeeded(status, profile))
+        self.assertFalse(run.attempt_succeeded(status, None))
+        for mutation in ({"eligible": False}, {"cacheable": False}, {"evaluation_status": "ineligible"},
+                         {"evaluation_error": {"category": "EVAL"}}, {"model": "different"}):
+            with self.subTest(mutation=mutation):
+                self.assertFalse(run.attempt_succeeded(status, {**profile, **mutation}))
+        self.assertFalse(run.attempt_succeeded(status, profile, finalization_error=True))
+
+
+class SubmissionCollectionTests(unittest.TestCase):
+    """Real collect()/safe_unpack() over GNU tar of a local stand-in for /workspace."""
+
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.workspace = self.root / "workspace"
+        (self.workspace / "submission").mkdir(parents=True)
+        self.run_dir = self.root / "attempt"
+        self.run_dir.mkdir()
+        import boat
+        export = patch.object(boat, "workspace_export_command",
+                              lambda docker, name, source: boat.workspace_tar_command(source, mount_root=str(self.workspace)))
+        export.start()
+        self.addCleanup(export.stop)
+
+    def write(self, name, size):
+        path = self.workspace / "submission" / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"Extended Module: " + b"x" * max(0, size - 17))
+
+    def collect(self, limit=4096):
+        return run.collect_submission([], "container", self.run_dir, limit)
+
+    def test_oversize_extras_are_dropped_with_a_note_and_tune_is_kept(self):
+        self.write("tune.xm", 1000)
+        self.write("preview.wav", 8000)
+        result = self.collect()
+        self.assertEqual(result["status"], "dropped")
+        self.assertIn("limit", result["reason"])
+        self.assertEqual(sorted(p.name for p in (self.run_dir / "submission").iterdir()), ["tune.xm"])
+        self.assertFalse((self.run_dir / ".submission-extras").exists())
+
+    def test_linked_extra_is_dropped_not_a_model_failure(self):
+        self.write("tune.xm", 100)
+        (self.workspace / "submission/link").symlink_to("/etc/passwd")
+        self.assertEqual(self.collect()["status"], "dropped")
+        self.assertTrue((self.run_dir / "submission/tune.xm").is_file())
+
+    def test_fitting_extras_are_collected_beside_tune(self):
+        self.write("tune.xm", 100)
+        self.write("src/make.py", 50)
+        self.assertEqual(self.collect(), {"status": "collected", "files": 1})
+        self.assertEqual((self.run_dir / "submission/tune.xm").stat().st_size, 100)
+        self.assertTrue((self.run_dir / "submission/src/make.py").is_file())
+
+    def test_missing_or_oversize_tune_remains_the_models_failure(self):
+        self.write("preview.wav", 100)
+        with self.assertRaisesRegex(ValueError, "Submission not found"):
+            self.collect()
+        shutil.rmtree(self.run_dir / "submission", ignore_errors=True)
+        self.write("tune.xm", 8000)
+        with self.assertRaisesRegex(ValueError, "limit"):
+            self.collect()
 
 
 if __name__ == "__main__":
