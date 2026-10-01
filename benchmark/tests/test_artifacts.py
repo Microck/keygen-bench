@@ -1,9 +1,11 @@
 """Behavioral checks for durable result persistence, independent of inference."""
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from pathlib import Path
+import subprocess
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -106,6 +108,41 @@ class ArtifactPersistenceTests(unittest.TestCase):
         (self.attempt / "status.json").write_text('{"status":"RESERVED"}')
         with self.assertRaisesRegex(ValueError, "terminal"):
             self.store.archive_attempt(self.attempt)
+
+    def test_cloud_copy_deadlines_cover_a_slow_upload_of_the_actual_bundle(self):
+        (self.attempt / "canonical").mkdir()
+        (self.attempt / "canonical" / "canonical.wav").write_bytes(os.urandom(4 * 1024 * 1024))
+        uploaded, deadlines = {}, {}
+        def rclone(argv, timeout, **kwargs):
+            command = argv[1]
+            deadlines.setdefault(command, []).append(timeout)
+            if command == "about":
+                output = json.dumps({"free": 1 << 40})
+            elif command == "lsjson":
+                output = json.dumps({"Size": len(uploaded["bundle"])})
+            elif command == "copyto" and argv[2].startswith("drive:"):
+                Path(argv[3]).write_bytes(uploaded["bundle"])
+                output = ""
+            elif command == "copyto":
+                uploaded["bundle"] = Path(argv[2]).read_bytes()
+                output = ""
+            else:
+                output = hashlib.md5(uploaded["bundle"]).hexdigest() + "  attempt.tar.gz\n"
+            return subprocess.CompletedProcess(argv, 0, stdout=output, stderr="")
+        with patch("artifacts.shutil.which", return_value="/usr/bin/rclone"):
+            store = ArtifactStore({"backend": "rclone", "remote": "drive:keygen", "reserve_bytes": 1024,
+                                   "peak_bytes_per_attempt": 1024})
+        with patch("artifacts.subprocess.run", side_effect=rclone):
+            metadata = store.archive_attempt(self.attempt)
+            store.restore_attempt(metadata, self.root / "restored")
+        # Uploading at a sustained 128 KiB/s must finish inside the deadline, beyond the old fixed 600 s.
+        slow_upload_seconds = metadata["bytes"] / (128 * 1024)
+        self.assertGreater(slow_upload_seconds, 30)
+        self.assertEqual(len(deadlines["copyto"]), 2)
+        for deadline in deadlines["copyto"]:
+            self.assertGreaterEqual(deadline, 600 + slow_upload_seconds)
+        self.assertEqual((self.root / "restored/canonical/canonical.wav").read_bytes(),
+                         (self.attempt / "canonical/canonical.wav").read_bytes())
 
 
 if __name__ == "__main__":
