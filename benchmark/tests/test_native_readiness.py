@@ -109,16 +109,14 @@ class QualificationBoundaryTests(unittest.TestCase):
             readiness.normalize_spec(spec, None)
 
 
-class MultiCallTurnTests(unittest.TestCase):
-    def test_chat_reply_with_two_executed_calls_is_found(self):
-        messages = [{"role": "system"}, {"role": "user"}, chat_reply("a"), chat_result("a"),
-                    chat_reply("b", "c"), chat_result("b"), chat_result("c"), chat_reply("d")]
-        self.assertEqual(readiness.multi_call_replies(messages), [4])
-
-    def test_responses_reply_with_two_executed_calls_is_found(self):
-        messages = [{"role": "system"}, {"role": "user"}, responses_reply("a"), responses_result("a"),
-                    responses_reply("b", "c"), responses_result("b"), responses_result("c")]
-        self.assertEqual(readiness.multi_call_replies(messages), [4])
+class ExecutedCallTests(unittest.TestCase):
+    def test_one_call_and_multi_call_replies_both_count(self):
+        single = [{"role": "system"}, {"role": "user"}, chat_reply("a"), chat_result("a"),
+                  chat_reply("b"), chat_result("b"), chat_reply("c"), chat_result("c"), chat_reply("d")]
+        self.assertEqual(readiness.executed_calls(single), ["a", "b", "c"])
+        multi = [{"role": "system"}, {"role": "user"}, responses_reply("a"), responses_result("a"),
+                 responses_reply("b", "c"), responses_result("b"), responses_result("c")]
+        self.assertEqual(readiness.executed_calls(multi), ["a", "b", "c"])
 
     def test_failed_or_unexecuted_call_does_not_count(self):
         failed = [chat_reply("b", "c"), chat_result("b"), chat_result("c", 1)]
@@ -127,17 +125,29 @@ class MultiCallTurnTests(unittest.TestCase):
         # A result answering a later reply cannot vouch for an earlier one.
         misplaced = [chat_reply("b", "c"), chat_result("b"), chat_reply("d"), chat_result("c")]
         for messages in (failed, missing, misplaced):
-            self.assertEqual(readiness.multi_call_replies(messages), [])
+            self.assertEqual(readiness.executed_calls(messages), [])
 
-    def test_single_call_turns_cannot_verify_pilot(self):
+    def pilot(self, root, messages, artifact="other\n"):
+        (root / "worker-result.json").write_text(json.dumps({"exit_status": "Submitted"}))
+        (root / "trajectory.json").write_text(json.dumps({"messages": messages}))
+        (root / "submission").mkdir()
+        (root / "submission/readiness.txt").write_text(artifact)
+        readiness.verify_pilot({"model": pilot_spec()["model"]}, root, "marker")
+
+    def test_single_call_turns_pass_the_turn_check(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            (root / "worker-result.json").write_text(json.dumps({"exit_status": "Submitted"}))
             messages = [{"role": "system"}, {"role": "user"}, chat_reply("a"), chat_result("a"),
                         chat_reply("b"), chat_result("b"), chat_reply("c"), chat_result("c")]
-            (root / "trajectory.json").write_text(json.dumps({"messages": messages}))
-            with self.assertRaises(ValueError):
-                readiness.verify_pilot({"model": pilot_spec()["model"]}, root, "marker")
+            # Rejected only later, by the deliberately wrong artifact.
+            with self.assertRaisesRegex(ValueError, "artifact did not match"):
+                self.pilot(Path(temporary), messages)
+
+    def test_pilot_needs_three_calls_answered_by_their_results(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            messages = [{"role": "system"}, {"role": "user"}, chat_reply("a"), chat_result("a"),
+                        chat_reply("b", "c"), chat_result("b"), chat_reply("d"), chat_result("c")]
+            with self.assertRaisesRegex(ValueError, "three native tool calls"):
+                self.pilot(Path(temporary), messages, "marker\n")
 
 
 class LongGenerationProbeTests(unittest.TestCase):
@@ -175,6 +185,13 @@ class LongGenerationProbeTests(unittest.TestCase):
         result = self.classify([request(), response({"output_tokens": 50000}), request()],
                                worker="quota_or_rate_limit")
         self.assertEqual((result["outcome"], result["failure_category"]), ("inconclusive", "quota_or_rate_limit"))
+
+    def test_content_filter_resend_is_not_a_transport_retry(self):
+        block = {"event": "content_filter_block", "send": 1, "form": "error"}
+        resent = self.classify([request(), block, request(), response({"output_tokens": 50000})])
+        self.assertEqual((resent["outcome"], resent["failure_category"]), ("pass", None))
+        exhausted = self.classify([request(), block, request(), block, request(), block], worker="content_filter")
+        self.assertEqual((exhausted["outcome"], exhausted["failure_category"]), ("inconclusive", "content_filter"))
 
     def test_long_response_on_other_settings_is_not_a_pass(self):
         result = self.classify([request({"reasoning_effort": "low"}), response({"output_tokens": 50000})])

@@ -20,8 +20,9 @@ else:
 
 SCHEMA = "keygen-cohort-report-2"
 ATTEMPT_SELECTION = "first_success_up_to_three_attempts"
-# Quota, funds and rate-limit (429) failures are provider limits, never model or musical failures.
-NON_MODEL_FAILURES = {"INFRA", "AUTH", "QUOTA", "TRANSPORT", "PROTOCOL", "EVAL"}
+# Quota, funds and rate-limit (429) failures are provider limits, never model or musical failures;
+# so is a request the provider content filter blocked on every allowed send (CONTENT_FILTER).
+NON_MODEL_FAILURES = {"INFRA", "AUTH", "QUOTA", "CONTENT_FILTER", "TRANSPORT", "PROTOCOL", "EVAL"}
 PENDING_STATUSES = {"MISSING", "RESERVED", "RUNNING"}
 SCORE_ROLE = "Auxiliary tonal-development diagnostic, not a musical-quality ranking."
 ROUTE_KEYS = ("provider", "api", "base_url", "response_model")
