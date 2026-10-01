@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 from collections import Counter
+import statistics
 import hashlib
 import html
 import json
@@ -20,6 +21,7 @@ else:
 
 SCHEMA = "keygen-cohort-report-2"
 ATTEMPT_SELECTION = "first_success_up_to_three_attempts"
+INDEPENDENT_SELECTION = "independent_repetitions"
 # Quota, funds and rate-limit (429) failures are provider limits, never model or musical failures;
 # so is a request the provider content filter blocked on every allowed send (CONTENT_FILTER).
 NON_MODEL_FAILURES = {"INFRA", "AUTH", "QUOTA", "CONTENT_FILTER", "TRANSPORT", "PROTOCOL", "EVAL"}
@@ -36,12 +38,36 @@ SAMPLE_NOTE = ("Each published score is one quality sample: the first valid atte
                "attempts. Later attempts are not run after it, so no median, range or variance exists. Validity "
                "and attempts-to-valid are shown next to each score; quota, funds, rate-limit and auth stops are "
                "infrastructure, and the slots they leave reserved stay pending, not failed.")
+REPETITION_NOTE = ("Each model has three independent predetermined repetitions under one frozen condition; every "
+                   "repetition runs regardless of earlier outcomes and every attempt is reported. The median and "
+                   "range use the eligible repetitions only, next to their count; failed repetitions stay listed "
+                   "and are never replaced. Quota, auth and content-filter stops leave slots pending, not failed.")
 UNIDENTIFIED_COHORT = {"key": "unidentified", "condition": "unidentified", "prompt_version": None,
                        "label": "unidentified cohort (no readable frozen campaign)"}
 
 
 def digest(value) -> str:
     return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()).hexdigest()
+
+
+def condition_fingerprint(config: dict, model: dict) -> str:
+    """One model's experimental condition, independent of campaign identity, roster, pacing and engine.
+
+    Two campaigns whose models share this fingerprint sent the same frozen route, settings and
+    readiness proof under the same prompts, limits and sandbox images, so their repetitions are
+    samples of one condition. Concurrency, storage, controller paths and engine provenance are
+    operational and recorded separately.
+    """
+    transport = config.get("transport") or {}
+    boat = transport.get("boat") or {}
+    entries = (config.get("inventory") or {}).get("entries") or []
+    return digest({"schema": config.get("schema"), "max_attempts": config.get("max_attempts"),
+                   "model": model, "inventory": [row for row in entries if row.get("model") == model.get("inventory_id")],
+                   "prompts": config.get("prompts"), "limits": config.get("limits"), "native": config.get("native"),
+                   "image": config.get("image"), "visualizer_image": config.get("visualizer_image"),
+                   "transport": {"backend": transport.get("backend"), "type": boat.get("type"),
+                                 "ttl_seconds": boat.get("ttl_seconds"), "images": boat.get("images"),
+                                 "image_bundle_sha256": (boat.get("image_bundle") or {}).get("sha256")}})
 
 
 def read_object(path: Path) -> dict:
@@ -331,8 +357,8 @@ def counts(rows: list[dict]) -> dict:
             "unknown_cost_attempts": sum(row["cost_unknown"] for row in attempted)}
 
 
-def build_report(root: Path, cohort: Path) -> dict:
-    root, cohort = Path(root).resolve(), Path(cohort).resolve()
+def open_cohort(root: Path, cohort: Path) -> tuple[dict, str, str]:
+    """Frozen campaign of one input root: (config, config hash, cohort fingerprint)."""
     if not root.is_dir():
         raise ValueError(f"{root}: input root is not a directory")
     config, config_hash, snapshot_hash = read_cohort(cohort)
@@ -340,37 +366,51 @@ def build_report(root: Path, cohort: Path) -> dict:
     if (config.get("schema") not in {"keygen-native-campaign-2", "keygen-native-campaign-3"}
             or type(config.get("max_attempts")) is not int or config["max_attempts"] != 3):
         raise ValueError("Publication requires a frozen native campaign with at most three sequential attempts")
-    if (config.get("policies") or {}).get("attempt_selection") != ATTEMPT_SELECTION:
-        raise ValueError("Campaign must select the first success and preserve every predetermined attempt slot")
     lock = root / "campaign.lock.json"
     if lock.exists():
         _, root_config_hash, root_snapshot_hash = read_cohort(lock)
         if root_config_hash != config_hash or (snapshot_hash and snapshot_hash != root_snapshot_hash):
             raise ValueError("Input root belongs to a different frozen cohort")
         snapshot_hash = root_snapshot_hash
-    fingerprint = snapshot_hash or config_hash
-    campaign = campaign_cohort(config)
-    declared = {}
     for model in config.get("models", []):
         if (not isinstance(model, dict) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,79}", model.get("id", ""))
                 or not isinstance(model.get("effective_settings"), dict)
                 or not all(isinstance(model.get(key), str) for key in ("model", *ROUTE_KEYS))):
             raise ValueError("Campaign model identity, route and effective settings must be explicit")
+    if not config.get("models"):
+        raise ValueError("Campaign has no predeclared model roster")
+    return config, config_hash, snapshot_hash or config_hash
+
+
+def attempt_directories(root: Path) -> list[str]:
+    return sorted(path.name for path in root.iterdir() if path.is_dir() and not path.is_symlink()
+                  and any((path / name).is_file() for name in ("status.json", "profile.json", "campaign.json")))
+
+
+def build_report(root: Path, cohort: Path, linked: list[tuple[Path, Path]] = ()) -> dict:
+    """Report one frozen cohort; `linked` supplies (root, cohort) of campaigns it declares repetitions in."""
+    root, cohort = Path(root).resolve(), Path(cohort).resolve()
+    config, config_hash, fingerprint = open_cohort(root, cohort)
+    policy = (config.get("policies") or {}).get("attempt_selection")
+    if policy == INDEPENDENT_SELECTION:
+        return repetition_report(root, cohort, config, config_hash, fingerprint, linked)
+    if policy != ATTEMPT_SELECTION:
+        raise ValueError("Campaign must select the first success or run independent repetitions, preserving every predetermined slot")
+    campaign = campaign_cohort(config)
+    declared = {}
+    for model in config["models"]:
         for repetition in range(1, 4):
             attempt_id = f"{model['id']}-rep-{repetition}"
             if attempt_id in declared:
                 raise ValueError("Duplicate predeclared attempt ID")
             declared[attempt_id] = (model, repetition)
-    if not declared:
-        raise ValueError("Campaign has no predeclared model roster")
-    discovered = {path.name for path in root.iterdir() if path.is_dir() and not path.is_symlink()
-                  and any((path / name).is_file() for name in ("status.json", "profile.json", "campaign.json"))}
+    discovered = set(attempt_directories(root))
     rows = []
     for attempt_id in sorted(declared.keys() | discovered):
-        directory = root / attempt_id
-        if directory.is_symlink():
+        if (root / attempt_id).is_symlink():
             raise ValueError(f"{attempt_id}: attempt directory must not be a symlink")
-        rows.append(attempt_row(root, attempt_id, declared.get(attempt_id), fingerprint, config_hash, campaign))
+        rows.append({**attempt_row(root, attempt_id, declared.get(attempt_id), fingerprint, config_hash, campaign),
+                     "source_root": str(root)})
     grouped = {}
     for row in rows:
         grouped.setdefault(row["group_id"], []).append(row)
@@ -431,6 +471,118 @@ def build_report(root: Path, cohort: Path) -> dict:
             "groups": groups, "rows": rows}
 
 
+def repetition_report(root: Path, cohort: Path, config: dict, config_hash: str, fingerprint: str,
+                      linked: list[tuple[Path, Path]]) -> dict:
+    """Independent repetitions of one condition per model, possibly declared across linked campaigns.
+
+    Every predetermined repetition is a sample; there is no selection. A linked campaign contributes
+    only the repetitions this campaign names for it, and only when each model's condition
+    fingerprint is identical. Its other slots stay visible as attempts outside the condition.
+    """
+    policies = config["policies"]
+    own = policies.get("repetitions")
+    link = policies.get("linked_condition")
+    sources = [{"campaign_id": config.get("campaign_id"), "root": root, "config": config,
+                "config_sha256": config_hash, "fingerprint": fingerprint, "repetitions": own}]
+    if link is not None:
+        match = None
+        for linked_root, linked_cohort in linked:
+            linked_root = Path(linked_root).resolve()
+            linked_config, linked_hash, linked_fingerprint = open_cohort(linked_root, Path(linked_cohort).resolve())
+            if linked_hash == link.get("config_sha256"):
+                match = {"campaign_id": linked_config.get("campaign_id"), "root": linked_root, "config": linked_config,
+                         "config_sha256": linked_hash, "fingerprint": linked_fingerprint,
+                         "repetitions": link.get("repetitions")}
+        if match is None:
+            raise ValueError("Linked repetitions require the linked campaign's root and frozen cohort")
+        if match["campaign_id"] != link.get("campaign_id"):
+            raise ValueError("Linked campaign identity differs from the declaration")
+        sources.append(match)
+    declared = [repetition for source in sources for repetition in source["repetitions"] or []]
+    if sorted(declared) != list(range(1, config["max_attempts"] + 1)):
+        raise ValueError("Independent repetitions must declare every ordinal exactly once across linked campaigns")
+    for source in sources:
+        source["cohort"] = campaign_cohort(source["config"])
+        source["models"] = {model["id"]: model for model in source["config"]["models"]}
+    campaign = sources[0]["cohort"]
+    if any(source["cohort"]["key"] != campaign["key"] for source in sources):
+        raise ValueError("Linked campaigns belong to different cohorts")
+    rows, groups = [], []
+    for model in config["models"]:
+        condition = condition_fingerprint(config, model)
+        repetitions, others = [], []
+        for source in sources:
+            source_model = source["models"].get(model["id"])
+            if source_model is None or condition_fingerprint(source["config"], source_model) != condition:
+                raise ValueError(f"{model['id']}: linked campaign condition differs")
+            if link is not None and source is sources[0] and (link.get("condition_fingerprints") or {}).get(model["id"]) != condition:
+                raise ValueError(f"{model['id']}: declared condition fingerprint differs")
+            names = {f"{model['id']}-rep-{repetition}": repetition for repetition in range(1, config["max_attempts"] + 1)}
+            for name in attempt_directories(source["root"]):
+                if name not in names:
+                    status, _ = metadata(source["root"] / name / "status.json")
+                    if (status.get("model") or {}).get("id") == model["id"]:
+                        names[name] = status.get("repetition")
+            for attempt_id, repetition in sorted(names.items()):
+                is_sample = repetition in source["repetitions"] and attempt_id == f"{model['id']}-rep-{repetition}"
+                if not is_sample and not (source["root"] / attempt_id).exists():
+                    continue
+                if (source["root"] / attempt_id).is_symlink():
+                    raise ValueError(f"{attempt_id}: attempt directory must not be a symlink")
+                row = attempt_row(source["root"], attempt_id, (source_model, repetition) if is_sample else None,
+                                  source["fingerprint"], source["config_sha256"], source["cohort"])
+                row.update(source_root=str(source["root"]), source_campaign_id=source["campaign_id"],
+                           source_campaign_sha256=source["config_sha256"], condition_fingerprint=condition,
+                           role="repetition" if is_sample else "outside_condition", selected=False)
+                if is_sample and not row["declared_condition_match"]:
+                    row["eligible"], row["craft"] = False, None
+                    row["error"] = "; ".join(filter(None, [row["error"], "repetition differs from its declared frozen condition"]))
+                (repetitions if is_sample else others).append(row)
+        repetitions.sort(key=lambda row: row["repetition"])
+        scores = [row["craft"] for row in repetitions if row["eligible"] and finite_number(row["craft"])]
+        pending = [row["attempt_id"] for row in repetitions if not row["terminal"]]
+        state = ("pending" if pending else
+                 "complete" if len(scores) == len(repetitions) else
+                 "complete_with_failures" if scores else "no_eligible_repetition")
+        first = repetitions[0]
+        groups.append({"group_id": digest({"model_id": model["id"], "condition_fingerprint": condition}),
+                       "model_id": model["id"], "model": model.get("model"),
+                       "route": {key: model.get(key) for key in ROUTE_KEYS},
+                       "effective_settings": model.get("effective_settings"), "cohort_fingerprint": condition,
+                       "condition_fingerprint": condition, "kind": "native", "cohort": campaign, "tier": first["tier"],
+                       **counts(repetitions + others), "attempt_ids": [row["attempt_id"] for row in repetitions + others],
+                       "repetitions": [{key: row[key] for key in ("repetition", "attempt_id", "source_campaign_id", "status",
+                                                                 "outcome", "eligible", "craft", "failure_category", "model_failure")}
+                                       for row in repetitions],
+                       "outside_condition_attempts": [{key: row[key] for key in ("attempt_id", "source_campaign_id", "status",
+                                                                                 "repetition", "retry_of", "failure_category",
+                                                                                 "operator_cancellation")} for row in others],
+                       "declared_repetitions": len(repetitions), "eligible_repetitions": len(scores),
+                       "pending_repetitions": pending, "scores": scores,
+                       "median_craft": statistics.median(scores) if scores else None,
+                       "min_craft": min(scores) if scores else None, "max_craft": max(scores) if scores else None,
+                       "craft_range": max(scores) - min(scores) if scores else None,
+                       "attempted_count": sum(row["attempted"] for row in repetitions), "state": state,
+                       "selected_attempt_id": None, "selected_attempt_ordinal": None, "selected_craft": None,
+                       "policy_errors": [],
+                       "summary_source": "every eligible predetermined independent repetition of one frozen condition",
+                       "summary_note": "Median and range over the eligible repetitions; failures and pending slots are listed beside them."})
+        rows.extend(repetitions + others)
+    groups.sort(key=lambda group: (str(group["model"]), group["group_id"]))
+    samples = [row for row in rows if row["role"] == "repetition"]
+    return {"schema": SCHEMA, "root": str(root), "cohort_input": str(cohort),
+            "cohort": campaign, "cohort_tables": [{"cohort": campaign, "group_ids": [group["group_id"] for group in groups]}],
+            "tier_note": TIER_NOTE, "sample_note": REPETITION_NOTE,
+            "campaign_id": config.get("campaign_id"), "campaign_sha256": config_hash,
+            "cohort_fingerprint": fingerprint, "max_attempts": config["max_attempts"],
+            "attempt_selection": INDEPENDENT_SELECTION, "score_role": SCORE_ROLE,
+            "linked_campaigns": [{key: source[key] for key in ("campaign_id", "config_sha256", "repetitions")}
+                                 | {"root": str(source["root"])} for source in sources],
+            "selection_note": "No selection: every predetermined repetition is a reported sample. Median and range use eligible repetitions only.",
+            "counts": counts(rows), "declared_counts": counts(samples),
+            "groups": groups, "rows": rows}
+
+
 def artifact_url(root: Path, directory: Path, relative: str, output: Path) -> str | None:
     path = (directory / relative).resolve()
     if not path.is_relative_to(directory.resolve()) or not path.is_file():
@@ -442,10 +594,10 @@ def artifact_url(root: Path, directory: Path, relative: str, output: Path) -> st
 
 
 def page_rows(report: dict, output: Path) -> list[dict]:
-    root = Path(report["root"])
     rows = []
     for row in report["rows"]:
         profile = row["profile"]
+        root = Path(row.get("source_root") or report["root"])
         directory = root / row["run_dir"]
         loop = profile.get("loop") or {}
         preview = loop.get("preview") or {}
@@ -511,8 +663,10 @@ def main() -> None:
     parser.add_argument("--cohort", type=Path, required=True, help="Frozen campaign envelope or campaign.lock.json")
     parser.add_argument("--out", type=Path, required=True, help="JSON report output")
     parser.add_argument("--html", type=Path, help="Optional existing-layout HTML publication")
+    parser.add_argument("--linked", nargs=2, action="append", type=Path, default=[], metavar=("ROOT", "COHORT"),
+                        help="Root and frozen cohort of a campaign this one declares independent repetitions in")
     args = parser.parse_args()
-    report = build_report(args.root, args.cohort)
+    report = build_report(args.root, args.cohort, [tuple(pair) for pair in args.linked])
     write_output(args.out.resolve(), json.dumps(finite_json(report), indent=2, allow_nan=False) + "\n")
     if args.html:
         output = args.html.resolve()
@@ -522,7 +676,7 @@ def main() -> None:
         page = (PAGE.replace("__DATA__", script_json(page_rows(report, output)))
                 .replace("__COHORTS__", script_json([table["cohort"] for table in report["cohort_tables"]]))
                 .replace("__SUMMARY__", summary)
-                .replace("__TIER_NOTE__", html.escape(TIER_NOTE)).replace("__SAMPLE_NOTE__", html.escape(SAMPLE_NOTE)))
+                .replace("__TIER_NOTE__", html.escape(TIER_NOTE)).replace("__SAMPLE_NOTE__", html.escape(report["sample_note"])))
         write_output(output, page)
     print(f"{len(report['rows'])} attempt slots, {report['counts']['eligible_evaluations']} eligible diagnostics -> {args.out}")
 

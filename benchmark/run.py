@@ -818,21 +818,26 @@ def run_model_sequence(root: Path, config: dict, model: dict, docker: list[str] 
                        image: str, visualizer_image: str, store) -> dict:
     """Run fresh reserved slots in ordinal order; leave interrupted slots for explicit recovery.
 
-    A QUOTA or AUTH attempt is an account fault, not the model's, and a CONTENT_FILTER attempt
-    is a provider block of every allowed send: the sequence stops and the later slots stay
+    First success: later slots become SKIPPED_AFTER_SUCCESS after the first eligible success.
+    Independent repetitions: every declared slot runs regardless of earlier outcomes.
+    In both, a QUOTA or AUTH attempt is an account fault, not the model's, and a CONTENT_FILTER
+    attempt is a provider block of every allowed send: the sequence stops and the later slots stay
     RESERVED for `recover` plus an explicit `retry` once the cause is fixed.
     """
-    slots = [f"{model['id']}-rep-{ordinal}" for ordinal in range(1, config["max_attempts"] + 1)]
-    for ordinal, attempt_id in enumerate(slots, 1):
+    independent = config["policies"]["attempt_selection"] == campaign.INDEPENDENT
+    ordinals = campaign.repetitions(config)
+    slots = [f"{model['id']}-rep-{ordinal}" for ordinal in ordinals]
+    for ordinal, attempt_id in zip(ordinals, slots):
         status = json.loads((root / attempt_id / "status.json").read_text())
         if (status.get("status") != "RESERVED" or status.get("model") != model
                 or status.get("repetition") != ordinal or status.get("retry_of") is not None):
             raise ValueError("Model sequences require fresh matching reserved slots; never repeat existing attempts")
     selected = None
+    eligible = []
     attempted = []
     errors = []
     stopped = None
-    for ordinal, attempt_id in enumerate(slots, 1):
+    for ordinal, attempt_id in zip(ordinals, slots):
         directory = root / attempt_id
         if stopped is not None:
             break
@@ -859,12 +864,13 @@ def run_model_sequence(root: Path, config: dict, model: dict, docker: list[str] 
             profile = None
         if not invocation_error and attempt_succeeded(
                 status, profile, finalization_error=(directory / "finalization-error.json").exists()):
-            selected = attempt_id
+            eligible.append(attempt_id)
+            selected = None if independent else attempt_id
         elif status.get("failure_category") in SEQUENCE_STOPPING_FAILURES:
             stopped = {"attempt_id": attempt_id, "failure_category": status["failure_category"]}
     summary = {"model_id": model["id"], "max_attempts": config["max_attempts"],
                "attempt_selection": config["policies"]["attempt_selection"], "slots": slots,
-               "attempted": attempted, "selected_attempt_id": selected,
+               "attempted": attempted, "selected_attempt_id": selected, "eligible": eligible,
                "skipped": slots[len(attempted):] if selected else [], "errors": errors,
                "stopped_after": stopped, "reserved": slots[len(attempted):] if stopped else []}
     write_json(root / f"{model['id']}-attempts.json", summary)
@@ -1196,7 +1202,7 @@ def main() -> None:
             return
         lock_campaign(root / "campaign.lock.json", snapshot)
         attempts = [(model, ordinal, f"{model['id']}-rep-{ordinal}", None)
-                    for model in config["models"] for ordinal in range(1, config["max_attempts"] + 1)]
+                    for model in config["models"] for ordinal in campaign.repetitions(config)]
         if args.command == "retry":
             if not args.retry_of or not args.retry_id or args.retry_of == args.retry_id:
                 raise ValueError("Retry requires an original terminal attempt and an explicit distinct retry ID")
@@ -1250,7 +1256,10 @@ def main() -> None:
                               "note": "Evaluated outcomes stand and local files are retained; run `recover` to retry the export."}))
         if errors:
             raise RuntimeError("Campaign finalization failed: " + ", ".join(errors))
-        print("Model sequences completed, stopping after first eligible success or three attempts. Unused slots are SKIPPED_AFTER_SUCCESS. Scores are auxiliary diagnostics, not aesthetic rankings.")
+        if config["policies"]["attempt_selection"] == campaign.INDEPENDENT:
+            print("Model sequences completed: every declared independent repetition ran unless an account or content-filter stop left it RESERVED. Scores are auxiliary diagnostics, not aesthetic rankings.")
+        else:
+            print("Model sequences completed, stopping after first eligible success or three attempts. Unused slots are SKIPPED_AFTER_SUCCESS. Scores are auxiliary diagnostics, not aesthetic rankings.")
         if stopped:
             print(json.dumps({"stopped_on_account_failure": stopped,
                               "note": "QUOTA/AUTH/CONTENT_FILTER are infrastructure faults; RESERVED slots are unused. Fix the cause, then recover and retry explicitly."}))

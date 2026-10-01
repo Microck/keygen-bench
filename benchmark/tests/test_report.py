@@ -38,11 +38,11 @@ class ReportTests(unittest.TestCase):
 
     def attempt(self, repetition, score, *, name=None, config=None, category=None,
                 model_failure=False, retry_of=None, exhibition=False, evaluator="fixture",
-                status_updates=None, profile_updates=None):
+                status_updates=None, profile_updates=None, root=None):
         config = config or self.config
         model = config["models"][0]
         name = name or f"claude-rep-{repetition}"
-        directory = self.root / name
+        directory = (root or self.root) / name
         status = {"attempt_id": name, "repetition": repetition, "model": model,
                   "status": "RENDERED_UNSCORED" if score is not None else "INFRA_ERROR",
                   "render": "ok" if score is not None else "not_attempted", "eligible": score is not None,
@@ -402,6 +402,55 @@ class ReportTests(unittest.TestCase):
         row = next(row for row in self.publish()["rows"] if row["repetition"] == 1)
         self.assertEqual((row["status"], row["failure_category"]), ("AUTH_ERROR", "AUTH"))
         self.assertIn("operator cancellation record does not match", row["error"])
+
+    def repeats(self, config=None, suffix="repeats"):
+        """A companion campaign declaring repetitions 2-3 of the fixture cohort's condition."""
+        config = copy.deepcopy(config or self.config)
+        model = config["models"][0]
+        repeats = {**config, "campaign_id": "fixture-repeats",
+                   "policies": {"attempt_selection": "independent_repetitions", "repetitions": [2, 3],
+                                "linked_condition": {"campaign_id": "fixture-cohort", "config_sha256": report.digest(self.config),
+                                                     "repetitions": [1], "condition_fingerprints": {
+                                                         "claude": report.condition_fingerprint(config, model)}}}}
+        temporary = tempfile.TemporaryDirectory(suffix=suffix)
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        self.write(root / "campaign.lock.json", self.envelope(repeats))
+        return repeats, root
+
+    def test_linked_repetitions_report_every_sample_with_median_range_and_keep_cancelled_slot_outside(self):
+        error = {"failure_category": "EVAL", "error": "TimeoutExpired"}
+        self.runner_overwrites_status_after_evaluation(self.attempt(1, 65), error)
+        cancelled = self.attempt(2, None, category="AUTH", status_updates={"status": "AUTH_ERROR"})
+        self.write(cancelled / "operator-cancellation.json", {
+            "attempt_id": "claude-rep-2", "action": "operator_cancelled", "true_failure_category": "INFRA",
+            "recorded_failure_category_vehicle": "AUTH", "model_failure": False, "reason": "rep-1 already evaluated"})
+        repeats, root = self.repeats()
+        self.attempt(2, 40, config=repeats, root=root)
+        self.attempt(3, None, config=repeats, root=root, category="MODEL", model_failure=True)
+        result = report.build_report(root, root / "campaign.lock.json", [(self.root, self.root / "campaign.lock.json")])
+        group, = result["groups"]
+        self.assertEqual([(rep["repetition"], rep["source_campaign_id"], rep["craft"]) for rep in group["repetitions"]],
+                         [(1, "fixture-cohort", 65), (2, "fixture-repeats", 40), (3, "fixture-repeats", None)])
+        self.assertEqual((group["eligible_repetitions"], group["median_craft"], group["min_craft"], group["max_craft"], group["craft_range"]),
+                         (2, 52.5, 40, 65, 25))
+        self.assertEqual(group["state"], "complete_with_failures")
+        self.assertEqual([(row["attempt_id"], row["status"], row["failure_category"]) for row in group["outside_condition_attempts"]],
+                         [("claude-rep-2", "OPERATOR_CANCELLED", "INFRA")])
+        self.assertEqual(result["declared_counts"]["attempts"], 3)
+        self.assertFalse(any(row["selected"] for row in result["rows"]))
+
+    def test_repetitions_need_the_linked_root_and_an_identical_condition(self):
+        self.attempt(1, 65)
+        repeats, root = self.repeats()
+        self.attempt(2, 40, config=repeats, root=root)
+        with self.assertRaisesRegex(ValueError, "linked campaign's root"):
+            report.build_report(root, root / "campaign.lock.json")
+        changed = copy.deepcopy(self.config)
+        changed["prompts"]["task"] = "different"
+        _, other = self.repeats(changed, "changed")
+        with self.assertRaisesRegex(ValueError, "condition differs"):
+            report.build_report(other, other / "campaign.lock.json", [(self.root, self.root / "campaign.lock.json")])
 
 
 if __name__ == "__main__":

@@ -16,6 +16,7 @@ import tempfile
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 from native_models import MAX_TRANSPORT_RETRIES, REASONING_FIELDS, TIERS, check_tier, declared_reasoning
+from report import condition_fingerprint
 
 SCHEMA = "keygen-native-campaign-3"
 # Cohort label of the frozen prompts/system.txt + prompts/task.txt pair. Campaigns compiled
@@ -23,7 +24,14 @@ SCHEMA = "keygen-native-campaign-3"
 PROMPT_VERSION = "prompt-v2"
 PROVIDERS = {"Codex OAuth": "codex_oauth", "Anthropic OAuth": "anthropic_oauth", "OpenCode Go": "go", "Vercel AI Gateway": "vercel", "NVIDIA NIM": "nim"}
 LIMIT_KEYS = {"steps", "wall_seconds", "request_seconds", "command_seconds", "render_seconds", "video_seconds", "artifact_bytes"}
-POLICIES = {"attempt_selection": "first_success_up_to_three_attempts", "retry": "explicit_separate_attempt_id", "failure": "separate_infrastructure_from_model", "auth": "controller_only_no_mid_cohort_refresh", "objective": "declared_native_configurations_fixed_resources"}
+FIRST_SUCCESS = "first_success_up_to_three_attempts"
+# Every predetermined repetition runs regardless of earlier outcomes; only QUOTA/AUTH/CONTENT_FILTER stop
+# a model's sequence and leave its later slots reserved. Repetitions may be split across campaigns
+# that freeze one identical condition per model (report.condition_fingerprint).
+INDEPENDENT = "independent_repetitions"
+POLICIES = {"attempt_selection": FIRST_SUCCESS, "retry": "explicit_separate_attempt_id", "failure": "separate_infrastructure_from_model", "auth": "controller_only_no_mid_cohort_refresh", "objective": "declared_native_configurations_fixed_resources"}
+REPETITION_POLICY_KEYS = set(POLICIES) | {"repetitions", "linked_condition"}
+LINK_KEYS = {"campaign_id", "config_sha256", "repetitions", "condition_fingerprints"}
 KEYS = {"schema", "campaign_id", "max_attempts", "inventory", "models", "limits", "concurrency", "storage", "transport", "image", "visualizer_image", "native", "policies", "prompts", "provenance"}
 MODEL_KEYS = {"id", "inventory_id", "model", "response_model", "provider", "api", "base_url", "api_key_env", "generation", "tier", "readiness", "effective_settings", "backend_provenance"}
 CONCURRENCY_KEYS = {"workers", "providers", "key_pools", "render", "video"}
@@ -208,6 +216,45 @@ def normalization_worker() -> None:
     print(json.dumps(result, allow_nan=False))
 
 
+def repetitions(config: dict) -> list[int]:
+    """Repetition ordinals this campaign runs, in order."""
+    return config["policies"].get("repetitions") or list(range(1, config["max_attempts"] + 1))
+
+
+def ordinal_list(values, ordinals: list[int]) -> bool:
+    return (isinstance(values, list) and bool(values) and all(type(value) is int for value in values)
+            and values == sorted(set(values)) and set(values) <= set(ordinals))
+
+
+def check_policies(config: dict) -> None:
+    policies = config["policies"]
+    if policies == POLICIES:
+        return
+    if (not isinstance(policies, dict) or set(policies) != REPETITION_POLICY_KEYS
+            or {key: policies[key] for key in POLICIES} != {**POLICIES, "attempt_selection": INDEPENDENT}):
+        raise ValueError("Campaign failure, selection and authentication policies must be explicit")
+    ordinals = list(range(1, config["max_attempts"] + 1))
+    own = policies["repetitions"]
+    if not ordinal_list(own, ordinals):
+        raise ValueError("Independent repetitions must be distinct ascending ordinals within the attempt bound")
+    link = policies["linked_condition"]
+    if link is None:
+        if own != ordinals:
+            raise ValueError("An unlinked independent campaign must run every repetition")
+        return
+    if (not isinstance(link, dict) or set(link) != LINK_KEYS
+            or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,79}", str(link["campaign_id"]))
+            or link["campaign_id"] == config["campaign_id"]
+            or not re.fullmatch(r"[a-f0-9]{64}", str(link["config_sha256"]))):
+        raise ValueError("A linked condition names another frozen campaign by ID and configuration hash")
+    if not ordinal_list(link["repetitions"], ordinals) or sorted(own + link["repetitions"]) != ordinals:
+        raise ValueError("Linked campaigns must declare every repetition exactly once")
+    fingerprints = link["condition_fingerprints"]
+    if (not isinstance(fingerprints, dict) or set(fingerprints) != {model.get("id") for model in config["models"]}
+            or any(fingerprints[model["id"]] != condition_fingerprint(config, model) for model in config["models"])):
+        raise ValueError("Every model must freeze the linked campaign's condition fingerprint")
+
+
 def validate(config: dict, *, check_provenance=True) -> dict:
     if not isinstance(config, dict) or set(config) != KEYS or config.get("schema") != SCHEMA:
         raise ValueError("Only the frozen native campaign schema is executable; inventory and legacy configs are not campaigns")
@@ -216,8 +263,7 @@ def validate(config: dict, *, check_provenance=True) -> dict:
         raise ValueError("Invalid campaign ID")
     if config["max_attempts"] != 3 or type(config["max_attempts"]) is not int:
         raise ValueError("Campaigns allow at most three sequential attempts, stopping after first success")
-    if config["policies"] != POLICIES:
-        raise ValueError("Campaign failure, selection and authentication policies must be explicit")
+    check_policies(config)
     limits = config["limits"]
     if set(limits) != LIMIT_KEYS:
         raise ValueError("Declare every resource limit")
@@ -388,7 +434,31 @@ def check_tier_spec(models: list, tier_spec_path: Path) -> None:
             raise ValueError(f"{label} generation lacks the reasoning control its tier spec requires")
 
 
-def compile_campaign(inventory_path: Path, selection_path: Path, output: Path, tier_spec_path: Path) -> dict:
+def repetition_policies(ordinals: list[int] | None, linked_path: Path | None) -> tuple[dict, dict | None]:
+    """Policies for first success (no ordinals) or independent repetitions, plus the linked campaign."""
+    if ordinals is None:
+        if linked_path is not None:
+            raise ValueError("Only independent repetitions can link to another campaign")
+        return POLICIES, None
+    policies = {**POLICIES, "attempt_selection": INDEPENDENT, "repetitions": sorted(ordinals), "linked_condition": None}
+    if linked_path is None:
+        return policies, None
+    linked = read_manifest(linked_path)
+    selection = (linked.get("policies") or {}).get("attempt_selection")
+    if selection == FIRST_SUCCESS:
+        # Only a first-success campaign's first slot runs unconditionally; later slots ran only after failure.
+        linked_ordinals = [1]
+    elif selection == INDEPENDENT:
+        linked_ordinals = linked["policies"]["repetitions"]
+    else:
+        raise ValueError("Linked campaign has no supported attempt selection")
+    policies["linked_condition"] = {"campaign_id": linked["campaign_id"], "config_sha256": digest(linked),
+                                    "repetitions": linked_ordinals, "condition_fingerprints": {}}
+    return policies, linked
+
+
+def compile_campaign(inventory_path: Path, selection_path: Path, output: Path, tier_spec_path: Path,
+                     ordinals: list[int] | None = None, linked_path: Path | None = None) -> dict:
     inventory = json.loads(inventory_path.read_text())
     selection = json.loads(selection_path.read_text())
     required = KEYS - {"schema", "max_attempts", "inventory", "policies", "prompts", "provenance"}
@@ -396,7 +466,8 @@ def compile_campaign(inventory_path: Path, selection_path: Path, output: Path, t
         raise ValueError(f"Selection keys must be exactly {sorted(required)}")
     check_tier_spec(selection["models"], tier_spec_path)
     rows = [{key: row.get(key) for key in ("model", "provider", "status", "upstream_model", "proxy_request_model")} for row in inventory["models"]]
-    config = {**selection, "schema": SCHEMA, "max_attempts": 3, "inventory": {"sha256": digest(rows), "entries": rows}, "policies": POLICIES, "prompts": prompt_manifest(selection["limits"]), "provenance": {"sources": source_provenance(), "packages": package_provenance(), "python": sys.version}}
+    policies, linked = repetition_policies(ordinals, linked_path)
+    config = {**selection, "schema": SCHEMA, "max_attempts": 3, "inventory": {"sha256": digest(rows), "entries": rows}, "policies": policies, "prompts": prompt_manifest(selection["limits"]), "provenance": {"sources": source_provenance(), "packages": package_provenance(), "python": sys.version}}
     for model in config["models"]:
         model["effective_settings"] = None
         evidence = model.get("readiness", {}).get("evidence")
@@ -414,6 +485,13 @@ def compile_campaign(inventory_path: Path, selection_path: Path, output: Path, t
             model["effective_settings"] = evidence["payload"].get("effective_settings")
         elif model.get("readiness", {}).get("status") == "verified":
             raise ValueError("Verified selection must name an actual readiness evidence_path artifact")
+    if linked is not None:
+        frozen = {model.get("id"): model for model in linked.get("models", [])}
+        for model in config["models"]:
+            fingerprint = condition_fingerprint(config, model)
+            if model["id"] not in frozen or condition_fingerprint(linked, frozen[model["id"]]) != fingerprint:
+                raise ValueError(f"{model['id']}: condition differs from the linked campaign's frozen model")
+            policies["linked_condition"]["condition_fingerprints"][model["id"]] = fingerprint
     validate(config)
     publish(output, {"sha256": digest(config), "campaign": config})
     return config
@@ -441,9 +519,13 @@ def main():
     parser.add_argument("--selection", required=True, type=Path)
     parser.add_argument("--tier-spec", required=True, type=Path, help="per-model tier spec every selected model must match")
     parser.add_argument("--out", required=True, type=Path)
+    parser.add_argument("--repetitions", help="independent repetition ordinals this campaign runs, e.g. 2,3; omit for first success")
+    parser.add_argument("--linked-campaign", type=Path, help="frozen campaign holding the remaining repetitions of the same condition")
     args = parser.parse_args()
-    config = compile_campaign(args.inventory.resolve(), args.selection.resolve(), args.out.resolve(), args.tier_spec.resolve())
-    print(json.dumps({"campaign_id": config["campaign_id"], "models": len(config["models"]), "reserved_slots": len(config["models"]) * config["max_attempts"], "max_attempts_per_model": config["max_attempts"], "attempt_selection": config["policies"]["attempt_selection"], "sha256": digest(config)}))
+    ordinals = [int(value) for value in args.repetitions.split(",")] if args.repetitions else None
+    config = compile_campaign(args.inventory.resolve(), args.selection.resolve(), args.out.resolve(), args.tier_spec.resolve(),
+                              ordinals, args.linked_campaign.resolve() if args.linked_campaign else None)
+    print(json.dumps({"campaign_id": config["campaign_id"], "models": len(config["models"]), "reserved_slots": len(config["models"]) * len(repetitions(config)), "repetitions": repetitions(config), "max_attempts_per_model": config["max_attempts"], "attempt_selection": config["policies"]["attempt_selection"], "sha256": digest(config)}))
 
 
 if __name__ == "__main__":
