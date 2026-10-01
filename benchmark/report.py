@@ -89,7 +89,8 @@ def campaign_cohort(config: dict) -> dict:
     elif schema != "keygen-native-campaign-3":
         return {**UNIDENTIFIED_COHORT, "label": f"unidentified cohort (unsupported campaign schema {schema})"}
     elif str(config.get("campaign_id") or "").startswith(MAX_TIER_PREFIX):
-        condition, text = "highest-declared-tier", "highest declared tier per exact route"
+        return {"key": f"highest-declared-tier/{version}", "condition": "highest-declared-tier", "prompt_version": version,
+                "label": f"Max-tier, {version.replace('-', ' ')} (highest declared tier per exact route)"}
     else:
         condition, text = "declared-tier", "declared tier per exact route"
     return {"key": f"{condition}/{version}", "condition": condition, "prompt_version": version,

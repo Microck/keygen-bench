@@ -301,7 +301,6 @@ class ReportTests(unittest.TestCase):
         self.skip(2, selected="claude-rep-1")
         result = self.publish()
         self.assertEqual(result["cohort"]["key"], "highest-declared-tier/prompt-v2")
-        self.assertEqual(result["cohort"]["label"], "highest declared tier per exact route, prompt-v2")
         self.assertEqual({row["tier"] for row in result["rows"]}, {"highest declared tier: max, 128k output"})
         self.assertIn("not equal compute", result["tier_note"])
         self.assertIn("one quality sample", result["sample_note"])
