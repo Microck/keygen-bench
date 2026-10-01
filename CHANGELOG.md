@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Added
+- `attempt_selection: independent_repetitions` campaigns: every declared repetition runs regardless of earlier outcomes (QUOTA/AUTH/CONTENT_FILTER still stop and reserve); `--repetitions 2,3 --linked-campaign` declares the remaining ordinals of another campaign's identical per-model condition fingerprint, and `report.py --linked` reports all repetitions per model with median and range of eligible scores
 - Independent systemd campaign watchdogs with persistent progress/issue records, owned-process supervisor-loss recovery and post-run Paris service restoration checks
 - Host a current-results HTTPS preview with verified public media, retained cohort/artifact provenance, native first-success diagnostics and isolated static-file serving
 - Continue unfinished native work in separate immutable campaigns using remaining original attempt ordinals, with owned resource/terminal guards and Minecraft restoration forbidden

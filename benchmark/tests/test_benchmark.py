@@ -155,6 +155,33 @@ class BenchmarkTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Creative prompts"):
             campaign.validate(changed)
 
+    def test_repetitions_link_only_an_identical_condition_and_never_reuse_a_conditional_slot(self):
+        primary = self.compile()
+        self.selection["campaign_id"] = "fixture-repeats"
+        self.selection["concurrency"]["workers"] += 1  # operational, not part of the condition
+        self.selection_path.write_text(json.dumps(self.selection))
+        compile_repeats = lambda ordinals, out="repeats.json": campaign.compile_campaign(
+            self.inventory_path, self.selection_path, self.root / out, self.tier_spec_path,
+            ordinals, self.root / "campaign.json")
+        repeats = compile_repeats([2, 3])
+        link = repeats["policies"]["linked_condition"]
+        self.assertEqual(repeats["policies"]["attempt_selection"], "independent_repetitions")
+        self.assertEqual((link["campaign_id"], link["config_sha256"], link["repetitions"]),
+                         (primary["campaign_id"], campaign.digest(primary), [1]))
+        self.assertEqual(campaign.repetitions(repeats), [2, 3])
+        # A first-success campaign's later slots ran only after a failure, so they cannot be linked samples.
+        with self.assertRaisesRegex(ValueError, "exactly once"):
+            compile_repeats([1, 2], "overlap.json")
+        self.selection["limits"]["command_seconds"] += 60
+        self.selection_path.write_text(json.dumps(self.selection))
+        with self.assertRaisesRegex(ValueError, "condition differs"):
+            compile_repeats([2, 3], "changed.json")
+        forged = copy.deepcopy(repeats)
+        forged["prompts"]["task"] += "Prefer tonal music"
+        forged["policies"]["linked_condition"]["condition_fingerprints"]["verified"] = "0" * 64
+        with self.assertRaisesRegex(ValueError, "condition fingerprint"):
+            campaign.validate(forged)
+
     def test_model_mapping_and_effective_settings_cannot_be_faked(self):
         self.model["response_model"] = "substitute"
         with self.assertRaisesRegex(ValueError, "identity differs"):
@@ -466,6 +493,27 @@ class ModelSequenceTests(unittest.TestCase):
         self.assertIsNone(result["selected_attempt_id"])
         self.assertEqual(result["skipped"], [])
         self.assertEqual([self.status(n)["status"] for n in (1, 2, 3)], ["MODEL_FAILED"] * 3)
+
+    def independent(self, ordinals):
+        self.config = {"max_attempts": 3, "policies": {**campaign.POLICIES, "attempt_selection": campaign.INDEPENDENT,
+                                                       "repetitions": ordinals, "linked_condition": None}}
+
+    def test_independent_repetitions_run_every_slot_after_success_and_failure(self):
+        self.independent([1, 2, 3])
+        result = self.execute(["success", "failure", "success"])
+        self.assertEqual(self.invoked, [1, 2, 3])
+        self.assertIsNone(result["selected_attempt_id"])
+        self.assertEqual(result["eligible"], ["model-rep-1", "model-rep-3"])
+        self.assertEqual(result["skipped"], [])
+        self.assertEqual([self.status(n)["status"] for n in (1, 2, 3)], ["RENDERED_UNSCORED", "MODEL_FAILED", "RENDERED_UNSCORED"])
+
+    def test_declared_repetitions_run_only_their_slots_and_quota_still_stops(self):
+        self.independent([2, 3])
+        result = self.execute(["success", "QUOTA", "success"])
+        self.assertEqual(self.invoked, [2])
+        self.assertEqual(result["stopped_after"], {"attempt_id": "model-rep-2", "failure_category": "QUOTA"})
+        self.assertEqual(result["reserved"], ["model-rep-3"])
+        self.assertEqual((self.status(1)["status"], self.status(3)["status"]), ("RESERVED", "RESERVED"))
 
     def test_quota_or_content_filter_stops_sequence_and_leaves_later_slots_reserved(self):
         for category in ("QUOTA", "CONTENT_FILTER"):
