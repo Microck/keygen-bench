@@ -227,20 +227,27 @@ def ordinal_list(values, ordinals: list[int]) -> bool:
 
 
 def check_policies(config: dict) -> None:
+    """First success over all ordinals (POLICIES), or declared ordinals with an optional linked campaign.
+
+    Independent repetitions may run every ordinal unlinked, or some of them linked to a campaign
+    holding the others. A first-success continuation runs the remaining ordinals of a linked
+    first-success campaign whose other ordinals were consumed without an eligible success.
+    """
     policies = config["policies"]
     if policies == POLICIES:
         return
-    if (not isinstance(policies, dict) or set(policies) != REPETITION_POLICY_KEYS
-            or {key: policies[key] for key in POLICIES} != {**POLICIES, "attempt_selection": INDEPENDENT}):
+    selection = policies.get("attempt_selection") if isinstance(policies, dict) else None
+    if (selection not in (FIRST_SUCCESS, INDEPENDENT) or set(policies) != REPETITION_POLICY_KEYS
+            or {key: policies[key] for key in POLICIES} != {**POLICIES, "attempt_selection": selection}):
         raise ValueError("Campaign failure, selection and authentication policies must be explicit")
     ordinals = list(range(1, config["max_attempts"] + 1))
     own = policies["repetitions"]
     if not ordinal_list(own, ordinals):
-        raise ValueError("Independent repetitions must be distinct ascending ordinals within the attempt bound")
+        raise ValueError("Declared repetitions must be distinct ascending ordinals within the attempt bound")
     link = policies["linked_condition"]
     if link is None:
-        if own != ordinals:
-            raise ValueError("An unlinked independent campaign must run every repetition")
+        if selection == FIRST_SUCCESS or own != ordinals:
+            raise ValueError("Only an unlinked independent campaign may declare ordinals, and it must run every repetition")
         return
     if (not isinstance(link, dict) or set(link) != LINK_KEYS
             or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,79}", str(link["campaign_id"]))
@@ -249,6 +256,8 @@ def check_policies(config: dict) -> None:
         raise ValueError("A linked condition names another frozen campaign by ID and configuration hash")
     if not ordinal_list(link["repetitions"], ordinals) or sorted(own + link["repetitions"]) != ordinals:
         raise ValueError("Linked campaigns must declare every repetition exactly once")
+    if selection == FIRST_SUCCESS and link["repetitions"] != ordinals[:len(link["repetitions"])]:
+        raise ValueError("A first-success continuation runs only the ordinals after the linked campaign's consumed ones")
     fingerprints = link["condition_fingerprints"]
     if (not isinstance(fingerprints, dict) or set(fingerprints) != {model.get("id") for model in config["models"]}
             or any(fingerprints[model["id"]] != condition_fingerprint(config, model) for model in config["models"])):
@@ -434,21 +443,31 @@ def check_tier_spec(models: list, tier_spec_path: Path) -> None:
             raise ValueError(f"{label} generation lacks the reasoning control its tier spec requires")
 
 
-def repetition_policies(ordinals: list[int] | None, linked_path: Path | None) -> tuple[dict, dict | None]:
-    """Policies for first success (no ordinals) or independent repetitions, plus the linked campaign."""
+def repetition_policies(ordinals: list[int] | None, linked_path: Path | None,
+                        selection: str = INDEPENDENT) -> tuple[dict, dict | None]:
+    """Policies for first success over every ordinal (no ordinals), or for declared ordinals.
+
+    Declared independent repetitions may link to the campaign holding the other ordinals. A
+    first-success continuation must link to the first-success campaign whose earlier ordinals it
+    continues.
+    """
     if ordinals is None:
         if linked_path is not None:
-            raise ValueError("Only independent repetitions can link to another campaign")
+            raise ValueError("A linked campaign requires declared repetition ordinals")
         return POLICIES, None
-    policies = {**POLICIES, "attempt_selection": INDEPENDENT, "repetitions": sorted(ordinals), "linked_condition": None}
+    policies = {**POLICIES, "attempt_selection": selection, "repetitions": sorted(ordinals), "linked_condition": None}
     if linked_path is None:
         return policies, None
     linked = read_manifest(linked_path)
-    selection = (linked.get("policies") or {}).get("attempt_selection")
+    linked_selection = (linked.get("policies") or {}).get("attempt_selection")
     if selection == FIRST_SUCCESS:
+        if linked_selection != FIRST_SUCCESS:
+            raise ValueError("A first-success continuation links only to a first-success campaign")
+        linked_ordinals = [ordinal for ordinal in range(1, linked["max_attempts"] + 1) if ordinal not in ordinals]
+    elif linked_selection == FIRST_SUCCESS:
         # Only a first-success campaign's first slot runs unconditionally; later slots ran only after failure.
         linked_ordinals = [1]
-    elif selection == INDEPENDENT:
+    elif linked_selection == INDEPENDENT:
         linked_ordinals = linked["policies"]["repetitions"]
     else:
         raise ValueError("Linked campaign has no supported attempt selection")
@@ -458,7 +477,8 @@ def repetition_policies(ordinals: list[int] | None, linked_path: Path | None) ->
 
 
 def compile_campaign(inventory_path: Path, selection_path: Path, output: Path, tier_spec_path: Path,
-                     ordinals: list[int] | None = None, linked_path: Path | None = None) -> dict:
+                     ordinals: list[int] | None = None, linked_path: Path | None = None,
+                     attempt_selection: str = INDEPENDENT) -> dict:
     inventory = json.loads(inventory_path.read_text())
     selection = json.loads(selection_path.read_text())
     required = KEYS - {"schema", "max_attempts", "inventory", "policies", "prompts", "provenance"}
@@ -466,7 +486,7 @@ def compile_campaign(inventory_path: Path, selection_path: Path, output: Path, t
         raise ValueError(f"Selection keys must be exactly {sorted(required)}")
     check_tier_spec(selection["models"], tier_spec_path)
     rows = [{key: row.get(key) for key in ("model", "provider", "status", "upstream_model", "proxy_request_model")} for row in inventory["models"]]
-    policies, linked = repetition_policies(ordinals, linked_path)
+    policies, linked = repetition_policies(ordinals, linked_path, attempt_selection)
     config = {**selection, "schema": SCHEMA, "max_attempts": 3, "inventory": {"sha256": digest(rows), "entries": rows}, "policies": policies, "prompts": prompt_manifest(selection["limits"]), "provenance": {"sources": source_provenance(), "packages": package_provenance(), "python": sys.version}}
     for model in config["models"]:
         model["effective_settings"] = None
@@ -519,12 +539,14 @@ def main():
     parser.add_argument("--selection", required=True, type=Path)
     parser.add_argument("--tier-spec", required=True, type=Path, help="per-model tier spec every selected model must match")
     parser.add_argument("--out", required=True, type=Path)
-    parser.add_argument("--repetitions", help="independent repetition ordinals this campaign runs, e.g. 2,3; omit for first success")
-    parser.add_argument("--linked-campaign", type=Path, help="frozen campaign holding the remaining repetitions of the same condition")
+    parser.add_argument("--repetitions", help="ordinals this campaign runs, e.g. 2,3; omit for first success over every ordinal")
+    parser.add_argument("--attempt-selection", choices=[INDEPENDENT, FIRST_SUCCESS], default=INDEPENDENT,
+                        help=f"policy for declared --repetitions: {INDEPENDENT}, or {FIRST_SUCCESS} to continue a linked first-success campaign's remaining ordinals")
+    parser.add_argument("--linked-campaign", type=Path, help="frozen campaign holding the other ordinals of the same condition")
     args = parser.parse_args()
     ordinals = [int(value) for value in args.repetitions.split(",")] if args.repetitions else None
     config = compile_campaign(args.inventory.resolve(), args.selection.resolve(), args.out.resolve(), args.tier_spec.resolve(),
-                              ordinals, args.linked_campaign.resolve() if args.linked_campaign else None)
+                              ordinals, args.linked_campaign.resolve() if args.linked_campaign else None, args.attempt_selection)
     print(json.dumps({"campaign_id": config["campaign_id"], "models": len(config["models"]), "reserved_slots": len(config["models"]) * len(repetitions(config)), "repetitions": repetitions(config), "max_attempts_per_model": config["max_attempts"], "attempt_selection": config["policies"]["attempt_selection"], "sha256": digest(config)}))
 
 

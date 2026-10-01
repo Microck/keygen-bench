@@ -397,9 +397,11 @@ def build_report(root: Path, cohort: Path, linked: list[tuple[Path, Path]] = ())
     if policy != ATTEMPT_SELECTION:
         raise ValueError("Campaign must select the first success or run independent repetitions, preserving every predetermined slot")
     campaign = campaign_cohort(config)
+    # A first-success continuation declares only the remaining ordinals of its linked campaign.
+    ordinals = (config.get("policies") or {}).get("repetitions") or [1, 2, 3]
     declared = {}
     for model in config["models"]:
-        for repetition in range(1, 4):
+        for repetition in ordinals:
             attempt_id = f"{model['id']}-rep-{repetition}"
             if attempt_id in declared:
                 raise ValueError("Duplicate predeclared attempt ID")
@@ -436,7 +438,7 @@ def build_report(root: Path, cohort: Path, linked: list[tuple[Path, Path]] = ())
         declared_group = bool(originals)
         state = ("success" if selected else
                  "interrupted" if any(row["status"] == "INTERRUPTED" for row in originals) else
-                 "exhausted" if len(originals) == 3 and all(row["declared_condition_match"] and row["outcome"] == "FAILURE" for row in originals) else
+                 "exhausted" if len(originals) == len(ordinals) and all(row["declared_condition_match"] and row["outcome"] == "FAILURE" for row in originals) else
                  "pending" if declared_group else "not_in_campaign")
         groups.append({"group_id": group_id, **{key: first[key] for key in
                        ("model_id", "model", "route", "effective_settings", "cohort_fingerprint", "kind", "cohort", "tier")},
