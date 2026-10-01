@@ -9,7 +9,8 @@ let data, site = null;
 function params() {
   const q = new URLSearchParams(location.search);
   const page = q.get("page") || "viewer";
-  let run = q.get("run");
+  // A main row shown as repetition 1 of a repetition group keeps its old ?run= link.
+  let run = data.run_aliases?.[q.get("run")] ?? q.get("run");
   if (!data.bySlug[run]) run = data.runs[0].slug;
   return { page, run };
 }

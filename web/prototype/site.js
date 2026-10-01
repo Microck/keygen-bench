@@ -42,6 +42,13 @@ const CSS = `
 .vb table.lb .nmt { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 0 1 auto; }
 .vb table.lb .flag { flex: none; }
 .vb table.lb col.c-rank { width: 28px; } .vb table.lb col.c-score { width: 72px; } .vb table.lb col.c-cost { width: 52px; } .vb table.lb col.c-out { width: 50px; } .vb table.lb col.c-min { width: 34px; }
+.vb table.lb col.c-sample { width: 52px; } .vb table.lb col.c-range { width: 66px; }
+.vb table.lb tr.sub td { color: var(--dim); }
+.vb table.lb tr.sub td.nm .nmt { padding-left: 14px; }
+.vb table.lb tr.sub.sel td { color: #fff; }
+.vb .att { display: grid; grid-template-columns: 18px minmax(0,1fr) auto auto; gap: 1px 5px; align-items: center; padding: 3px 4px; }
+.vb .att > span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.vb .att .btn { height: 14px; min-width: 30px; }
 .vb table.lb td.num, .vb table.lb th.num { padding-right: 6px; }
 .vb table.lb th { position: sticky; top: 0; z-index: 1; background: var(--desktop); color: #fff; text-shadow: 1px 1px 0 var(--dsktop2); font-weight: normal; text-align: left; padding: 2px 4px; cursor: pointer; white-space: nowrap; box-shadow: inset 0 -1px 0 var(--dsktop2); }
 .vb table.lb th.num, .vb table.lb td.num { text-align: right; }
@@ -147,8 +154,26 @@ export async function mount(root, ctx) {
     tabs.replaceChildren(...PAGES.map((p) => h("button", { class: "btn", "aria-current": p.id === page ? "page" : null, onclick: () => ctx.go({ page: p.id }) }, native && p.id === "ranking" ? "Results" : p.label)));
   }
   const meter = (v, max, color) => h("div", { class: "meter sunken" }, h("i", { style: { width: `calc(${Math.max(0, Math.min(1, v / max)) * 100}% - 1px)`, background: color ?? "var(--pattext)" } }));
-  // Each published score is one quality sample: the first valid attempt of up to three sequential attempts.
-  const selection = (r) => native ? `${r.provenance.scope}: first valid at attempt ${r.provenance.attempt_ordinal}; ${r.usage.attempts}/3 slots attempted` : r.rank ? `${r.rank} of ${data.runs.filter((x) => x.rank && x.cohort?.key === r.cohort?.key).length}` : r.failed ? "failed" : "exhibition";
+  // Each published score is one quality sample: the first valid attempt of up to three sequential attempts,
+  // except in cohorts with independent repetitions, where a repeated model reports every predetermined attempt.
+  const groups = data.repetition_groups ?? [];
+  const gid = (g) => `group:${g.cohort_key}:${g.model_key}`;
+  const groupById = Object.fromEntries(groups.map((g) => [gid(g), g]));
+  const groupOf = Object.fromEntries(groups.flatMap((g) => g.attempts.filter((a) => a.slug).map((a) => [a.slug, g])));
+  const repeatedCohort = (key) => groups.some((g) => g.cohort_key === key);
+  const sc = (v) => (v == null ? "--" : v.toFixed(1));
+  const repLine = (g) => g.eligible ? `median ${sc(g.median)} | range ${sc(g.min)}-${sc(g.max)} | ${g.eligible}/${g.declared} eligible` : `no eligible repetition | 0/${g.declared} eligible`;
+  const PENDING = new Set(["MISSING", "RESERVED", "RUNNING"]);
+  const attemptState = (a) => PENDING.has(a.status) ? "pending" : a.eligible ? (a.status === "RENDERED_UNSCORED" ? "eligible" : `${a.status}, eligible`) : [a.status, a.failure_category].filter(Boolean).join(" / ");
+  const fromMain = (a) => a.source_campaign_id?.startsWith("main-");
+  const outsideNote = (o) => `${fromMain(o) ? "Main-campaign" : "Repetition-campaign"} attempt ${o.ordinal ?? "?"} (${[o.status, o.failure_category].filter(Boolean).join(" / ")})${o.operator_cancelled ? " was cancelled by the operator. It" : ""} is outside the frozen condition: not a repetition, never counted or replaced.`;
+  const attemptedOutside = (g) => g.outside_condition.filter((o) => o.attempted);
+  const selection = (r) => {
+    if (!native) return r.rank ? `${r.rank} of ${data.runs.filter((x) => x.rank && x.cohort?.key === r.cohort?.key).length}` : r.failed ? "failed" : "exhibition";
+    const g = groupOf[r.slug];
+    if (g) return `independent repetition ${r.provenance.attempt_ordinal} of ${g.declared}; ${repLine(g)}`;
+    return `${repeatedCohort(r.cohort?.key) ? "one first-success sample; " : ""}${r.provenance.scope}: first valid at attempt ${r.provenance.attempt_ordinal}; ${r.usage.attempts}/3 slots attempted`;
+  };
 
   function scoreCard(r, { compact = false } = {}) {
     const parts = [["Tonal", r.parts.tonal_organization, 50], ["Develop.", r.parts.development, 40], ["Dynamics", r.parts.dynamics, 10]];
@@ -336,6 +361,43 @@ export async function mount(root, ctx) {
     { k: "out", l: "Out tok", num: true, v: (r) => r.usage.completion_tokens ?? 1e12, cell: (r) => (r.usage.completion_tokens == null ? "n/a" : tokens(r.usage.completion_tokens)) },
     { k: "min", l: "Min", num: true, v: (r) => r.usage.wall_minutes ?? 1e9, cell: (r) => Math.round(r.usage.wall_minutes ?? 0) },
   ];
+  // Cohorts with independent repetitions: a repeated model is one row (median, range, eligible count) and the
+  // selected row unfolds its attempts A1..An, each playable when eligible. Other models stay single samples.
+  const median = (xs) => { const v = xs.filter((x) => x != null).sort((a, b) => a - b), m = v.length >> 1; return v.length ? (v.length % 2 ? v[m] : (v[m - 1] + v[m]) / 2) : null; };
+  const stat = (e, f) => e.attempt ? (e.run ? f(e.run) : null) : e.group ? median(e.group.attempts.filter((a) => a.slug).map((a) => f(data.bySlug[a.slug]))) : f(e);
+  const blank = (e) => e.attempt && !e.run;
+  const REP_COLS = [
+    { k: "rank", col: "sample", l: "Sample", v: (e) => (e.group ? 0 : 1), cls: "rk", cell: (e) => e.attempt ? "A" + e.attempt.ordinal : e.group ? `med ${e.group.eligible}/${e.group.declared}` : "single" },
+    { k: "name", l: "Model", v: (e) => e.name, cls: "nm", cell: (e) => h("div", { class: "nmc", title: e.title ?? `${e.name} | one first-success sample (first valid at attempt ${e.provenance.attempt_ordinal})` }, e.attempt ? null : badge(e.maker), h("span", { class: "nmt" }, e.label ?? e.name)) },
+    { k: "score", l: "Score", t: "Median of eligible repetitions for repeated rows; the single sample otherwise", num: true, v: (e) => e.score ?? -1, cell: (e) => e.score == null ? "--" : [h("span", { class: "sbar", style: { width: Math.round(e.score * 0.34) + "px", background: scoreColor(e.score) } }), e.score.toFixed(1)] },
+    { k: "range", l: "Range", t: "Lowest and highest eligible repetition", num: true, v: (e) => e.group?.range ?? -1, cell: (e) => e.attempt ? "" : e.group?.eligible ? `${sc(e.group.min)}-${sc(e.group.max)}` : "--" },
+    { k: "cost", l: "Cost", t: "Repeated rows: median over eligible repetitions", num: true, v: (e) => stat(e, (r) => r.cost_usd) ?? 1e9, cell: (e) => blank(e) ? "" : money(stat(e, (r) => r.cost_usd)) },
+    { k: "min", l: "Min", t: "Repeated rows: median over eligible repetitions", num: true, v: (e) => stat(e, (r) => r.usage.wall_minutes) ?? 1e9, cell: (e) => { const v = stat(e, (r) => r.usage.wall_minutes); return blank(e) ? "" : v == null ? "n/a" : Math.round(v); } },
+  ];
+  const groupEntry = (g) => ({ group: g, slug: gid(g), name: g.name, maker: g.maker, score: g.median, exhibition: false, failed: !g.eligible, title: `${g.name} | ${repLine(g)}` });
+  const attemptEntry = (g, a) => ({ group: g, attempt: a, run: a.slug ? data.bySlug[a.slug] : null, slug: a.slug ?? `${gid(g)}:${a.ordinal}`, name: g.name, maker: g.maker, score: a.score,
+    label: `attempt ${a.ordinal}: ${attemptState(a)}${fromMain(a) ? " (main campaign)" : ""}`, title: `${g.name} attempt ${a.ordinal}: ${attemptState(a)}${a.slug ? " | double-click to play" : " | not playable"}` });
+  const repCounts = (cohort) => {
+    const gs = groups.filter((g) => g.cohort_key === cohort.key);
+    const singles = data.runs.filter((r) => r.cohort?.key === cohort.key && !groupOf[r.slug] && r.provenance.scope !== "pilot").length;
+    return `${gs.length} repeated x${gs[0].declared} (median) + ${singles} single first-success samples | diagnostics, not ranks`;
+  };
+  const groupCard = (g) => h("section", { class: "panel raised" },
+    h("div", { class: "row", style: { gap: "4px", padding: "1px 1px 0" } }, badge(g.maker), h("span", { class: "muted" }, "median"), h("span", { class: "grow" }), h("span", { class: "big" }, sc(g.median))),
+    h("div", { class: "shadow-text card-name", style: { padding: "0 1px" } }, g.name),
+    h("dl", { class: "kv sunken" },
+      ...[["Sample", `${g.declared} independent repetitions`], ["Median", sc(g.median)], ["Range", g.eligible ? `${sc(g.min)}-${sc(g.max)}` : "--"],
+        ["Eligible", `${g.eligible}/${g.declared}${g.pending ? `, ${g.pending} pending` : ""}`], ["State", g.state.replaceAll("_", " ")], ["Condition", g.tier]]
+        .flatMap(([a, b]) => [h("dt", {}, a), h("dd", { title: b }, b)])));
+  const attemptsPanel = (g, current) => h("section", { class: "panel raised" }, h("h2", {}, `Attempts: ${g.eligible}/${g.declared} eligible`),
+    h("div", { class: "att sunken" }, ...g.attempts.flatMap((a) => [
+      h("span", { style: { color: a.slug && a.slug === current ? "#fff" : null } }, "A" + a.ordinal),
+      h("span", { title: `${attemptState(a)}${fromMain(a) ? " | from the main first-success campaign" : " | from the repetition campaign"}` }, attemptState(a) + (fromMain(a) ? " (main)" : "")),
+      h("span", { style: { textAlign: "right", color: "#fff" } }, sc(a.score)),
+      a.slug ? h("button", { class: "btn", "aria-label": `Play attempt ${a.ordinal} in tracker`, onclick: () => ctx.go({ page: "viewer", run: a.slug }) }, "Play") : h("span", { class: "muted" }, "-")])),
+    ...attemptedOutside(g).map((o) => h("p", { class: "note" }, outsideNote(o))),
+    ...g.attempts.filter((a) => a.slug && a.slug !== current && data.bySlug[a.slug].provenance.status_note).map((a) => h("p", { class: "note" }, `A${a.ordinal}: ${data.bySlug[a.slug].provenance.status_note}`)),
+    h("p", { class: "note" }, "Every predetermined repetition runs regardless of earlier outcomes. The median and range use eligible repetitions only; failed repetitions stay listed and are never replaced. Repetition 1 is the main campaign's original attempt."));
   function ranking() {
     main.style.gridTemplateColumns = "minmax(0,1fr) clamp(160px, 27%, 200px)";
     main.style.gridTemplateRows = "auto auto minmax(0,1fr)";
@@ -346,11 +408,13 @@ export async function mount(root, ctx) {
     const cohortHead = h("h2", {});
     const cohortDD = cohorts.length > 1 ? dropdown({ label: "Cohort", items: cohorts.map((c) => ({ value: c.key, label: c.label })), value: S.cohort, width: 260, onChange: (key) => {
       S.cohort = key;
-      if (data.bySlug[S.sel]?.cohort?.key !== key) S.sel = data.runs.find((r) => r.cohort?.key === key)?.slug ?? S.sel;
+      const selCohort = groupById[S.sel]?.cohort_key ?? data.bySlug[S.sel]?.cohort?.key;
+      if (selCohort !== key) S.sel = data.runs.find((r) => r.cohort?.key === key)?.slug ?? S.sel;
       renderTable(); renderDetail();
     } }) : null;
-    const tbody = h("tbody"), thead = h("thead");
-    const counts = (c) => native ? `${c.main_first_successes} original + ${c.native_continuation_successes} new + ${c.archive_only_recoveries} recovery | 1 quality sample each | diagnostics, not ranks` : `${data.runs.filter((r) => r.rank).length} ranked | 1 attempt per model`;
+    const tbody = h("tbody"), thead = h("thead"), colgroup = h("colgroup");
+    const counts = (c, cohort) => cohort && repeatedCohort(cohort.key) ? repCounts(cohort) : native ? `${c.main_first_successes} original + ${c.native_continuation_successes} new + ${c.archive_only_recoveries} recovery | 1 quality sample each | diagnostics, not ranks` : `${data.runs.filter((r) => r.rank).length} ranked | 1 attempt per model`;
+    const legend = h("p", { class: "note", hidden: true });
     const countsText = h("span", { class: "shadow-text", style: { whiteSpace: "nowrap" }, title: data.limitations?.join("\n") });
     const detail = h("div", { class: "ft2-scroll detail", style: { gridColumn: "2", gridRow: "1 / span 3", display: "flex", flexDirection: "column", gap: "1px", minHeight: "0", overflowY: "auto" } });
     const top3 = h("section", { style: { gridColumn: "1", display: "grid", gridTemplateColumns: "repeat(3, minmax(0,1fr))", gap: "1px" } });
@@ -360,38 +424,52 @@ export async function mount(root, ctx) {
           countsText),
         cohortDD ? h("div", { class: "row", style: { gap: "4px" } }, h("span", { class: "shadow-text" }, "Cohort"), cohortDD) : null),
       top3,
-      h("section", { class: "panel raised", style: { gridColumn: "1" } }, cohortHead, h("div", { class: "sunken ft2-scroll", style: { flex: "1", minHeight: "0", overflow: "auto" } }, h("table", { class: "lb" }, h("colgroup", {}, ...COLS.map((c) => h("col", { class: "c-" + c.k }))), thead, tbody))),
+      h("section", { class: "panel raised", style: { gridColumn: "1" } }, cohortHead, legend, h("div", { class: "sunken ft2-scroll", style: { flex: "1", minHeight: "0", overflow: "auto" } }, h("table", { class: "lb" }, colgroup, thead, tbody))),
       detail);
     function renderTable() {
-      const col = COLS.find((c) => c.k === S.sort);
       const cohort = cohortOf(S.cohort);
+      const rep = !!cohort && repeatedCohort(cohort.key);
+      const cols = rep ? REP_COLS : COLS;
+      const col = cols.find((c) => c.k === S.sort) ?? cols[1];
       cohortHead.textContent = cohort ? `${cohort.label}${cohort.main_model_roster ? ` | ${cohort.results}/${cohort.main_model_roster} with a valid result` : ""}` : "";
-      countsText.textContent = counts(cohort?.selection_counts ?? data.selection_counts);
-      const list = data.runs.filter((r) => (S.maker === "All" || r.maker === S.maker) && (S.exh || !r.exhibition) && (!cohort || r.cohort?.key === cohort.key))
-        .slice().sort((a, b) => { const x = col.v(a), y = col.v(b); const d = x < y ? -1 : x > y ? 1 : 0; return (S.asc ? d : -d) || b.score - a.score; });
-      thead.replaceChildren(h("tr", {}, ...COLS.map((c) => h("th", {
-        class: c.num ? "num" : null, "aria-sort": c.k === S.sort ? (S.asc ? "ascending" : "descending") : null,
+      countsText.textContent = counts(cohort?.selection_counts ?? data.selection_counts, cohort);
+      legend.hidden = !rep;
+      legend.textContent = rep ? "Score: median of eligible independent repetitions (med k/n; select the row to play attempts A1-An) or one first-success sample (single). Not ranked." : "";
+      const runs = data.runs.filter((r) => (S.maker === "All" || r.maker === S.maker) && (S.exh || !r.exhibition) && (!cohort || r.cohort?.key === cohort.key) && !(rep && groupOf[r.slug]));
+      const entries = rep ? [...runs, ...groups.filter((g) => g.cohort_key === cohort.key && (S.maker === "All" || g.maker === S.maker)).map(groupEntry)] : runs;
+      const list = entries.slice().sort((a, b) => { const x = col.v(a), y = col.v(b); const d = x < y ? -1 : x > y ? 1 : 0; return (S.asc ? d : -d) || (b.score ?? -1) - (a.score ?? -1); });
+      const open = groupById[S.sel] ?? groupOf[S.sel];
+      const rows = list.flatMap((e) => e.group && e.group === open ? [e, ...e.group.attempts.map((a) => attemptEntry(e.group, a))] : [e]);
+      colgroup.replaceChildren(...cols.map((c) => h("col", { class: "c-" + (c.col ?? c.k) })));
+      thead.replaceChildren(h("tr", {}, ...cols.map((c) => h("th", {
+        class: c.num ? "num" : null, title: c.t ?? null, "aria-sort": c.k === S.sort ? (S.asc ? "ascending" : "descending") : null,
         onclick: () => { if (S.sort === c.k) S.asc = !S.asc; else { S.sort = c.k; S.asc = ["rank", "name", "cost", "min", "out"].includes(c.k); } renderTable(); },
       }, c.l + (c.k === S.sort ? (S.asc ? " \u25B2" : " \u25BC") : "")))));
-      tbody.replaceChildren(...list.map((r) => h("tr", { class: (r.slug === S.sel ? "sel " : "") + (r.exhibition ? "exh" : ""), onclick: () => { S.sel = r.slug; renderTable(); renderDetail(); }, ondblclick: () => ctx.go({ page: "viewer", run: r.slug }) },
-        ...COLS.map((c) => h("td", { class: [c.num ? "num" : "", c.cls ?? ""].join(" ") }, c.cell ? c.cell(r) : c.v(r))))));
+      const pick = (e) => (e.attempt && !e.run ? gid(e.group) : e.slug);
+      const play = (e) => (e.attempt ? e.run?.slug : e.group ? e.group.attempts.find((a) => a.slug)?.slug : e.slug);
+      tbody.replaceChildren(...rows.map((e) => h("tr", { class: (e.slug === S.sel ? "sel " : "") + (e.exhibition ? "exh" : "") + (e.attempt ? " sub" : ""), onclick: () => { S.sel = pick(e); renderTable(); renderDetail(); }, ondblclick: () => { const s2 = play(e); if (s2) ctx.go({ page: "viewer", run: s2 }); } },
+        ...cols.map((c) => h("td", { class: [c.num ? "num" : "", c.cls ?? ""].join(" ") }, c.cell ? c.cell(e) : c.v(e))))));
       top3.replaceChildren(...list.filter((r) => !r.exhibition && !r.failed).slice(0, 3).map((r, i) => h("div", { class: "panel raised", style: { flexDirection: "row", alignItems: "center", gap: "5px", cursor: "pointer" }, onclick: () => { S.sel = r.slug; renderTable(); renderDetail(); } },
         h("div", { class: "grow", style: { display: "grid", gap: "2px", minWidth: "0" } },
           h("div", { class: "row", style: { gap: "4px" } },
-            h("span", { class: "big" }, native ? "A" + r.provenance.attempt_ordinal : String(i + 1)),
+            h("span", { class: "big", title: r.group ? "median of eligible repetitions" : null }, r.group ? "MED" : native ? "A" + r.provenance.attempt_ordinal : String(i + 1)),
             h("img", { class: "badge", src: badge(r.maker).src, style: { width: "20px", height: "20px" }, alt: "" }),
             h("span", { class: "grow" }), h("span", { class: "big" }, r.score.toFixed(1))),
           h("div", { class: "shadow-text pod-name" }, r.name),
-          h("div", { style: { color: "var(--dim)", whiteSpace: "nowrap" } }, `${money(r.cost_usd)} | ${Math.round(r.usage.wall_minutes)} min`)))));
+          h("div", { style: { color: "var(--dim)", whiteSpace: "nowrap" } }, r.group ? `${sc(r.group.min)}-${sc(r.group.max)} | ${r.group.eligible}/${r.group.declared} eligible` : `${money(r.cost_usd)} | ${Math.round(r.usage.wall_minutes)} min`)))));
     }
     function renderDetail() {
+      const g0 = groupById[S.sel];
+      if (g0) { detail.replaceChildren(groupCard(g0), attemptsPanel(g0, null)); return; }
       const r = data.bySlug[S.sel];
+      const g = groupOf[r.slug];
       const w = r.loop.worst;
       const kv = (pairs) => h("dl", { class: "kv sunken" }, ...pairs.flatMap(([a, b]) => [h("dt", {}, a), h("dd", { title: typeof b === "string" ? b : null }, b ?? "-")]));
       const nf = (v) => (v == null ? "n/a" : "$" + v);
       detail.replaceChildren(
         h("section", { class: "panel raised" }, ...scoreCard(r, { compact: true }),
           h("button", { class: "btn", style: { height: "16px" }, onclick: () => ctx.go({ page: "viewer", run: r.slug }) }, "Open in tracker")),
+        ...(g ? [attemptsPanel(g, r.slug)] : []),
         h("section", { class: "panel raised" }, h("h2", {}, "Run"),
           kv([
             [native ? "Selection" : "Rank", selection(r)],
@@ -486,7 +564,7 @@ export async function mount(root, ctx) {
 
   function currentSupport() {
     main.style.gridTemplateColumns = "minmax(0,1fr) minmax(0,1fr)";
-    main.style.gridTemplateRows = "auto minmax(0,1fr)";
+    main.style.gridTemplateRows = groups.length ? "auto minmax(0,1.2fr) minmax(0,1fr)" : "auto minmax(0,1fr)";
     // Rosters, availability and pending states are counted within each cohort, never across cohorts.
     const cohorts = (data.cohorts?.length ? data.cohorts : [{ key: undefined, label: "", selection_counts: data.selection_counts }]);
     const inCohort = (key, cohortKey) => cohortKey === undefined || key === cohortKey;
@@ -504,8 +582,14 @@ export async function mount(root, ctx) {
         h("h2", {}, "Current campaign snapshot"),
         h("div", { class: "well sunken" },
           ...states.map(({ cohort, roster, pending }) => { const c = cohort.selection_counts ?? data.selection_counts; return h("p", {}, `${named ? cohort.label + ": " : ""}${c.main_first_successes} original first successes, ${c.native_continuation_successes} native continuation results and ${c.archive_only_recoveries} archive-only ${c.archive_only_recoveries === 1 ? "recovery" : "recoveries"} are available from the ${roster.length}-model main roster. ${pending.length} models have no eligible published output.`); }),
+          ...cohorts.filter((cohort) => cohort.repetitions).map((cohort) => { const n = cohort.repetitions; return h("p", {}, `${named ? cohort.label + ": " : ""}${n.models} models report every one of their predetermined independent repetitions (${n.eligible_attempts} of ${n.declared_attempts} eligible${n.pending_attempts ? `, ${n.pending_attempts} pending` : ""}); their row shows the median and range of the eligible repetitions. Repetition 1 is the original main-campaign attempt. The cohort's other models keep one first-success sample.`); }),
           ...pilots.map((run) => h("p", {}, `${run.name} is retained as a pilot-only result, outside main counts. This preview does not request another attempt for it.`)),
           h("p", {}, "No donation totals or confirmed payment links are published in this preview. Funding and availability can block unfinished work; no missing model receives a fabricated zero score."))),
+      ...(groups.length ? [h("section", { class: "panel raised", style: { gridColumn: "1 / -1" } }, h("h2", {}, "Independent repetitions: every attempt"),
+        h("div", { class: "well sunken ft2-scroll" }, ...groups.flatMap((g) => [
+          h("p", { style: { color: "#fff", margin: "0" } }, `${g.name}: ${repLine(g)}`),
+          h("p", { style: { margin: attemptedOutside(g).length ? "0" : null } }, g.attempts.map((a) => `A${a.ordinal} ${sc(a.score)} ${attemptState(a)}${fromMain(a) ? " (main)" : ""}`).join(" | ")),
+          ...attemptedOutside(g).map((o, i, all) => h("p", { class: "muted", style: { margin: i === all.length - 1 ? null : "0" } }, outsideNote(o)))])))] : []),
       h("section", { class: "panel raised" }, h("h2", {}, "Original states without published output"),
         h("div", { class: "well sunken ft2-scroll" }, ...states.flatMap(({ cohort, pending }) => [
           named && pending.length ? h("p", { style: { color: "#fff" } }, `${cohort.label} (state at metadata capture)`) : null,

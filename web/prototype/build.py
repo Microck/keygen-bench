@@ -9,13 +9,14 @@ import gzip
 import json
 import re
 import shutil
+import statistics
 import subprocess
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
-from benchmark.report import SAMPLE_NOTE, TIER_NOTE, campaign_cohort, read_cohort, tier_label
+from benchmark.report import REPETITION_NOTE, SAMPLE_NOTE, TIER_NOTE, campaign_cohort, read_cohort, tier_label
 
 RUNS = ROOT / "legacy/previous-work-20260930/benchmark/runs"
 HERE = Path(__file__).resolve().parent
@@ -177,6 +178,84 @@ def cohort_order(cohort: dict) -> tuple:
     return (CONDITION_ORDER.index(condition) if condition in CONDITION_ORDER else len(CONDITION_ORDER), cohort["key"])
 
 
+def repetition_groups(snapshots: list[dict], runs: list[dict], roster: set) -> tuple[list[dict], dict]:
+    """Public repetition groups and {superseded main slug: repetition-1 slug}.
+
+    A group replaces its model's main first-success row only when that row is the group's own
+    repetition 1 (same campaign, attempt ordinal 1, profile and inputs); anything else is refused.
+    """
+    main_cohorts = {snapshot["campaign_sha256"]: snapshot["cohort"] for snapshot in snapshots if snapshot["scope"] == "main"}
+    main_runs = {(run["cohort"]["key"], run["model_key"]): run for run in runs if run["provenance"]["scope"] == "main"}
+    groups, aliases, seen = [], {}, set()
+    for snapshot in snapshots:
+        if snapshot["scope"] != "repetitions":
+            continue
+        if snapshot.get("attempt_selection") != "independent_repetitions" or not isinstance(snapshot.get("repetition_groups"), list):
+            raise ValueError(f"{snapshot['campaign_id']}: a repetitions snapshot needs independent repetition groups")
+        public = {}
+        for item in snapshot["linked_campaigns"]:
+            sha = item["campaign_sha256"]
+            if sha == snapshot["campaign_sha256"]:
+                public[sha] = snapshot["campaign_id"]
+            elif main_cohorts.get(sha) == snapshot["cohort"]:
+                public[sha] = f"main-{sha[:12]}"
+            else:
+                raise ValueError("Every linked repetition campaign must be published as a main snapshot of the same cohort in this build")
+        by_slug = {run["slug"]: run for run in snapshot["runs"]}
+        claimed = set()
+        for run in snapshot["runs"]:
+            if run["provenance"]["campaign_sha256"] not in public:
+                raise ValueError(f"{run['name']}: repetition result comes from an undeclared campaign")
+            run["provenance"]["source_campaign_id"] = public[run["provenance"]["campaign_sha256"]]
+        for group in snapshot["repetition_groups"]:
+            model_key = price_id(group["name"]).rsplit("/", 1)[-1]
+            key = (snapshot["cohort"]["key"], model_key)
+            if key in seen or key not in roster or group.get("cohort") != snapshot["cohort"]:
+                raise ValueError(f"{group['name']}: repetition groups need one row per model of their cohort's main roster")
+            seen.add(key)
+            if [attempt["ordinal"] for attempt in group["attempts"]] != list(range(1, group["declared"] + 1)):
+                raise ValueError(f"{group['name']}: repetitions must list every declared ordinal once, in order")
+            attempts = []
+            for attempt in group["attempts"]:
+                run = by_slug.get(attempt["slug"]) if attempt["slug"] else None
+                if bool(attempt["eligible"]) != (run is not None) or (run and (
+                        run["model_key"] != model_key or run["score"] != attempt["score"]
+                        or run["provenance"]["attempt_ordinal"] != attempt["ordinal"]
+                        or run["provenance"]["campaign_sha256"] != attempt["source_campaign_sha256"]
+                        or run["provenance"]["condition_fingerprint"] != group["condition_fingerprint"])):
+                    raise ValueError(f"{group['name']}: repetition {attempt['ordinal']} differs from its published result")
+                if run:
+                    claimed.add(run["slug"])
+                attempts.append({**{key: attempt[key] for key in ("ordinal", "status", "outcome", "eligible", "failure_category",
+                                                                  "model_failure", "score", "slug", "source_campaign_sha256")},
+                                 "source_campaign_id": public[attempt["source_campaign_sha256"]]})
+            scores = [attempt["score"] for attempt in attempts if attempt["eligible"]]
+            if len(scores) != group["eligible"] or (scores and (group["median"], group["min"], group["max"]) != (statistics.median(scores), min(scores), max(scores))):
+                raise ValueError(f"{group['name']}: repetition summary differs from its attempts")
+            main = main_runs.get(key)
+            if main:
+                first = by_slug.get(attempts[0]["slug"]) if attempts[0]["slug"] else None
+                if not (first and main["provenance"]["attempt_ordinal"] == 1 and main["score"] == first["score"]
+                        and all(main["provenance"].get(field) == first["provenance"].get(field)
+                                for field in ("campaign_sha256", "profile_sha256", "input_sha256", "evaluation_fingerprint"))):
+                    raise ValueError(f"{main['name']}: the main first success is not repetition 1 of its repetition group; refusing to replace it")
+                aliases[main["slug"]] = first["slug"]
+            maker = public_maker(group["name"], {})
+            groups.append({"cohort_key": key[0], "model_key": model_key, "name": group["name"],
+                           "maker": group["maker"] if maker == "Other" else maker, "tier": group["tier"],
+                           "campaign_id": snapshot["campaign_id"], "condition_fingerprint": group["condition_fingerprint"],
+                           **{field: group[field] for field in ("declared", "eligible", "pending", "median", "min", "max", "range", "state")},
+                           "attempts": attempts,
+                           "outside_condition": [{**{field: attempt[field] for field in ("ordinal", "status", "failure_category", "attempted", "operator_cancelled",
+                                                                                         "retry", "source_campaign_sha256")},
+                                                  "source_campaign_id": public.get(attempt["source_campaign_sha256"], "unpublished campaign")}
+                                                 for attempt in group["outside_condition"]],
+                           "superseded_main_slug": main["slug"] if main else None})
+        if claimed != set(by_slug):
+            raise ValueError(f"{snapshot['campaign_id']}: every repetition result must belong to its model's group")
+    return groups, aliases
+
+
 def build_legacy() -> None:
     html = (RUNS / "index.html").read_text(encoding="utf-8")
     report = json.loads(re.search(r"const DATA=(\[.*?\]);\n", html, re.S).group(1))
@@ -306,23 +385,34 @@ def build_snapshots(sources: list[Path], publish_root: Path) -> None:
             if run["provenance"]["campaign_sha256"] not in original_hashes or (run["cohort"]["key"], run["model_key"]) in original_models:
                 raise ValueError("A recovery must belong to an original main cohort and cannot replace its selected success")
     original_roster = {(model["cohort_key"], model["model_key"]) for snapshot in snapshots if snapshot["scope"] == "main" for model in snapshot["roster"]}
-    selected_models = [(run["cohort"]["key"], run["model_key"]) for run in runs if run["provenance"]["scope"] != "pilot"]
-    if len(set(selected_models)) != len(selected_models) or any(model not in original_roster for model in selected_models):
+    selected_models = [(run["cohort"]["key"], run["model_key"]) for run in runs if run["provenance"]["scope"] not in ("pilot", "repetitions")]
+    repeated_models = [(run["cohort"]["key"], run["model_key"]) for run in runs if run["provenance"]["scope"] == "repetitions"]
+    if len(set(selected_models)) != len(selected_models) or any(model not in original_roster for model in selected_models + repeated_models):
         raise ValueError("Current selections must belong to their cohort's original roster without duplicate model rows")
+    # Repetition groups replace their models' main rows; roster and availability counts stay the main snapshot's.
+    groups, aliases = repetition_groups(snapshots, runs, original_roster)
     cohorts = sorted(({**snapshot["cohort"]} for snapshot in snapshots), key=cohort_order)
     cohorts = list({cohort["key"]: cohort for cohort in cohorts}.values())
     for cohort in cohorts:
         members = [run for run in runs if run["cohort"]["key"] == cohort["key"]]
-        cohort["results"] = sum(run["provenance"]["scope"] != "pilot" for run in members)
+        cohort["results"] = sum(run["provenance"]["scope"] not in ("pilot", "repetitions") for run in members)
         cohort["main_model_roster"] = sum(key == cohort["key"] for key, _ in original_roster)
         cohort["selection_counts"] = {name: sum(run["provenance"]["scope"] == scope for run in members) for name, scope in (
             ("main_first_successes", "main"), ("archive_only_recoveries", "recovery"),
             ("native_continuation_successes", "continuation"), ("musical_pilots", "pilot"))}
+        repeated = [group for group in groups if group["cohort_key"] == cohort["key"]]
+        if repeated:
+            cohort["repetitions"] = {"models": len(repeated), "declared_attempts": sum(group["declared"] for group in repeated),
+                                     "eligible_attempts": sum(group["eligible"] for group in repeated),
+                                     "pending_attempts": sum(group["pending"] for group in repeated),
+                                     "superseded_main_first_successes": sum(group["superseded_main_slug"] is not None for group in repeated)}
     publish_root.mkdir(parents=True, exist_ok=True)
     dist = publish_root / "dist"
     dist.mkdir()
     for source, snapshot in zip(sources, snapshots):
         for run in snapshot["runs"]:
+            if run["slug"] in aliases:
+                continue
             for key, relative in run["media"].items():
                 path = Path(relative)
                 if path.is_absolute() or ".." in path.parts or key not in {"xm", "wav", "audio", "evaluation"}:
@@ -372,9 +462,22 @@ def build_snapshots(sources: list[Path], publish_root: Path) -> None:
             "List-price estimates use maker prices retrieved 2026-09-29, not actual provider bills.",
             "The historical 2026-09-29 prototype dataset is not mixed into this snapshot.",
         ],
-        "campaigns": [{**{key: snapshot[key] for key in ("campaign_id", "campaign_sha256", "scope", "generated", "counts", "roster")}, "metadata_captured": snapshot.get("metadata_captured")} for snapshot in snapshots],
-        "flag_rules": FLAG_RULES, "runs": runs,
+        "campaigns": [{**{key: snapshot[key] for key in ("campaign_id", "campaign_sha256", "scope", "generated", "counts", "roster")}, "metadata_captured": snapshot.get("metadata_captured"),
+                       **({"attempt_selection": snapshot["attempt_selection"],
+                           "linked_campaigns": [{"campaign_id": snapshot["campaign_id"] if item["campaign_sha256"] == snapshot["campaign_sha256"] else f"main-{item['campaign_sha256'][:12]}",
+                                                 "campaign_sha256": item["campaign_sha256"], "repetitions": item["repetitions"]} for item in snapshot["linked_campaigns"]]}
+                          if snapshot["scope"] == "repetitions" else {})} for snapshot in snapshots],
+        "flag_rules": FLAG_RULES, "runs": [run for run in runs if run["slug"] not in aliases],
     }
+    if groups:
+        repeated_cohorts = [cohort for cohort in cohorts if "repetitions" in cohort]
+        out["limitations"] += [REPETITION_NOTE] + [
+            f"{cohort['label']}: {cohort['repetitions']['models']} models report every predetermined independent repetition; their row shows "
+            "the median and range of the eligible repetitions next to the eligible count, and each attempt is playable. Repetition 1 is the "
+            "main campaign's original attempt; attempts outside the frozen condition, such as an operator-cancelled slot, are listed but never "
+            "count as repetitions. The cohort's other models keep one first-success sample each." for cohort in repeated_cohorts]
+        out["repetition_groups"] = sorted(groups, key=lambda group: (cohort_order(next(c for c in cohorts if c["key"] == group["cohort_key"])), group["name"].lower()))
+        out["run_aliases"] = aliases
     (dist / "data.json").write_text(json.dumps(out, separators=(",", ":"), allow_nan=False) + "\n")
     assets = ["index.html", "app.js", "site.js"]
     assets += [str(path.relative_to(HERE)) for path in (HERE / "core").glob("*.js")]
@@ -388,6 +491,8 @@ def build_snapshots(sources: list[Path], publish_root: Path) -> None:
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(source, target)
     print(f"{main_count} original main first successes, {recovery_count} labeled recoveries, {continuation_count} native continuations, {pilot_count} labeled pilots -> {publish_root}")
+    if groups:
+        print(f"{len(groups)} repetition groups with {sum(group['eligible'] for group in groups)} eligible repetitions; {len(aliases)} main rows shown as repetition 1")
 
 
 if __name__ == "__main__":

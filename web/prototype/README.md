@@ -34,6 +34,23 @@ python3 web/prototype/serve.py \
 
 Repeat `--snapshot` to combine controller exports. Export separate cohorts with `--scope pilot`, `--scope continuation`, or `--scope recovery`. Recovery requires `--cohort /absolute/original/campaign.lock.json` and a separate recovery staging root. The builder rejects duplicate non-pilot model rows and a recovery that would replace an existing original selection.
 
+An independent-repetitions companion campaign (policy `independent_repetitions`, declaring repetitions 2-3 of a main campaign's condition) is exported with `--scope repetitions`. Pass the companion's root, its lock with `--cohort` (default `<campaign-root>/campaign.lock.json`), and each linked campaign's root and lock with `--linked ROOT COHORT`:
+
+```sh
+python3 web/prototype/collect_public.py \
+  --campaign-root /absolute/companion-repeats-root \
+  --cohort /absolute/companion-repeats-root/campaign.lock.json \
+  --linked /absolute/main-campaign-root /absolute/main-campaign-root/campaign.lock.json \
+  --scope repetitions --output /tmp/public-repetitions-snapshot
+
+python3 web/prototype/build.py \
+  --snapshot /tmp/public-main-snapshot \
+  --snapshot /tmp/public-repetitions-snapshot \
+  --publish-root /tmp/keygen-site-release
+```
+
+Every eligible repetition becomes its own playable run, `<model>-max-tier-a<ordinal>`, verified from its own attempt directory (local media or the checksum-verified archive). Its provenance records the attempt ordinal, the source campaign hash, the condition fingerprint and "independent predetermined repetition" instead of a first-success selection. The snapshot's `repetition_groups` list every declared attempt per model, including failed and pending ones, which have no playable run, plus attempts outside the condition, such as an operator-cancelled main slot. The build needs the linked main snapshot in the same invocation. A group replaces its model's main row only if that row is the group's repetition 1, matching campaign, ordinal 1, profile, inputs and evaluation; otherwise the build fails. The old main slug keeps working as a `?run=` alias. Roster and availability counts stay those of the main snapshot; models without a group keep their single first-success sample.
+
 Keep frozen controller source unchanged. When copying the publication tools outside that repository, copy `collect_public.py`, `build.py` and `data-src/prices.json` together, and set `PYTHONPATH` to the original controller repository. Set `RCLONE_CONFIG` to its private configuration when archive downloads are needed; never copy that configuration into public output.
 
 Each publication root must be a new, empty directory. The server requires an explicit root, binds to loopback by default, denies directory listings and hidden or symlink paths, and supports byte ranges for audio seeking. Never serve the repository, a controller root or an archive staging root. The supplied service unit records this deployment's actual paths; point it at a successfully built new release before restarting only the preview service.
@@ -57,12 +74,13 @@ The UI uses ft2-clone's "Why colors" palette, preset 10, for the classic blue FT
 
 `collect_public.py` uses the frozen-cohort selection and eligibility checks in `benchmark.report`. Local XM, canonical WAV and row-trace inputs must match the selected profile's pinned hashes. If those inputs were evicted, it verifies the archive checksum, manifest and every member before extracting only presentation inputs into temporary staging.
 
-The four scopes remain separate:
+The five scopes remain separate:
 
 - `main` retains the original first eligible successes.
 - `continuation` identifies actual new results from separately frozen native cohorts.
 - `recovery` identifies archive-only recovered historical attempts, including their reconstructed-status provenance.
 - `pilot` retains the separately labeled musical pilot outside main counts.
+- `repetitions` publishes every predetermined independent repetition of one frozen condition, across the companion and linked campaigns. Results show one row per repeated model with the median, range and eligible count (for example `median 52.5 | range 40.0-65.0 | 2/3 eligible`). Selecting the row lists attempts A1-A3, each playable when eligible. The Support page lists every attempt with its status and category. Single-sample rows in the same cohort are labeled `single`, and medians are never ranked against them.
 
 Scopes apply within a cohort. Each frozen campaign's experimental condition (provider default effort, declared tier or max-tier, plus prompt version) is its own cohort with its own table, roster and counts. Max-tier rows carry a `-max-tier` slug and a `(max-tier)` name suffix so they never collide with an earlier cohort's row for the same model. A selected attempt whose finalization failed only after its evaluation completed keeps its recorded status, such as `FINALIZATION_ERROR`, with an explanatory note.
 
