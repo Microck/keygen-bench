@@ -49,6 +49,21 @@ CAPABILITY_OVERRIDES = {
     ("go", "messages", "qwen3.8-flash"): {"effort": "xhigh", "approved_by": "user", "date": "2026-10-01"},
     ("go", "messages", "qwen3.8-max"): {"effort": "xhigh", "approved_by": "user", "date": "2026-10-01"},
 }
+# User-approved (2026-10-01) outgoing-history declarations, keyed by exact (provider, protocol, model).
+# The pinned OpenAI SDK's ChatCompletionMessage.model_dump() adds refusal=None to every Chat reply,
+# LiteLLM moves it into Message.provider_specific_fields, and LitellmModel sends that key back on
+# each assistant message. Go's upstream for these GLM models validates messages strictly and rejects
+# it with HTTP 400, so no second turn can succeed (runs/next-launch-prep-20261001/
+# go-blockers-investigation.md). The key never came from the endpoint: removing exactly that
+# SDK-synthesized value restores the assistant message as Go returned it. Native history is
+# unchanged; every other route keeps the original LitellmModel and its wire bytes (fail closed).
+HISTORY_KEY_REMOVALS = {
+    ("go", "chat", "glm-5.2"): {"role": "assistant", "key": "provider_specific_fields",
+                                "value": {"refusal": None}, "approved_by": "user", "date": "2026-10-01"},
+    ("go", "chat", "glm-5.3"): {"role": "assistant", "key": "provider_specific_fields",
+                                "value": {"refusal": None}, "approved_by": "user", "date": "2026-10-01"},
+}
+HISTORY_KEY_REMOVAL_MODEL = "GoStrictHistoryLitellmModel"
 WIRE_GENERATION_FIELDS = (
     "max_tokens", "max_completion_tokens", "max_output_tokens", "temperature",
     "reasoning_effort", "reasoning", "thinking", "output_config", "chat_template_kwargs",
@@ -309,6 +324,20 @@ def capability_override(model: dict) -> dict | None:
     return override
 
 
+def remove_synthesized_key(message: dict, removal: dict) -> dict:
+    """An outgoing copy of `message` without the declared SDK-synthesized key; never mutates history.
+
+    Any other value under that key came from somewhere else and is not dropped silently.
+    """
+    value = message.get(removal["key"])
+    if message.get("role") != removal["role"] or value is None:
+        return message
+    if value != removal["value"]:
+        raise ValueError(f"{removal['key']} carries data beyond the SDK-synthesized value; not removing it")
+    return {key: item for key, item in message.items() if key != removal["key"]}
+
+
+
 def _register_capability_override(llm, model: dict) -> None:
     """Declare the approved effort capability in LiteLLM's model registry for this exact name."""
     override = capability_override(model)
@@ -409,7 +438,7 @@ def validate_model(config: dict, model: dict) -> dict:
     wire_parameters = effective_generation | effective_generation.get("extra_body", {})
     transmitted_generation = {key: wire_parameters[key] for key in WIRE_GENERATION_FIELDS
                               if key in wire_parameters}
-    return {
+    effective = {
         "model_class": "LitellmResponseModel" if api == "responses" else "LitellmModel",
         "model_name": f"{prefix}/{model['model']}", "model_kwargs": kwargs,
         "requested_generation": model["generation"],
@@ -433,6 +462,11 @@ def validate_model(config: dict, model: dict) -> dict:
         "cost_policy": "native estimate when positive; zero/missing is unknown, not free",
         "observation_time_left": "every tool result, rendered by original native formatter",
     }
+    removal = HISTORY_KEY_REMOVALS.get((provider, api, model["model"]))
+    if removal is not None:
+        # Only declared routes carry this field; every other route's settings are unchanged.
+        effective["history_key_removal"] = {**removal, "model_type": f"native_models.{HISTORY_KEY_REMOVAL_MODEL}"}
+    return effective
 
 
 def credential_env(config: dict, model: dict) -> dict[str, str]:
@@ -633,6 +667,21 @@ def _construct_model(config: dict, model: dict, run_dir: Path, effective: dict):
     if model["provider"] == "go":
         kwargs["extra_headers"]["x-opencode-session"] = digest(str(run_dir.resolve()))
     cls = LitellmResponseModel if model["api"] == "responses" else LitellmModel
+    removal = effective.get("history_key_removal")
+    if removal is not None:
+        if HISTORY_KEY_REMOVALS.get((model["provider"], model["api"], model["model"])) is None:
+            raise ValueError("History key removal is declared only for its exact provider route")
+
+        class GoStrictHistoryLitellmModel(LitellmModel):
+            """The original LitellmModel; outgoing copies drop only the declared SDK-synthesized key."""
+
+            def _prepare_messages_for_api(self, messages: list[dict]) -> list[dict]:
+                return [remove_synthesized_key(message, removal)
+                        for message in super()._prepare_messages_for_api(messages)]
+
+        # Its trajectory model_type names this declared subclass, as effective settings record.
+        GoStrictHistoryLitellmModel.__module__ = "native_models"
+        cls = GoStrictHistoryLitellmModel
     return cls(model_name=effective["model_name"], model_kwargs=kwargs,
                litellm_model_registry=None, cost_tracking="ignore_errors", set_cache_control=None,
                observation_template=OBSERVATION, format_error_template=FORMAT_ERROR, multimodal_regex="")

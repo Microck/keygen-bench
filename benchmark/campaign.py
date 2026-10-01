@@ -96,8 +96,11 @@ def validate_readiness(model: dict, effective: dict) -> None:
     trajectory = payload.get("trajectory") or {}
     info = trajectory.get("info", {}).get("config", {})
     module = "litellm_response_model" if model["api"] == "responses" else "litellm_model"
+    # A declared history key removal runs the original model through its one named subclass.
+    removal = effective.get("history_key_removal")
+    model_type = removal["model_type"] if removal else f"minisweagent.models.{module}.{effective['model_class']}"
     if (info.get("agent_type") != "minisweagent.agents.default.DefaultAgent"
-            or info.get("model_type") != f"minisweagent.models.{module}.{effective['model_class']}"):
+            or info.get("model_type") != model_type):
         raise ValueError("Readiness trace was not produced by the original native model and DefaultAgent")
     messages = trajectory.get("messages", [])
     turns = audit_messages(messages, model)
