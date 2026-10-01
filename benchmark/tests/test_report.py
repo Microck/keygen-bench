@@ -349,6 +349,61 @@ class ReportTests(unittest.TestCase):
         self.assertEqual(len(reserved), 2)
         self.assertTrue(all(not row["attempted"] and row["outcome"] == "UNKNOWN" and row["model_failure"] is None for row in reserved))
 
+    def runner_overwrites_status_after_evaluation(self, directory, error):
+        # The runner writes indented JSON; the profile pins that exact evaluated status.
+        status = json.loads((directory / "status.json").read_text())
+        (directory / "status.json").write_text(json.dumps(status, indent=2, allow_nan=False) + "\n")
+        profile = json.loads((directory / "profile.json").read_text())
+        profile["inputs"]["artifacts"]["status.json"] = hashlib.sha256((directory / "status.json").read_bytes()).hexdigest()
+        self.write(directory / "profile.json", profile)
+        self.write(directory / "finalization-error.json", error)
+        status.update(status="FINALIZATION_ERROR", failure_category="EVAL", eligible=False, finalization_error=error)
+        (directory / "status.json").write_text(json.dumps(status, indent=2, allow_nan=False) + "\n")
+        return status
+
+    def test_upload_failure_after_pinned_evaluation_is_first_success_and_operator_stop_is_infra(self):
+        error = {"failure_category": "EVAL", "error": "TimeoutExpired"}
+        self.runner_overwrites_status_after_evaluation(self.attempt(1, 65), error)
+        second = self.attempt(2, None, category="AUTH", status_updates={"status": "AUTH_ERROR", "error": "operator stop"})
+        self.write(second / "operator-cancellation.json", {
+            "attempt_id": "claude-rep-2", "action": "operator_cancelled", "true_failure_category": "INFRA",
+            "recorded_failure_category_vehicle": "AUTH", "model_failure": False, "reason": "rep-1 already evaluated"})
+        result = self.publish()
+        group = result["groups"][0]
+        self.assertEqual((group["selected_attempt_id"], group["selected_craft"], group["state"]), ("claude-rep-1", 65, "success"))
+        first, cancelled, unused = sorted(result["rows"], key=lambda row: row["repetition"])
+        self.assertEqual((first["status"], first["recorded_status"]), ("RENDERED_UNSCORED", "FINALIZATION_ERROR"))
+        self.assertIsNone(first["finalization_error"])
+        self.assertEqual(first["post_evaluation_finalization_error"], error)
+        self.assertEqual((cancelled["status"], cancelled["recorded_status"]), ("OPERATOR_CANCELLED", "AUTH_ERROR"))
+        self.assertEqual((cancelled["failure_category"], cancelled["model_failure"]), ("INFRA", False))
+        self.assertEqual(cancelled["operator_cancellation"], "rep-1 already evaluated")
+        self.assertEqual(unused["status"], "MISSING")
+        self.assertEqual(result["counts"]["failure_categories"], {"INFRA": 1})
+        self.assertNotIn("AUTH", result["counts"]["evaluation_error_categories"])
+        self.assertEqual(result["counts"]["evaluation_failures"], 0)
+
+    def test_overwritten_status_that_does_not_rebuild_the_pinned_evaluation_stays_failed(self):
+        directory = self.attempt(1, 65)
+        status = self.runner_overwrites_status_after_evaluation(directory, {"failure_category": "EVAL", "error": "TimeoutExpired"})
+        status["wall_seconds"] = 1
+        (directory / "status.json").write_text(json.dumps(status, indent=2) + "\n")
+        self.attempt(2, 20)
+        self.skip(3)
+        result = self.publish()
+        self.assertEqual(result["groups"][0]["selected_attempt_id"], "claude-rep-2")
+        first = next(row for row in result["rows"] if row["repetition"] == 1)
+        self.assertEqual((first["status"], first["outcome"], first["failure_category"]), ("FINALIZATION_ERROR", "FAILURE", "EVAL"))
+
+    def test_operator_record_for_another_attempt_cannot_relabel_a_failure(self):
+        second = self.attempt(1, None, category="AUTH", status_updates={"status": "AUTH_ERROR"})
+        self.write(second / "operator-cancellation.json", {
+            "attempt_id": "claude-rep-2", "action": "operator_cancelled", "true_failure_category": "INFRA",
+            "recorded_failure_category_vehicle": "AUTH", "model_failure": False, "reason": "copied"})
+        row = next(row for row in self.publish()["rows"] if row["repetition"] == 1)
+        self.assertEqual((row["status"], row["failure_category"]), ("AUTH_ERROR", "AUTH"))
+        self.assertIn("operator cancellation record does not match", row["error"])
+
 
 if __name__ == "__main__":
     unittest.main()

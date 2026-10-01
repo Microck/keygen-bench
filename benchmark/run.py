@@ -1015,10 +1015,6 @@ def finalize_attempt(run_dir: Path, store) -> None:
     try:
         with slot(run_dir.parent, "scoring", 1):
             profile_attempt(run_dir)
-        metadata = store.archive_attempt(run_dir)
-        write_json(run_dir / "archive.json", metadata)
-        if store.evict_after_archive:
-            store.evict(run_dir, metadata)
     except BaseException as exc:
         interrupted = isinstance(exc, (KeyboardInterrupt, SystemExit))
         error = {"failure_category": "INFRA" if interrupted else "EVAL", "error": type(exc).__name__}
@@ -1028,6 +1024,33 @@ def finalize_attempt(run_dir: Path, store) -> None:
                       failure_category=error["failure_category"], eligible=False, finalization_error=error)
         write_json(run_dir / "status.json", status)
         raise
+    export_attempt(run_dir, store)
+
+
+def export_attempt(run_dir: Path, store) -> bool:
+    """Export an evaluated attempt; an export failure never changes the attempt's outcome.
+
+    status.json and profile.json stay as evaluated, local files are kept, and the failure is
+    recorded in archive-error.json so `export_deferred` can retry the export later.
+    """
+    try:
+        metadata = store.archive_attempt(run_dir)
+        write_json(run_dir / "archive.json", metadata)
+        if store.evict_after_archive:
+            store.evict(run_dir, metadata)
+    except BaseException as exc:
+        write_json(run_dir / "archive-error.json", {"error": type(exc).__name__, "local_files_retained": True,
+                                                    "recorded_at": time.time()})
+        if not isinstance(exc, Exception):
+            raise
+        return False
+    return True
+
+
+def export_deferred(root: Path, store) -> list[str]:
+    """Retry every export that failed after evaluation; return the attempts still unarchived."""
+    return [path.parent.name for path in sorted(root.glob("*/archive-error.json"))
+            if not (path.parent / "archive.json").exists() and not export_attempt(path.parent, store)]
 
 
 def fingerprint(config: dict, docker: list[str]) -> dict:
@@ -1140,7 +1163,9 @@ def main() -> None:
                     or frozen["snapshot"]["config_sha256"] != digest(config)):
                 raise ValueError("Recovery campaign does not match the immutable original cohort")
             docker = docker_command() if config["transport"]["backend"] == "local" else None
-            print(json.dumps({"interrupted_attempts": recover_attempts(root, config, docker), "rerun": False}))
+            from artifacts import ArtifactStore
+            print(json.dumps({"interrupted_attempts": recover_attempts(root, config, docker), "rerun": False,
+                              "unarchived_attempts": export_deferred(root, ArtifactStore(config["storage"]))}))
         return
     memory = memory_admission(config)
     from artifacts import ArtifactStore
@@ -1219,6 +1244,10 @@ def main() -> None:
             raise
         finally:
             pool.shutdown(wait=True)
+        unarchived = export_deferred(root, store)
+        if unarchived:
+            print(json.dumps({"unarchived_attempts": unarchived,
+                              "note": "Evaluated outcomes stand and local files are retained; run `recover` to retry the export."}))
         if errors:
             raise RuntimeError("Campaign finalization failed: " + ", ".join(errors))
         print("Model sequences completed, stopping after first eligible success or three attempts. Unused slots are SKIPPED_AFTER_SUCCESS. Scores are auxiliary diagnostics, not aesthetic rankings.")

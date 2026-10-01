@@ -15,6 +15,15 @@ import tempfile
 _FILES = {"status.json", "trajectory.json", "transport.json", "transport.jsonl", "responses.jsonl", "worker-result.json", "worker.log", "profile.json", "module-info.json", "campaign.json", "readiness.json"}
 _DIRS = {"submission", "canonical", "visualizer", "playback", "evaluations", "transport"}
 _SECRET_PREFIX = re.compile(rb"(?:oc_sk_|sk-ant-|sk-proj-)[A-Za-z0-9_-]{20,}")
+# Cloud copies get a size-proportional deadline. Observed Google Drive uploads of 90-142 MB
+# bundles took 20 s to more than 600 s (the old fixed bound), so the bound assumes only this
+# sustained floor, plus a fixed allowance for connection setup and checksum work.
+MIN_TRANSFER_BYTES_PER_SECOND = 128 * 1024
+TRANSFER_SETUP_SECONDS = 600
+
+
+def transfer_timeout(size: int) -> int:
+    return TRANSFER_SETUP_SECONDS + -(-size // MIN_TRANSFER_BYTES_PER_SECOND)
 
 
 def _hash(path: Path, algorithm: str = "sha256") -> str:
@@ -148,7 +157,8 @@ class ArtifactStore:
             destination = self.remote.rstrip("/") + "/" + generation + "/attempt.tar.gz"
             expected_md5 = _hash(bundle, "md5")
             if self.backend == "rclone":
-                self._command("copyto", str(bundle), destination, "--immutable", "--checksum")
+                self._command("copyto", str(bundle), destination, "--immutable", "--checksum",
+                              timeout=transfer_timeout(bundle.stat().st_size))
                 checksum = self._command("md5sum", destination).strip().split()
                 verified = len(checksum) >= 2 and checksum[0] == expected_md5
             else:
@@ -207,7 +217,8 @@ class ArtifactStore:
                 remote_stat = json.loads(self._command("lsjson", metadata["remote"], "--stat", timeout=60))
                 if remote_stat.get("Size") != metadata["bytes"]:
                     raise RuntimeError("Remote artifact size changed; refusing download")
-                self._command("copyto", metadata["remote"], str(bundle), "--immutable")
+                self._command("copyto", metadata["remote"], str(bundle), "--immutable",
+                              timeout=transfer_timeout(metadata["bytes"]))
             else:
                 source = Path(metadata["remote"])
                 if source.stat().st_size != metadata["bytes"]:

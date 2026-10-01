@@ -9,11 +9,12 @@ import json
 from pathlib import Path
 import shutil
 import struct
+import subprocess
 import tarfile
 import tempfile
 import threading
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 import wave
 
 from benchmark import campaign, drive, run
@@ -521,22 +522,51 @@ class ModelSequenceTests(unittest.TestCase):
             self.assertEqual(rows[1]["status"], outcome)
             self.assertTrue(rows[1]["usage_unknown"])
 
-    def test_finalization_failure_invalidates_run_even_with_eligible_profile(self):
+    def test_evaluation_failure_invalidates_run_and_skips_export(self):
         directory = self.root / "model-rep-1"
         status = self.status(1)
         status.update(status="RENDERED_UNSCORED", render="ok", eligible=True)
         run.write_json(directory / "status.json", status)
-        class Store:
-            def archive_attempt(self, run_dir):
-                raise OSError("storage unavailable")
-        with patch("score.profile_attempt", return_value={"eligible": True}), self.assertRaises(OSError):
-            run.finalize_attempt(directory, Store())
+        store = Mock()
+        with patch("score.profile_attempt", side_effect=RuntimeError("scorer failed")), self.assertRaises(RuntimeError):
+            run.finalize_attempt(directory, store)
         failed = self.status(1)
         self.assertEqual(failed["status"], "FINALIZATION_ERROR")
         self.assertFalse(failed["eligible"])
         self.assertEqual(failed["finalization_error"]["failure_category"], "EVAL")
+        store.archive_attempt.assert_not_called()
 
-    def test_interrupted_finalization_remains_explicit_and_never_eligible(self):
+    def test_export_failure_after_evaluation_keeps_outcome_and_is_retried(self):
+        directory = self.root / "model-rep-1"
+        status = self.status(1)
+        status.update(status="RENDERED_UNSCORED", render="ok", eligible=True)
+        run.write_json(directory / "status.json", status)
+        evaluated = (directory / "status.json").read_bytes()
+        class Store:
+            evict_after_archive = True
+            failures = 1
+            evicted = []
+            def archive_attempt(self, run_dir):
+                if self.failures:
+                    self.failures -= 1
+                    raise subprocess.TimeoutExpired(["rclone", "copyto"], 600)
+                return {"generation": "g"}
+            def evict(self, run_dir, metadata):
+                self.evicted.append(run_dir)
+        store = Store()
+        with patch("score.profile_attempt", return_value={"eligible": True}):
+            run.finalize_attempt(directory, store)
+        self.assertEqual((directory / "status.json").read_bytes(), evaluated)
+        self.assertFalse((directory / "finalization-error.json").exists())
+        self.assertFalse((directory / "archive.json").exists())
+        self.assertEqual(json.loads((directory / "archive-error.json").read_text())["error"], "TimeoutExpired")
+        self.assertEqual(store.evicted, [])
+        self.assertEqual(run.export_deferred(self.root, store), [])
+        self.assertEqual(json.loads((directory / "archive.json").read_text()), {"generation": "g"})
+        self.assertEqual(store.evicted, [directory])
+        self.assertEqual(run.export_deferred(self.root, store), [])
+
+    def test_interrupted_export_keeps_evaluated_outcome_and_propagates(self):
         directory = self.root / "model-rep-1"
         status = self.status(1)
         status.update(status="RENDERED_UNSCORED", render="ok", eligible=True)
@@ -546,10 +576,9 @@ class ModelSequenceTests(unittest.TestCase):
                 raise KeyboardInterrupt()
         with patch("score.profile_attempt", return_value={"eligible": True}), self.assertRaises(KeyboardInterrupt):
             run.finalize_attempt(directory, Store())
-        failed = self.status(1)
-        self.assertEqual(failed["status"], "INTERRUPTED")
-        self.assertFalse(failed["eligible"])
-        self.assertEqual(failed["finalization_error"]["failure_category"], "INFRA")
+        self.assertEqual(self.status(1)["status"], "RENDERED_UNSCORED")
+        self.assertTrue(self.status(1)["eligible"])
+        self.assertEqual(run.export_deferred(self.root, Mock(archive_attempt=Mock(side_effect=OSError()))), ["model-rep-1"])
 
     def test_success_requires_actual_eligible_profile_not_render_or_craft_score_alone(self):
         status = {"status": "RENDERED_UNSCORED", "render": "ok", "eligible": True,
