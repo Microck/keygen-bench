@@ -6,11 +6,14 @@ A FastTracker II-styled results site. The native preview has Tracker, Results, S
 
 [Inspect the results](https://ubuntu-paris.tailc896c6.ts.net/?page=ranking).
 
-The snapshot generated at **2026-10-01 11:16:42 UTC** has 38 playable rows: 30 original main first successes, six native continuation results, one archive-only recovered GPT-5.4 result and one retained Qwen3.8 Flash musical pilot. The main availability count is **37 of the original 57 models**; the pilot stays outside that numerator. The continuation metadata cutoffs are 11:08:25 UTC for Ashburn and 11:08:27 UTC for Paris.
+The current snapshot, `keygen-public-20261001-v4`, publishes two cohorts in separate tables chosen with the Results page's **Cohort** selector. Results from different cohorts are never listed or ranked together.
+
+- **Max-tier, prompt v2 (highest declared tier per exact route)** has 19 of 34 models with an eligible result from `next-max-tier-prompt-v2-ashburn-20261001`, captured at 21:16:07 UTC while that campaign was still running. Each row shows its declared tier and output cap, for example `highest declared tier: xhigh, 128k output`. Claude Fable 5.1's attempt 1 keeps its recorded `FINALIZATION_ERROR` label: the artifact-archive upload timed out after its eligible evaluation (craft 65.0) completed. Media for 18 evicted attempts were restored from checksum-verified gdrive2 archives; Fable 5.1's media were hash-verified locally.
+- **Provider default effort, prompt-v1** keeps the earlier 38 playable rows unchanged: 30 original main first successes, six native continuation results, one archive-only recovered GPT-5.4 result and one retained Qwen3.8 Flash musical pilot. Its availability count is **37 of the original 57 models**; the pilot stays outside that numerator. The continuation metadata cutoffs are 11:08:25 UTC for Ashburn and 11:08:27 UTC for Paris.
 
 This is a fixed snapshot, not a live campaign monitor. Later completions need an explicit refresh. Scores are auxiliary craft-v7 diagnostics, not musical-quality ranks. Original outcomes and selections remain unchanged, including Astra's original second-attempt selection.
 
-Deployment paths, hashes and verification are in [`publication-20261001.json`](publication-20261001.json). HTTPS uses the controller's existing Tailscale Funnel capability and a dedicated persistent `keygen-preview.service`. Only HTTPS port 443 was added; the existing port-10000 forwarding and stopped Minecraft service were left alone. No Cloudflare service or purchase is involved.
+Deployment paths, hashes and verification are in [`publication-20261001-v4.json`](publication-20261001-v4.json); the earlier single-cohort release is recorded in [`publication-20261001.json`](publication-20261001.json). HTTPS uses the controller's existing Tailscale Funnel capability and a dedicated persistent `keygen-preview.service`. Only HTTPS port 443 was added; the existing port-10000 forwarding and stopped Minecraft service were left alone. No Cloudflare service or purchase is involved.
 
 ## Build and serve a new snapshot
 
@@ -61,9 +64,11 @@ The four scopes remain separate:
 - `recovery` identifies archive-only recovered historical attempts, including their reconstructed-status provenance.
 - `pilot` retains the separately labeled musical pilot outside main counts.
 
+Scopes apply within a cohort. Each frozen campaign's experimental condition (provider default effort, declared tier or max-tier, plus prompt version) is its own cohort with its own table, roster and counts. Max-tier rows carry a `-max-tier` slug and a `(max-tier)` name suffix so they never collide with an earlier cohort's row for the same model. A selected attempt whose finalization failed only after its evaluation completed keeps its recorded status, such as `FINALIZATION_ERROR`, with an explanatory note.
+
 Public output contains original XM and canonical WAV files, MP3 listening derivatives, compact row traces and allowlisted evaluation summaries. Cohort, evaluator, profile and artifact hashes remain available. Full profiles, status files, trajectories, worker logs, provider routes, private configuration and credentials are not published.
 
-Maker list-price estimates use the prices retrieved on 2026-09-29, not actual bills or whole-campaign expenditure. Unknown prices stay `n/a`. The native Support page shows original unfinished histories explicitly as historical states, removes published continuation identities from that list, and marks the retained pilot without requesting another attempt. Unconfirmed donation links and historical fundraising estimates are not presented as current.
+Maker list-price estimates use the prices retrieved on 2026-09-29, not actual bills or whole-campaign expenditure. Unknown prices stay `n/a`. The native Support page lists each cohort's unfinished states separately, removes published continuation identities from that list, and marks the retained pilot without requesting another attempt. Unconfirmed donation links and historical fundraising estimates are not presented as current.
 
 `build.py --legacy` explicitly targets the frozen historical report under `legacy/previous-work-20260930/benchmark/runs` and labels its output historical. It cannot be combined with current snapshots. Generated `dist/` and `dist-public/` directories are gitignored.
 

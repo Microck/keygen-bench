@@ -128,7 +128,9 @@ def public_run(row: dict, group: dict, directory: Path, output: Path, campaign: 
                scope: str, prices: dict) -> dict:
     profile = row["profile"]
     name = price_id(row["model"])
-    run_slug = slug(name) + {"pilot": "-pilot", "recovery": "-recovered", "continuation": "-continued"}.get(scope, "")
+    # Cohorts are separate experiments; a max-tier result never shares a slug or name with an earlier cohort's row.
+    max_tier = row["cohort"]["condition"] == "highest-declared-tier"
+    run_slug = slug(name) + ("-max-tier" if max_tier else "") + {"pilot": "-pilot", "recovery": "-recovered", "continuation": "-continued"}.get(scope, "")
     stage = output / ".verified" / run_slug
     verification = verified_media(directory, profile, stage)
     media = output / "media"
@@ -156,9 +158,9 @@ def public_run(row: dict, group: dict, directory: Path, output: Path, campaign: 
     totals = row["totals"] or {}
     run = {
         "slug": run_slug, "model_key": name,
-        "name": name + {"pilot": " (musical pilot)", "recovery": " (archive-only recovery)", "continuation": " (native continuation)"}.get(scope, ""),
+        "name": name + (" (max-tier)" if max_tier else "") + {"pilot": " (musical pilot)", "recovery": " (archive-only recovery)", "continuation": " (native continuation)"}.get(scope, ""),
         "maker": maker, "exhibition": scope == "pilot", "tier": row["tier"], "cohort": row["cohort"],
-        "status": row["status"], "error": "", "score": row["craft"],
+        "status": row["recorded_status"] if row["post_evaluation_finalization_error"] else row["status"], "error": "", "score": row["craft"],
         "parts": {key: craft["parts"][key] for key in ("tonal_organization", "development", "dynamics")},
         "weights": {key: craft["weights"][key] for key in ("tonal_organization", "development", "dynamics")},
         "factors": {key: craft["factors"][key] for key in ("signal_integrity", "noise_integrity", "loop_continuity", "duration_sufficiency")},
@@ -189,6 +191,13 @@ def public_run(row: dict, group: dict, directory: Path, output: Path, campaign: 
         run["provenance"]["recovery_note"] = "Archive-only recovered historical attempt. Staged status matches the selected profile's pinned status hash. The original finalization-error history remains unchanged. No new musical inference."
     if scope == "continuation":
         run["provenance"]["continuation_note"] = "A new frozen native continuation cohort with its own configuration and evaluator fingerprints. Original campaigns, routes and historical outcomes remain unchanged."
+    if row["post_evaluation_finalization_error"]:
+        failure = row["post_evaluation_finalization_error"]
+        cause = failure.get("error") if isinstance(failure, dict) else None
+        archive = "" if (directory / "archive.json").is_file() else " No archive receipt was recorded for this attempt."
+        run["provenance"]["status_note"] = (f"Recorded status {row['recorded_status']}{f' ({cause})' if cause else ''} after its evaluation "
+                                            "completed. The profile pins the evaluated status hash, so the eligible evaluation and "
+                                            f"its score stand; no rescoring or new inference.{archive}")
     run["module"].update({"patterns": structure.get("distinct_patterns_in_order"), "instruments": structure.get("instruments_used"), "samples": structure.get("samples")})
     evaluation = {key: value for key, value in run.items() if key not in {"trace", "media", "price", "cost_usd"}}
     write_json(output / "evaluations" / f"{run_slug}.json", evaluation)

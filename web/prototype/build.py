@@ -312,8 +312,12 @@ def build_snapshots(sources: list[Path], publish_root: Path) -> None:
     cohorts = sorted(({**snapshot["cohort"]} for snapshot in snapshots), key=cohort_order)
     cohorts = list({cohort["key"]: cohort for cohort in cohorts}.values())
     for cohort in cohorts:
-        cohort["results"] = sum(run["cohort"]["key"] == cohort["key"] and run["provenance"]["scope"] != "pilot" for run in runs)
+        members = [run for run in runs if run["cohort"]["key"] == cohort["key"]]
+        cohort["results"] = sum(run["provenance"]["scope"] != "pilot" for run in members)
         cohort["main_model_roster"] = sum(key == cohort["key"] for key, _ in original_roster)
+        cohort["selection_counts"] = {name: sum(run["provenance"]["scope"] == scope for run in members) for name, scope in (
+            ("main_first_successes", "main"), ("archive_only_recoveries", "recovery"),
+            ("native_continuation_successes", "continuation"), ("musical_pilots", "pilot"))}
     publish_root.mkdir(parents=True, exist_ok=True)
     dist = publish_root / "dist"
     dist.mkdir()
