@@ -221,9 +221,53 @@ class NativeProtocolTests(unittest.TestCase):
                     self.assertEqual(history[-1]["tool_call_id"], "call-1")
                     self.assertIn("<time_left>", history[-1]["content"])
                     self.assertEqual(history[-2]["reasoning_content"], "preserved reasoning")
+                return messages, seen, model.serialize()
 
     def test_chat_native_history(self):
         self.roundtrip("chat")
+
+    def test_go_glm_chat_drops_only_the_sdk_synthesized_assistant_key(self):
+        # The SDK wraps its own refusal=None as provider_specific_fields; Go's GLM upstream rejects
+        # that key, so only its declared routes omit it from the outgoing assistant message.
+        sent = {}
+        for name in ("glm-5.2", "glm-5.3", "kimi-k3", "glm-5.3-flash"):
+            with self.subTest(name=name):
+                messages, seen, serialized = self.roundtrip("chat", "go", name)
+                assistant = seen[1][1]["messages"][2]
+                self.assertEqual(assistant["role"], "assistant")
+                self.assertEqual(assistant["tool_calls"][0]["id"], "call-1")
+                # Native history itself is unchanged on every route.
+                self.assertEqual(messages[2]["provider_specific_fields"], {"refusal": None})
+                sent[name] = assistant
+                declared = name in {"glm-5.2", "glm-5.3"}
+                self.assertEqual("provider_specific_fields" not in assistant, declared)
+                self.assertEqual(serialized["info"]["config"]["model_type"],
+                                 "native_models.GoStrictHistoryLitellmModel" if declared
+                                 else "minisweagent.models.litellm_model.LitellmModel")
+        other = {k: v for k, v in sent["kimi-k3"].items() if k != "provider_specific_fields"}
+        self.assertEqual(sent["kimi-k3"]["provider_specific_fields"], {"refusal": None})
+        for name in ("glm-5.2", "glm-5.3"):
+            self.assertEqual(sent[name], other)
+
+    def test_history_key_removal_is_route_scoped_and_value_exact(self):
+        def spec(provider, api, base):
+            level, reasoning = MAX_TIER[api] if api == "chat" else ("none-available", {})
+            value = tiered(model_spec(api, provider, base), level, **reasoning)
+            value["model"] = value["response_model"] = "glm-5.2"
+            return value
+
+        go = native.validate_model(CONFIG, spec("go", "chat", "https://opencode.ai/zen/go/v1"))
+        self.assertEqual(go["history_key_removal"]["key"], "provider_specific_fields")
+        for provider, api, base in (("nim", "chat", "https://integrate.api.nvidia.com/v1"),
+                                    ("go", "messages", "https://opencode.ai/zen/go/v1")):
+            with self.subTest(provider=provider, api=api):
+                self.assertNotIn("history_key_removal", native.validate_model(CONFIG, spec(provider, api, base)))
+        removal = native.HISTORY_KEY_REMOVALS[("go", "chat", "glm-5.2")]
+        endpoint_data = {"role": "assistant", "content": "", "provider_specific_fields": {"refusal": "no"}}
+        with self.assertRaisesRegex(ValueError, "beyond the SDK-synthesized value"):
+            native.remove_synthesized_key(endpoint_data, removal)
+        tool = {"role": "tool", "content": "ok", "provider_specific_fields": {"refusal": None}}
+        self.assertIs(native.remove_synthesized_key(tool, removal), tool)
 
     def test_responses_native_reasoning_history(self):
         self.roundtrip("responses")
