@@ -172,6 +172,13 @@ class BenchmarkTests(unittest.TestCase):
         # A first-success campaign's later slots ran only after a failure, so they cannot be linked samples.
         with self.assertRaisesRegex(ValueError, "exactly once"):
             compile_repeats([1, 2], "overlap.json")
+        continuation = campaign.compile_campaign(self.inventory_path, self.selection_path, self.root / "continuation.json",
+                                                 self.tier_spec_path, [2, 3], self.root / "campaign.json", campaign.FIRST_SUCCESS)
+        self.assertEqual((continuation["policies"]["attempt_selection"], campaign.repetitions(continuation),
+                          continuation["policies"]["linked_condition"]["repetitions"]), (campaign.FIRST_SUCCESS, [2, 3], [1]))
+        with self.assertRaisesRegex(ValueError, "after the linked campaign's consumed"):
+            campaign.compile_campaign(self.inventory_path, self.selection_path, self.root / "gap.json",
+                                      self.tier_spec_path, [1, 3], self.root / "campaign.json", campaign.FIRST_SUCCESS)
         self.selection["limits"]["command_seconds"] += 60
         self.selection_path.write_text(json.dumps(self.selection))
         with self.assertRaisesRegex(ValueError, "condition differs"):
