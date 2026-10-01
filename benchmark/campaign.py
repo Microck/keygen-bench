@@ -56,6 +56,25 @@ def upstream_provenance(api: str) -> dict:
             model: file_digest(Path(package.locate_file("minisweagent/models/" + filename)))}
 
 
+def unblocked_exchanges(records: list) -> list:
+    """Transport records without the sends a content-filter block discarded.
+
+    run.bound_content_filter appends a ``content_filter_block`` record after each blocked send
+    (its request, plus its response when the block arrived as HTTP 200); the re-send follows.
+    """
+    kept, start = [], None
+    for record in records:
+        if record.get("event") == "content_filter_block":
+            if start is not None:
+                del kept[start:]
+            start = None
+            continue
+        if record.get("event") == "request":
+            start = len(kept)
+        kept.append(record)
+    return kept
+
+
 def validate_readiness(model: dict, effective: dict) -> None:
     from native_models import audit_messages, transmitted_reasoning
     evidence = model["readiness"]["evidence"]
@@ -94,24 +113,27 @@ def validate_readiness(model: dict, effective: dict) -> None:
                        and (message.get("extra") or {}).get("returncode") == 0 for message in observations)):
         raise ValueError("Readiness requires an executed native tool result between the two model turns")
     records = payload.get("transport") or []
-    requests = [record for record in records if record.get("event") == "request"]
+    sent = [record for record in records if record.get("event") == "request"]
+    # Exchanges that reached native history; content-filter-blocked sends are dropped here only.
+    kept = unblocked_exchanges(records)
+    requests = [record for record in kept if record.get("event") == "request"]
     responses = [record for record in records if record.get("event") == "response"]
-    if (len(requests) < 2 or len(responses) < 2
+    if (len(requests) < 2 or sum(record.get("event") == "response" for record in kept) < 2
             or any(record.get("identity_status") != "identity_match" for record in responses)
             or any(not re.fullmatch(r"[a-f0-9]{64}", record.get(key, ""))
-                   for record in requests for key in ("input_sha256", "tools_sha256"))
+                   for record in sent for key in ("input_sha256", "tools_sha256"))
             or requests[0]["input_sha256"] == requests[1]["input_sha256"]
-            or any(record.get(key) == digest(None) for record in requests for key in ("input_sha256", "tools_sha256"))
-            or len({record["tools_sha256"] for record in requests}) != 1
+            or any(record.get(key) == digest(None) for record in sent for key in ("input_sha256", "tools_sha256"))
+            or len({record["tools_sha256"] for record in sent}) != 1
             or any(any((record.get("settings") or {}).get(key) != value
-                       for key, value in effective["expected_transmitted_generation"].items()) for record in requests)):
+                       for key, value in effective["expected_transmitted_generation"].items()) for record in sent)):
         raise ValueError("Readiness requires two recorded native request/response exchanges with exact transmitted settings")
     # A declared tier counts only if its reasoning control was actually sent on every request.
     required = transmitted_reasoning(model)
     if (effective.get("transmitted_reasoning") != required
             or any(effective["expected_transmitted_generation"].get(key) != value for key, value in required.items())
             or any(any((record.get("settings") or {}).get(key) != value for key, value in required.items())
-                   for record in requests)):
+                   for record in sent)):
         raise ValueError("Readiness must record the declared tier's reasoning control in every transmitted request")
 
 

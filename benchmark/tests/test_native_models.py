@@ -13,6 +13,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from benchmark import native_models as native
+from benchmark import run
 
 CONFIG = {"native": {"timeout_seconds": 5, "retries": 0}}
 RETRYING = {"native": {"timeout_seconds": 5, "retries": native.MAX_TRANSPORT_RETRIES}}
@@ -43,8 +44,11 @@ MAX_TIER = {
 
 
 @contextmanager
-def peer(api, error=False, failures=(), truncated=False):
-    """failures: (status, message) replies sent before the normal reply, one per request."""
+def peer(api, error=False, failures=(), truncated=False, refused=0):
+    """failures: (status, message) replies sent before the normal reply, one per request.
+
+    refused: Messages replies after the failures that Anthropic's content filter blocked
+    (stop_reason refusal, no content)."""
     seen = []
 
     class Handler(BaseHTTPRequestHandler):
@@ -70,6 +74,10 @@ def peer(api, error=False, failures=(), truncated=False):
                 return
             if error:
                 response = {"error": {"type": "gateway_error", "message": "BENCHMARK_SYNTHETIC_SECRET"}}
+            elif len(seen) <= len(failures) + refused:
+                response = {"id": f"msg-{len(seen)}", "type": "message", "role": "assistant",
+                            "model": payload["model"], "stop_reason": "refusal", "stop_sequence": None,
+                            "content": [], "usage": {"input_tokens": 11, "output_tokens": 0}}
             elif truncated:
                 response = {"id": "chatcmpl-cut", "object": "chat.completion", "created": 1,
                             "model": payload["model"], "choices": [{"index": 0, "finish_reason": "length",
@@ -271,21 +279,63 @@ class NativeProtocolTests(unittest.TestCase):
                 self.assertNotIn("BENCHMARK_SYNTHETIC_SECRET", audit)
                 self.assertIn("gateway_error", audit)
 
-    def query_once(self, config, failures=(), truncated=False, api="chat"):
-        """One real SDK query against the peer; returns (outcome, seen, transport events)."""
-        with tempfile.TemporaryDirectory() as temporary, peer(api, failures=failures, truncated=truncated) as (base, seen):
+    def query_once(self, config, failures=(), truncated=False, api="chat", refused=0, bound=False):
+        """One real SDK query against the peer; returns (outcome, seen, transport events).
+
+        bound applies the production content-filter bound (run.bound_content_filter)."""
+        with tempfile.TemporaryDirectory() as temporary, \
+                peer(api, failures=failures, truncated=truncated, refused=refused) as (base, seen):
             root = Path(temporary)
             spec = model_spec(api, {"chat": "go", "messages": "anthropic_oauth", "responses": "codex_oauth"}[api], base)
             if api == "chat":
                 spec["model"] = spec["response_model"] = "kimi-k3"
             with patch.object(native, "validate_url", return_value=base), worker_env(root, spec):
                 model = native.build_probe_model(config, spec, root)
+                if bound:
+                    model = run.bound_content_filter(model, spec, root)
                 try:
                     outcome = model.query([{"role": "user", "content": "Use bash"}])
                 except Exception as error:  # noqa: BLE001 - the classified failure is the outcome
                     outcome = error
                 events = [json.loads(line)["event"] for line in (root / "transport.jsonl").read_text().splitlines()]
+                self.totals = run.summarize(root, spec)
                 return outcome, seen, events
+
+    def test_content_filter_block_is_resent_up_to_three_sends(self):
+        blocked = (400, "Output blocked by content filtering policy")
+        for form, kwargs, events in (
+                ("stop_reason", {"refused": 2}, ["request", "response", "content_filter_block"]),
+                ("error", {"failures": [blocked] * 2}, ["request", "content_filter_block"])):
+            with self.subTest(form=form):
+                outcome, seen, recorded = self.query_once(RETRYING, api="messages", bound=True, **kwargs)
+                self.assertIsInstance(outcome, dict)
+                self.assertEqual(outcome["extra"]["actions"][0]["command"], "echo ready")
+                # Every send is identical: a blocked reply never enters native history.
+                self.assertEqual(len(seen), 3)
+                self.assertEqual(len({json.dumps(payload, sort_keys=True) for _, payload in seen}), 1)
+                self.assertEqual(recorded, events * 2 + ["request", "response"])
+                self.assertEqual((self.totals["content_filter_blocks"], self.totals["transport_retries"]), (2, 0))
+
+    def test_third_content_filter_block_fails_as_content_filter(self):
+        blocked = (400, "Output blocked by content filtering policy")
+        for kwargs in ({"refused": 3}, {"failures": [blocked] * 3}, {"failures": [blocked], "refused": 2}):
+            with self.subTest(**{key: len(value) if isinstance(value, list) else value for key, value in kwargs.items()}):
+                outcome, seen, recorded = self.query_once(RETRYING, api="messages", bound=True, **kwargs)
+                self.assertIsInstance(outcome, run.ContentFilterBlocked)
+                self.assertEqual(len(seen), run.CONTENT_FILTER_SENDS)
+                self.assertEqual(recorded.count("content_filter_block"), 3)
+                self.assertEqual(run.failure_category(outcome), "CONTENT_FILTER")
+                self.assertIn("CONTENT_FILTER", run.SEQUENCE_STOPPING_FAILURES)
+
+    def test_content_filter_bound_resends_nothing_else(self):
+        outcome, seen, _ = self.query_once(RETRYING, [(400, "prompt is too long")], api="messages", bound=True)
+        self.assertEqual(run.failure_category(outcome), "PROTOCOL")
+        self.assertEqual(len(seen), 1)
+        # The bound covers anthropic_oauth only; other providers send once, unclassified as a block.
+        outcome, seen, _ = self.query_once(RETRYING, failures=[(400, "Output blocked by content filtering policy")],
+                                           api="responses", bound=True)
+        self.assertNotEqual(run.failure_category(outcome), "CONTENT_FILTER")
+        self.assertEqual(len(seen), 1)
 
     def test_transport_failures_are_retried_within_bound_on_every_protocol(self):
         for api in ("chat", "messages", "responses"):

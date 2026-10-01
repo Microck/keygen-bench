@@ -411,13 +411,71 @@ def worker_credentials(config: dict, model: dict, key_name: str | None = None) -
             "LITELLM_MODE": "PRODUCTION", "LITELLM_LOCAL_MODEL_COST_MAP": "True"}
 
 
-# A sequence stops after these: later slots stay RESERVED instead of burning on a dead account.
-SEQUENCE_STOPPING_FAILURES = {"QUOTA", "AUTH"}
+# A sequence stops after these: later slots stay RESERVED instead of burning on a dead account
+# or on a provider content filter that blocked every allowed send of one request.
+SEQUENCE_STOPPING_FAILURES = {"QUOTA", "AUTH", "CONTENT_FILTER"}
+# Anthropic's output content filter blocks a whole reply: HTTP 200 with stop_reason refusal
+# (LiteLLM finish_reason "content_filter") and neither text nor tool call, or HTTP 400
+# "Output blocked by content filtering policy". A blocked reply never enters native history,
+# so the identical request is re-sent, at most CONTENT_FILTER_SENDS sends in total.
+CONTENT_FILTER_SENDS = 3
+CONTENT_FILTER_PROVIDERS = {"anthropic_oauth"}
+CONTENT_FILTER_MARKER = "output blocked by content filtering policy"
+
+
+class ContentFilterBlocked(RuntimeError):
+    """The provider's content filter blocked every allowed send of one request."""
+
+
+def content_filter_form(response=None, error=None) -> str | None:
+    """"error" or "stop_reason" when a send was blocked outright by the content filter."""
+    if error is not None:
+        blocked = type(error).__name__ == "ContentPolicyViolationError" or CONTENT_FILTER_MARKER in str(error).lower()
+        return "error" if blocked else None
+    choices = getattr(response, "choices", None) or []
+    if not choices or getattr(choices[0], "finish_reason", None) != "content_filter":
+        return None
+    message = choices[0].message
+    return None if message.tool_calls or message.content else "stop_reason"
+
+
+def bound_content_filter(native, model: dict, run_dir: Path):
+    """Re-send a content-filter-blocked request on this native model instance, within bound.
+
+    Each block is audited as a transport.jsonl ``content_filter_block`` record after its send.
+    The instance keeps its original class, history handling and serialization.
+    """
+    if model["provider"] not in CONTENT_FILTER_PROVIDERS:
+        return native
+    send = native._query
+
+    def query(messages, **kwargs):
+        for attempt in range(1, CONTENT_FILTER_SENDS + 1):
+            try:
+                response = send(messages, **kwargs)
+            except Exception as exc:
+                form = content_filter_form(error=exc)
+                if form is None:
+                    raise
+            else:
+                form = content_filter_form(response)
+                if form is None:
+                    return response
+            with (run_dir / "transport.jsonl").open("a", encoding="utf-8") as stream:
+                stream.write(json.dumps({"event": "content_filter_block", "send": attempt, "form": form}) + "\n")
+        raise ContentFilterBlocked(f"Content filter blocked all {CONTENT_FILTER_SENDS} sends of one request")
+
+    native._query = query
+    return native
+
+
+def native_failure_category(exc, run_dir=None) -> str:
+    return "content_filter" if isinstance(exc, ContentFilterBlocked) else classify_error(exc, run_dir)
 
 
 def failure_category(exc, run_dir=None) -> str:
-    category = classify_error(exc, run_dir)
-    return {"authentication_error": "AUTH", "quota_or_rate_limit": "QUOTA",
+    category = native_failure_category(exc, run_dir)
+    return {"authentication_error": "AUTH", "quota_or_rate_limit": "QUOTA", "content_filter": "CONTENT_FILTER",
             "transport_error": "TRANSPORT", "gateway_error": "PROTOCOL",
             "provider_request_error": "PROTOCOL", "native_model_error": "PROTOCOL"}.get(category, "INFRA")
 
@@ -433,7 +491,7 @@ def worker(spec_path: Path) -> None:
     secrets = [os.environ[target]]
     agent = None
     try:
-        agent = DefaultAgent(build_model(config, model, run_dir),
+        agent = DefaultAgent(bound_content_filter(build_model(config, model, run_dir), model, run_dir),
                              Sandbox(spec["docker"], spec["container"], config["limits"]["command_seconds"]),
                              system_template="{{ frozen_system }}", instance_template="{{ task }}",
                              step_limit=config["limits"]["steps"], cost_limit=0,
@@ -481,7 +539,7 @@ def summarize(run_dir: Path, model: dict | None = None, *, interrupted=False) ->
               "cached_tokens": 0, "completion_tokens": 0, "reasoning_tokens": 0,
               "model_seconds": 0.0, "sandbox_seconds": 0.0, "commands": 0,
               "in_flight_usage_unknown": bool(interrupted), "identity_mismatch": False,
-              "transport_retries": 0}
+              "transport_retries": 0, "content_filter_blocks": 0}
     path = run_dir / "trajectory.json"
     trajectory = {}
     if path.exists():
@@ -518,6 +576,10 @@ def summarize(run_dir: Path, model: dict | None = None, *, interrupted=False) ->
                 unanswered = True
                 settings = record.get("settings") or {}
                 totals["settings_mismatch"] |= any(settings.get(key) != value for key, value in expected_settings.items())
+            if record.get("event") == "content_filter_block":
+                # The block answered its send; the bounded re-send is not a transport retry.
+                unanswered = False
+                totals["content_filter_blocks"] += 1
             if record.get("event") == "response":
                 unanswered = False
                 callbacks.append(record)
@@ -756,8 +818,9 @@ def run_model_sequence(root: Path, config: dict, model: dict, docker: list[str] 
                        image: str, visualizer_image: str, store) -> dict:
     """Run fresh reserved slots in ordinal order; leave interrupted slots for explicit recovery.
 
-    A QUOTA or AUTH attempt is an account fault, not the model's: the sequence stops and the
-    later slots stay RESERVED for `recover` plus an explicit `retry` once the account is fixed.
+    A QUOTA or AUTH attempt is an account fault, not the model's, and a CONTENT_FILTER attempt
+    is a provider block of every allowed send: the sequence stops and the later slots stay
+    RESERVED for `recover` plus an explicit `retry` once the cause is fixed.
     """
     slots = [f"{model['id']}-rep-{ordinal}" for ordinal in range(1, config["max_attempts"] + 1)]
     for ordinal, attempt_id in enumerate(slots, 1):
@@ -1161,7 +1224,7 @@ def main() -> None:
         print("Model sequences completed, stopping after first eligible success or three attempts. Unused slots are SKIPPED_AFTER_SUCCESS. Scores are auxiliary diagnostics, not aesthetic rankings.")
         if stopped:
             print(json.dumps({"stopped_on_account_failure": stopped,
-                              "note": "QUOTA/AUTH are infrastructure faults; RESERVED slots are unused. Fix the account, then recover and retry explicitly."}))
+                              "note": "QUOTA/AUTH/CONTENT_FILTER are infrastructure faults; RESERVED slots are unused. Fix the cause, then recover and retry explicitly."}))
 
 
 if __name__ == "__main__":

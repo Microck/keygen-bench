@@ -124,6 +124,23 @@ class BenchmarkTests(unittest.TestCase):
             with self.subTest(mutation=mutation), self.assertRaises(ValueError):
                 self.compile()
 
+    def test_content_filter_blocked_send_is_set_aside_but_its_settings_still_count(self):
+        original = copy.deepcopy(self.proof)
+        blocked = copy.deepcopy(original["transport"][0])
+        # Blocked first send of the first request (HTTP 200 form), then its identical re-send.
+        self.proof["transport"] = [blocked, {"event": "response", "identity_status": "identity_match"},
+                                   {"event": "content_filter_block", "send": 1, "form": "stop_reason"},
+                                   *original["transport"]]
+        self.proof_path.write_text(json.dumps(self.proof))
+        self.model["readiness"]["evidence"]["artifact_sha256"] = campaign.file_digest(self.proof_path)
+        self.compile()
+        blocked["settings"] = {"max_tokens": 4096}  # reasoning control missing on the blocked send
+        self.proof["transport"][0] = blocked
+        self.proof_path.write_text(json.dumps(self.proof))
+        self.model["readiness"]["evidence"]["artifact_sha256"] = campaign.file_digest(self.proof_path)
+        with self.assertRaisesRegex(ValueError, "transmitted settings|reasoning control"):
+            self.compile()
+
     def test_first_success_contract_preserves_exact_prompts(self):
         config = self.compile()
         self.assertEqual(config["max_attempts"], 3)
@@ -398,7 +415,7 @@ class ModelSequenceTests(unittest.TestCase):
                 status.update(status="MODEL_FAILED", eligible=False, failure_category="MODEL")
             elif outcomes[ordinal - 1] == "protocol":
                 status.update(status="PROTOCOL_ERROR", failure_category="PROTOCOL")
-            elif outcomes[ordinal - 1] in {"QUOTA", "AUTH", "TRANSPORT"}:
+            elif outcomes[ordinal - 1] in {"QUOTA", "AUTH", "CONTENT_FILTER", "TRANSPORT"}:
                 status.update(status=outcomes[ordinal - 1] + "_ERROR", eligible=False,
                               failure_category=outcomes[ordinal - 1], model_failure=False)
             run.write_json(directory / "status.json", status)
@@ -449,15 +466,18 @@ class ModelSequenceTests(unittest.TestCase):
         self.assertEqual(result["skipped"], [])
         self.assertEqual([self.status(n)["status"] for n in (1, 2, 3)], ["MODEL_FAILED"] * 3)
 
-    def test_quota_or_auth_stops_sequence_and_leaves_later_slots_reserved(self):
-        result = self.execute(["failure", "QUOTA", "success"])
-        self.assertEqual(self.invoked, [1, 2])
-        self.assertEqual(result["stopped_after"], {"attempt_id": "model-rep-2", "failure_category": "QUOTA"})
-        self.assertEqual(result["reserved"], ["model-rep-3"])
-        self.assertIsNone(result["selected_attempt_id"])
-        self.assertEqual(result["skipped"], [])
-        self.assertEqual(self.status(2)["model_failure"], False)
-        self.assertEqual(self.status(3)["status"], "RESERVED")
+    def test_quota_or_content_filter_stops_sequence_and_leaves_later_slots_reserved(self):
+        for category in ("QUOTA", "CONTENT_FILTER"):
+            with self.subTest(category=category):
+                self.setUp()
+                result = self.execute(["failure", category, "success"])
+                self.assertEqual(self.invoked, [1, 2])
+                self.assertEqual(result["stopped_after"], {"attempt_id": "model-rep-2", "failure_category": category})
+                self.assertEqual(result["reserved"], ["model-rep-3"])
+                self.assertIsNone(result["selected_attempt_id"])
+                self.assertEqual(result["skipped"], [])
+                self.assertEqual(self.status(2)["model_failure"], False)
+                self.assertEqual(self.status(3)["status"], "RESERVED")
 
     def test_auth_failure_on_first_slot_consumes_only_that_slot(self):
         result = self.execute(["AUTH", "success", "success"])

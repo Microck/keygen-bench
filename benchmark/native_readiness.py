@@ -19,8 +19,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import campaign
 import run
-from native_models import (MAX_TRANSPORT_RETRIES, build_probe_model, classify_error, digest,
-                           redact_credentials)
+from native_models import MAX_TRANSPORT_RETRIES, build_probe_model, digest, redact_credentials
 
 MAX_ARTIFACT_BYTES = 16 * 1024 * 1024
 DEFAULT_LIMITS = {"steps": 5, "wall_seconds": 180, "command_seconds": 15}
@@ -28,8 +27,8 @@ SYSTEM = (
     "You are a native protocol readiness agent. Use only the declared bash function tool "
     "inside the offline workspace. A reply may contain one or several bash tool calls; every "
     "tool call in a reply runs in order. Never access credentials, host paths, or network. "
-    "Follow the three separate turns in the task and wait for each turn's executed tool "
-    "results before the next turn."
+    "Follow the task's turns in order and wait for each turn's executed tool results before "
+    "the next turn."
 )
 # M3: one long non-streaming generation on the production settings. It decides only
 # whether the route's transport survives a long request; it is never readiness evidence.
@@ -48,7 +47,7 @@ PROBE_POLICY = ("routes failing this probe get run_output_cap reduced to 64000 (
 # A connection that dropped (and was resent by a transport retry), a gateway error body,
 # an SDK timeout/connection error, or a request still open at the outer deadline.
 PROBE_FAIL_CATEGORIES = {"transport_error", "gateway_error", "transport_retry", "request_timeout"}
-PROBE_INFRASTRUCTURE_CATEGORIES = {"quota_or_rate_limit", "authentication_error"}
+PROBE_INFRASTRUCTURE_CATEGORIES = {"quota_or_rate_limit", "authentication_error", "content_filter"}
 PROBE_CHUNK_LINES = 2000  # Keeps each heredoc argument below Linux's 128 KiB MAX_ARG_STRLEN.
 PROBE_LINES = 12000
 
@@ -139,7 +138,7 @@ def worker(spec_path: Path) -> None:
             "backend_provenance": model["backend_provenance"],
         }
         run.write_json(root / "runtime-provenance.json", provenance)
-        native = build_probe_model(spec["config"], model, root)
+        native = run.bound_content_filter(build_probe_model(spec["config"], model, root), model, root)
         agent = DefaultAgent(
             native, run.Sandbox(spec["docker"], spec["container"], spec["limits"]["command_seconds"]),
             system_template="{{ frozen_system }}", instance_template="{{ task }}",
@@ -149,7 +148,7 @@ def worker(spec_path: Path) -> None:
         )
         result = agent.run(task=spec["task"], frozen_system=spec["system"])
     except Exception as exc:
-        result = {"exit_status": type(exc).__name__, "failure_category": classify_error(exc, root)}
+        result = {"exit_status": type(exc).__name__, "failure_category": run.native_failure_category(exc, root)}
     finally:
         if agent is not None:
             run.write_json(root / "trajectory.json", redact_credentials(agent.serialize(), secrets))
@@ -201,18 +200,19 @@ def transport_records(root: Path) -> list:
     return [json.loads(line) for line in path.read_text().splitlines()]
 
 
-def multi_call_replies(messages: list) -> list[int]:
-    """Indices of model replies whose two or more tool calls all executed with exit code 0.
+def executed_calls(messages: list) -> list[str]:
+    """Tool call IDs of model replies whose every tool call executed with exit code 0.
 
-    mini 2.4.6 records each call's ID in the reply's ``extra.actions`` and answers it with a
-    chat ``tool`` message (``tool_call_id``) or a Responses ``function_call_output`` (``call_id``).
+    A reply may carry one call (Codex) or several; either counts. mini 2.4.6 records each
+    call's ID in the reply's ``extra.actions`` and answers it with a chat ``tool`` message
+    (``tool_call_id``) or a Responses ``function_call_output`` (``call_id``).
     """
     replies = [index for index, message in enumerate(messages)
                if isinstance((message.get("extra") or {}).get("actions"), list) and message["extra"]["actions"]]
     verified = []
     for position, index in enumerate(replies):
         calls = [action.get("tool_call_id") for action in messages[index]["extra"]["actions"]]
-        if len(calls) < 2 or not all(calls) or len(set(calls)) != len(calls):
+        if not all(calls) or len(set(calls)) != len(calls):
             continue
         end = replies[position + 1] if position + 1 < len(replies) else len(messages)
         results = {}
@@ -220,7 +220,7 @@ def multi_call_replies(messages: list) -> list[int]:
             if message.get("role") == "tool" or message.get("type") == "function_call_output":
                 results[message.get("tool_call_id", message.get("call_id"))] = (message.get("extra") or {}).get("returncode")
         if all(call in results and results[call] == 0 for call in calls):
-            verified.append(index)
+            verified.extend(calls)
     return verified
 
 
@@ -236,8 +236,9 @@ def verify_pilot(spec: dict, root: Path, marker: str) -> dict:
     if (len(observations) < 3
             or any((message.get("extra") or {}).get("returncode") != 0 for message in observations)):
         raise ValueError("Pilot did not observe a successful native read-back tool result")
-    if not multi_call_replies(messages):
-        raise ValueError("Pilot did not observe one reply whose several native tool calls all executed")
+    # Write, read back and test: three answered calls, in one-call or multi-call replies.
+    if len(executed_calls(messages)) < 3:
+        raise ValueError("Pilot did not observe three native tool calls answered by their executed results")
     artifact = root / "submission/readiness.txt"
     if artifact.read_text() != marker + "\n":
         raise ValueError("Offline pilot artifact did not match the requested tool task")
@@ -250,7 +251,8 @@ def verify_pilot(spec: dict, root: Path, marker: str) -> dict:
             or provenance["backend_provenance"] != model["backend_provenance"]):
         raise ValueError("Pilot executable/package/backend provenance changed during qualification")
     records = transport_records(root)
-    events = [record.get("event") for record in records]
+    # A content-filter-blocked send never reached native history (run.bound_content_filter).
+    events = [record.get("event") for record in campaign.unblocked_exchanges(records)]
     if len(events) < 4 or len(events) % 2 or events != ["request", "response"] * (len(events) // 2):
         raise ValueError("Pilot audit does not contain complete sequential wire exchanges")
     payload = {
@@ -277,13 +279,13 @@ def verify_pilot(spec: dict, root: Path, marker: str) -> dict:
 
 def readiness_task(marker: str) -> str:
     return (
-        "Work in three successive turns. Turn 1, one bash tool call: mkdir -p submission and "
+        "Work in successive turns. Turn 1, one bash tool call: mkdir -p submission and "
         f"write the single line {marker} to submission/readiness.txt; print created. Wait for its "
-        "executed tool result. Turn 2, one reply with exactly two bash tool calls: the first runs "
-        "cat submission/readiness.txt; the second tests that the file content equals "
-        f"{marker}, for example test \"$(cat submission/readiness.txt)\" = {marker}. Wait for both "
-        f"executed tool results. Turn 3, one bash tool call: {run.FINISH}. Do not submit before "
-        "both turn-2 results."
+        "executed tool result. Turn 2, two bash tool calls, preferably both in one reply, "
+        "otherwise one per reply: the first runs cat submission/readiness.txt; the second tests "
+        f"that the file content equals {marker}, for example test \"$(cat submission/readiness.txt)\" "
+        f"= {marker}. Wait for both executed tool results. Final turn, one bash tool call: "
+        f"{run.FINISH}. Do not submit before both turn-2 results."
     )
 
 
@@ -472,7 +474,8 @@ def classify_long_generation(records: list, worker_category: str | None = None,
     """Decide the probe only from recorded wire exchanges and error categories, never file content.
 
     Every LiteLLM transport retry records a new request, so a request resent before any
-    response means the earlier connection dropped even when the retry later succeeded.
+    response means the earlier connection dropped even when the retry later succeeded. A
+    content-filter block answers its send; the bounded re-send is not a transport retry.
     """
     exchanges, requests, anomaly, pending = [], [], None, False
     for record in records:
@@ -481,6 +484,8 @@ def classify_long_generation(records: list, worker_category: str | None = None,
                 anomaly = anomaly or "transport_retry"
             pending = True
             requests.append(record)
+        elif record.get("event") == "content_filter_block":
+            pending = False
         elif record.get("event") == "response":
             pending = False
             if record.get("identity_status") == "gateway_error":
