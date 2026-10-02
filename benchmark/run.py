@@ -985,7 +985,8 @@ def probe_provider(model: dict, credential: str, timeout: float = 120) -> dict:
     return result
 
 
-# A key gate a probe or a finished attempt verified stays open this long without fresh evidence.
+# A key gate a probe or a finished attempt verified stays open this long without fresh evidence
+# (run.py queue --key-gate-fresh-seconds; 0 probes the key before every start).
 KEY_GATE_FRESH_SECONDS = 3600
 # A key whose provider reports its weekly usage window spent re-probes only this often.
 WEEKLY_LIMIT_BACKOFF_SECONDS = 6 * 3600
@@ -1030,9 +1031,9 @@ class KeyGates:
             return json.loads(json.dumps(gates))
 
     @staticmethod
-    def state(gate: dict, now: float) -> str:
+    def state(gate: dict, now: float, fresh: int = KEY_GATE_FRESH_SECONDS) -> str:
         """"open": usable without a probe; "wait": closed until next_probe_at; "probe": probe first."""
-        if gate.get("open") and now - (gate.get("verified_at") or 0) <= KEY_GATE_FRESH_SECONDS:
+        if fresh > 0 and gate.get("open") and now - (gate.get("verified_at") or 0) <= fresh:
             return "open"
         if not gate.get("open") and now < (gate.get("next_probe_at") or 0):
             return "wait"
@@ -1062,7 +1063,8 @@ class RerunQueue:
 
     A pooled route (concurrency.key_pools) is gated per key instead (KeyGates): an attempt starts
     only on a pool member with a free controller-wide cap slot whose gate is open, probing that
-    key with its own credential first when needed. An attempt that ends QUOTA closes only its key
+    key with its own credential first when its last verification is older than `key_gate_fresh`
+    seconds (0: before every start). An attempt that ends QUOTA closes only its key
     for `probe_interval`; any other non-model failure makes its key re-probe before its next use.
 
     Queues running side by side on one controller publish their waiting ordinals and running
@@ -1073,11 +1075,12 @@ class RerunQueue:
 
     def __init__(self, root: Path, config: dict, docker, snapshot: dict, store, *,
                  probe_interval: int, retry_interval: int, boat_reserve: int, probe=probe_provider, balance=None,
-                 holds=()):
+                 holds=(), key_gate_fresh: int = KEY_GATE_FRESH_SECONDS):
         import report
         self.report = report
         self.root, self.config, self.docker, self.snapshot, self.store = root, config, docker, snapshot, store
         self.probe_interval, self.retry_interval, self.boat_reserve = probe_interval, retry_interval, boat_reserve
+        self.key_gate_fresh = key_gate_fresh
         self.probe = probe
         self.balance = balance or self.boat_balance
         self.policies = config["policies"]
@@ -1188,7 +1191,7 @@ class RerunQueue:
             if lease is None:
                 continue
             with self.key_gates.edit() as gates:
-                state = KeyGates.state(gates.get(name, {}), time.time())
+                state = KeyGates.state(gates.get(name, {}), time.time(), self.key_gate_fresh)
             if state == "open":
                 return lease
             if state == "probe":
@@ -1654,6 +1657,8 @@ def main() -> None:
                         help="queue: Boat balance every start must leave after all running attempts' worst case")
     parser.add_argument("--hold", action="append", default=[], metavar="MODEL_ID",
                         help="queue: operator deferral; never probe or start this model's ordinals (they stay pending)")
+    parser.add_argument("--key-gate-fresh-seconds", type=int, default=KEY_GATE_FRESH_SECONDS,
+                        help="queue: seconds a verified pooled key starts attempts without a new probe; 0 probes before every start")
     args = parser.parse_args()
     def terminate(signum, frame):
         STOP.set()
@@ -1708,11 +1713,12 @@ def main() -> None:
             return
         lock_campaign(root / "campaign.lock.json", snapshot)
         if args.command == "queue":
-            if min(args.probe_interval, args.retry_interval) < 60 or args.boat_reserve_seconds < 0:
-                raise ValueError("Probe intervals are at least 60 s and the Boat reserve is non-negative")
+            if (min(args.probe_interval, args.retry_interval) < 60 or args.boat_reserve_seconds < 0
+                    or args.key_gate_fresh_seconds < 0):
+                raise ValueError("Probe intervals are at least 60 s; the Boat reserve and key gate freshness are non-negative")
             summary = RerunQueue(root, config, docker, snapshot, store, probe_interval=args.probe_interval,
                                  retry_interval=args.retry_interval, boat_reserve=args.boat_reserve_seconds,
-                                 holds=args.hold).run()
+                                 holds=args.hold, key_gate_fresh=args.key_gate_fresh_seconds).run()
             unarchived = export_deferred(root, store)
             print(json.dumps({"status": summary["status"], "stopped": summary["stopped"], "errors": summary["errors"],
                               "unarchived_attempts": unarchived,

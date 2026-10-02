@@ -744,6 +744,30 @@ class ModelSequenceTests(unittest.TestCase):
         self.assertTrue(gates["TEST_KEY_B"]["open"])
         self.assertEqual(result["status"], "COMPLETED")
 
+    def test_pooled_queue_with_zero_gate_freshness_probes_the_key_before_every_start(self):
+        root, config, snapshot = self.queue_root()
+        config["concurrency"] = {"workers": 1, "providers": {"go": 1}, "key_pools": {"TEST_KEY": {"TEST_KEY_A": 1}}}
+        snapshot = {**snapshot, "config_sha256": campaign.digest(config), "campaign": config}
+        (root / "campaign.lock.json").unlink()
+        run.lock_campaign(root / "campaign.lock.json", snapshot)
+        events = []
+        def probe(model, credential):
+            events.append("probe")
+            return {"category": "ok", "http_status": 200}
+        attempt = self.queue_attempt({"model-rep-1": "success", "model-rep-2-retry-1": "success"})
+        def pooled_attempt(*args, key_lease):
+            events.append(args[7])
+            attempt(*args)
+        controller = self.root / "controller"
+        controller.mkdir()
+        with patch.object(run, "run_one", side_effect=pooled_attempt), patch.object(run.STOP, "wait"), \
+                patch.object(tempfile, "tempdir", str(controller)), patch.dict("os.environ", {"TEST_KEY_A": "synthetic-a"}):
+            result = run.RerunQueue(root, config, None, snapshot, None, probe_interval=3600, retry_interval=60,
+                                    boat_reserve=0, probe=probe, key_gate_fresh=0).run()
+        # The finished attempt verified the key, but the second start still sends its own probe first.
+        self.assertEqual(events, ["probe", "model-rep-1", "probe", "model-rep-2-retry-1"])
+        self.assertEqual(result["status"], "COMPLETED")
+
     def test_funds_usage_limit_and_rate_limit_errors_are_quota_not_protocol(self):
         import litellm
         for error in (litellm.APIError(status_code=500, message="Upstream request failed: Insufficient account funds",
