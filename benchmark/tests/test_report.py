@@ -540,6 +540,38 @@ class ReportTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "frozen record"):
             report.build_report(root, root / "campaign.lock.json", linked)
 
+    def test_follow_up_queue_continues_an_earlier_queues_rerun_chain(self):
+        self.attempt(1, 65)
+        repeats, repeats_root = self.repeats()
+        self.attempt(2, None, config=repeats, root=repeats_root, category="QUOTA", status_updates={"status": "QUOTA_ERROR"})
+        self.attempt(3, 30, config=repeats, root=repeats_root)
+        first, first_root = self.queue(repeats, [(1, "fixture-cohort", "SUCCESS", None, self.root),
+                                                 (2, "fixture-repeats", "FAILURE", "QUOTA", repeats_root),
+                                                 (3, "fixture-repeats", "SUCCESS", None, repeats_root)])
+        self.rerun(first, first_root, 2, 1, None, "claude-rep-2", "fixture-repeats", category="INFRA",
+                   status_updates={"status": "INTERRUPTED"})
+        follow = copy.deepcopy(first)
+        follow["campaign_id"] = "fixture-queue-2"
+        interrupted = (first_root / "claude-rep-2-retry-1" / "status.json").read_bytes()
+        follow["policies"]["plan"]["claude"][1]["reruns"] = [{
+            "campaign_id": "fixture-queue", "attempt_id": "claude-rep-2-retry-1", "status": "INTERRUPTED",
+            "status_sha256": hashlib.sha256(interrupted).hexdigest(), "outcome": "FAILURE", "failure_category": "INFRA"}]
+        follow["policies"]["linked_campaigns"].append({"campaign_id": "fixture-queue", "config_sha256": report.digest(first),
+                                                       "condition_fingerprints": {"claude": report.condition_fingerprint(self.config, self.model)}})
+        temporary = tempfile.TemporaryDirectory(suffix="queue-2")
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        self.write(root / "campaign.lock.json", self.envelope(follow))
+        self.rerun(follow, root, 2, 2, 55, "claude-rep-2-retry-1", "fixture-queue")
+        linked = [(self.root, self.root / "campaign.lock.json"), (repeats_root, repeats_root / "campaign.lock.json"),
+                  (first_root, first_root / "campaign.lock.json")]
+        group, = report.build_report(root, root / "campaign.lock.json", linked)["groups"]
+        rep = group["repetitions"][1]
+        self.assertEqual((rep["attempt_id"], rep["source_campaign_id"], rep["craft"]), ("claude-rep-2-retry-2", "fixture-queue-2", 55))
+        self.assertEqual([(row["attempt_id"], row["source_campaign_id"]) for row in rep["superseded_attempts"]],
+                         [("claude-rep-2", "fixture-repeats"), ("claude-rep-2-retry-1", "fixture-queue")])
+        self.assertEqual((group["state"], group["scores"]), ("complete", [65, 55, 30]))
+
 
 if __name__ == "__main__":
     unittest.main()

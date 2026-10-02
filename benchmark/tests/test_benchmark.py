@@ -658,6 +658,49 @@ class ModelSequenceTests(unittest.TestCase):
                                     balance=lambda: 46799).run()
         self.assertEqual((self.invoked, result["status"], result["stopped"]["reason"]), ([], "STOPPED_BOAT_RESERVE", "boat_reserve"))
 
+    def test_rerun_queue_gates_each_model_holds_deferred_ones_and_continues_earlier_reruns(self):
+        root, config, snapshot = self.queue_root()
+        base = config["models"][0]
+        config["models"] = [{**base, "id": "fable", "model": "fable-exact", "response_model": "fable-exact"},
+                            {**base, "id": "held", "model": "held-exact", "response_model": "held-exact"}, base]
+        config["concurrency"] = {"workers": 3, "providers": {"go": 3}}
+        from benchmark import report
+        link = lambda model_id, n, index, campaign_id, status, outcome, category: {
+            "campaign_id": campaign_id, "attempt_id": report.queue_chain_id(model_id, n, index), "status": status,
+            "status_sha256": "0" * 64, "outcome": outcome, "failure_category": category}
+        scored = lambda model_id, n: {"repetition": n, "origin": link(model_id, n, 0, "fixture-linked", "RENDERED_UNSCORED", "SUCCESS", None)}
+        config["policies"]["plan"] = {
+            "fable": [{"repetition": 1, "origin": None}, scored("fable", 2), scored("fable", 3)],
+            "held": [{"repetition": 1, "origin": None}, scored("held", 2), scored("held", 3)],
+            "model": [scored("model", 1),
+                      {"repetition": 2, "origin": link("model", 2, 0, "fixture-linked", "QUOTA_ERROR", "FAILURE", "QUOTA"),
+                       "reruns": [link("model", 2, 1, "fixture-queue-1", "INTERRUPTED", "FAILURE", "INFRA")]},
+                      scored("model", 3)]}
+        snapshot = {**snapshot, "config_sha256": campaign.digest(config), "campaign": config}
+        (root / "campaign.lock.json").unlink()
+        run.lock_campaign(root / "campaign.lock.json", snapshot)
+        probed = []
+        def probe(model, credential):
+            probed.append(model["id"])
+            return {"category": "quota" if model["id"] == "fable" else "ok", "http_status": 429 if model["id"] == "fable" else 200}
+        waits = []
+        def wait(seconds):
+            waits.append(seconds)
+            if len(waits) >= 4:
+                run.STOP.set()
+        with patch.object(run, "run_one", side_effect=self.queue_attempt({"model-rep-2-retry-2": "success"})), \
+                patch.object(run.STOP, "wait", side_effect=wait), self.assertRaises(KeyboardInterrupt):
+            run.RerunQueue(root, config, None, snapshot, None, probe_interval=10 ** 6, retry_interval=10 ** 6,
+                           boat_reserve=0, probe=probe, holds=["held"]).run()
+        # Fable's usage limit closes only Fable; the held model is never probed or started.
+        self.assertEqual((probed, self.invoked), (["fable", "model"], ["model-rep-2-retry-2"]))
+        record = json.loads((root / "retry-model-rep-2-retry-2.json").read_text())
+        self.assertEqual((record["retry_of"], record["retry_of_campaign_id"], record["kind"]),
+                         ("model-rep-2-retry-1", "fixture-queue-1", "retry"))
+        state = json.loads((root / "queue-state.json").read_text())
+        self.assertEqual({(item["model_id"], item["state"]) for item in state["ordinals"]},
+                         {("fable", "next"), ("held", "held"), ("model", "done")})
+
     def test_pooled_queue_probes_each_key_once_and_a_quota_closes_only_that_key(self):
         root, config, snapshot = self.queue_root()
         config["concurrency"] = {"workers": 2, "providers": {"go": 2}, "key_pools": {"TEST_KEY": {"TEST_KEY_A": 1, "TEST_KEY_B": 1}}}
