@@ -22,6 +22,7 @@ else:
 SCHEMA = "keygen-cohort-report-2"
 ATTEMPT_SELECTION = "first_success_up_to_three_attempts"
 INDEPENDENT_SELECTION = "independent_repetitions"
+QUEUE_SELECTION = "independent_repetitions_infrastructure_reruns"
 # Quota, funds and rate-limit (429) failures are provider limits, never model or musical failures;
 # so is a request the provider content filter blocked on every allowed send (CONTENT_FILTER).
 NON_MODEL_FAILURES = {"INFRA", "AUTH", "QUOTA", "CONTENT_FILTER", "TRANSPORT", "PROTOCOL", "EVAL"}
@@ -42,6 +43,10 @@ REPETITION_NOTE = ("Each model has three independent predetermined repetitions u
                    "repetition runs regardless of earlier outcomes and every attempt is reported. The median and "
                    "range use the eligible repetitions only, next to their count; failed repetitions stay listed "
                    "and are never replaced. Quota, auth and content-filter stops leave slots pending, not failed.")
+QUEUE_NOTE = ("Each model has three independent predetermined repetitions under one frozen condition. A repetition "
+              "that never started or failed for a non-model reason (quota, auth, transport, protocol, infrastructure, "
+              "evaluation) is rerun as a separate attempt linked to it; scored outcomes and model failures are never "
+              "rerun or replaced. Each repetition's sample is the end of its rerun chain; superseded attempts stay listed.")
 UNIDENTIFIED_COHORT = {"key": "unidentified", "condition": "unidentified", "prompt_version": None,
                        "label": "unidentified cohort (no readable frozen campaign)"}
 
@@ -68,6 +73,18 @@ def condition_fingerprint(config: dict, model: dict) -> str:
                    "transport": {"backend": transport.get("backend"), "type": boat.get("type"),
                                  "ttl_seconds": boat.get("ttl_seconds"), "images": boat.get("images"),
                                  "image_bundle_sha256": (boat.get("image_bundle") or {}).get("sha256")}})
+
+
+def origin_reruns(origin: dict | None) -> bool:
+    """Whether a rerun queue runs an ordinal: no origin, an unstarted slot, or a non-model failure."""
+    return (origin is None or origin["outcome"] == "UNATTEMPTED"
+            or (origin["outcome"] == "FAILURE" and origin["failure_category"] in NON_MODEL_FAILURES))
+
+
+def queue_chain_id(model_id: str, repetition: int, index: int) -> str:
+    """Attempt ID in one ordinal's rerun chain: index 0 is the ordinal's own slot, k >= 1 its k-th rerun."""
+    base = f"{model_id}-rep-{repetition}"
+    return base if index == 0 else f"{base}-retry-{index}"
 
 
 def read_object(path: Path) -> dict:
@@ -209,7 +226,7 @@ def operator_cancellation(directory: Path, attempt_id: str, status: dict) -> tup
 
 
 def attempt_row(root: Path, attempt_id: str, declared: tuple[dict, int] | None,
-                selected_fingerprint: str, selected_hash: str, selected_cohort: dict) -> dict:
+                selected_fingerprint: str, selected_hash: str, selected_cohort: dict, retry_of: str | None = None) -> dict:
     directory = root / attempt_id
     status, status_error = metadata(directory / "status.json")
     model = status.get("model")
@@ -263,7 +280,7 @@ def attempt_row(root: Path, attempt_id: str, declared: tuple[dict, int] | None,
     declared_match = bool(declared and model == declared[0] and config_hash == selected_hash
                           and fingerprint == selected_fingerprint and kind == "native"
                           and status.get("repetition", declared[1]) == declared[1]
-                          and status.get("retry_of") is None)
+                          and status.get("retry_of") == retry_of)
     metadata_valid = (not status_error and frozen_model == model
                       and status.get("attempt_id") == attempt_id
                       and type(status.get("repetition")) is int
@@ -394,6 +411,8 @@ def build_report(root: Path, cohort: Path, linked: list[tuple[Path, Path]] = ())
     policy = (config.get("policies") or {}).get("attempt_selection")
     if policy == INDEPENDENT_SELECTION:
         return repetition_report(root, cohort, config, config_hash, fingerprint, linked)
+    if policy == QUEUE_SELECTION:
+        return queue_report(root, cohort, config, config_hash, fingerprint, linked)
     if policy != ATTEMPT_SELECTION:
         raise ValueError("Campaign must select the first success or run independent repetitions, preserving every predetermined slot")
     campaign = campaign_cohort(config)
@@ -583,6 +602,179 @@ def repetition_report(root: Path, cohort: Path, config: dict, config_hash: str, 
             "selection_note": "No selection: every predetermined repetition is a reported sample. Median and range use eligible repetitions only.",
             "counts": counts(rows), "declared_counts": counts(samples),
             "groups": groups, "rows": rows}
+
+
+def rerun_record_error(root: Path, attempt_id: str, previous: str, previous_campaign_id: str, config_hash: str) -> str | None:
+    """The rerun's retry record must link it to the attempt it reruns; None when it does."""
+    record, error = metadata(root / f"retry-{attempt_id}.json")
+    if error:
+        return f"retry record: {error}"
+    if (record.get("campaign_sha256") != config_hash or record.get("attempt_id") != attempt_id
+            or record.get("retry_of") != previous or record.get("retry_of_campaign_id") != previous_campaign_id):
+        return "retry record does not link this rerun to the attempt it reruns"
+    return None
+
+
+def rerunnable(row: dict) -> bool:
+    """An unstarted slot or a terminal non-model failure: the only outcomes a rerun may follow."""
+    return ((row["status"] == "RESERVED" and not row["attempted"])
+            or (row["terminal"] and row["outcome"] == "FAILURE" and row["failure_category"] in NON_MODEL_FAILURES))
+
+
+def queue_report(root: Path, cohort: Path, config: dict, config_hash: str, fingerprint: str,
+                 linked: list[tuple[Path, Path]]) -> dict:
+    """Independent repetitions whose non-model failures and unstarted slots were rerun (QUEUE_SELECTION).
+
+    Each model's ordinal is a chain: its frozen origin slot in a linked campaign (or none), then this
+    campaign's reruns in order, each linked to the previous attempt by status.retry_of and a retry
+    record. Every link but the last must be an unstarted slot or a non-model failure, so no scored
+    outcome is ever replaced; the last link is the ordinal's sample. Superseded links stay listed.
+    """
+    policies = config["policies"]
+    own = {"campaign_id": config.get("campaign_id"), "root": root, "config": config,
+           "config_sha256": config_hash, "fingerprint": fingerprint}
+    sources = {}
+    for link in policies["linked_campaigns"]:
+        match = None
+        for linked_root, linked_cohort in linked:
+            linked_root = Path(linked_root).resolve()
+            linked_config, linked_hash, linked_fingerprint = open_cohort(linked_root, Path(linked_cohort).resolve())
+            if linked_hash == link["config_sha256"]:
+                match = {"campaign_id": linked_config.get("campaign_id"), "root": linked_root, "config": linked_config,
+                         "config_sha256": linked_hash, "fingerprint": linked_fingerprint}
+        if match is None:
+            raise ValueError("Queue origins require each linked campaign's root and frozen cohort")
+        if match["campaign_id"] != link["campaign_id"]:
+            raise ValueError("Linked campaign identity differs from the declaration")
+        sources[link["campaign_id"]] = match
+    for source in [own, *sources.values()]:
+        source["cohort"] = campaign_cohort(source["config"])
+        source["models"] = {model["id"]: model for model in source["config"]["models"]}
+    campaign = own["cohort"]
+    if any(source["cohort"]["key"] != campaign["key"] for source in sources.values()):
+        raise ValueError("Linked campaigns belong to different cohorts")
+    fingerprints = {link["campaign_id"]: link["condition_fingerprints"] for link in policies["linked_campaigns"]}
+    cap = policies["max_queue_attempts"]
+    rows, groups, claimed = [], [], set()
+
+    def annotate(row, source, condition, role):
+        row.update(source_root=str(source["root"]), source_campaign_id=source["campaign_id"],
+                   source_campaign_sha256=source["config_sha256"], condition_fingerprint=condition,
+                   role=role, selected=False, superseded_by=None)
+        return row
+
+    for model in config["models"]:
+        condition = condition_fingerprint(config, model)
+        samples, superseded, others = [], [], []
+        for entry in policies["plan"][model["id"]]:
+            repetition, origin = entry["repetition"], entry["origin"]
+            chain = []
+            if origin is not None:
+                source = sources[origin["campaign_id"]]
+                source_model = source["models"].get(model["id"])
+                if (source_model is None or condition_fingerprint(source["config"], source_model) != condition
+                        or fingerprints[origin["campaign_id"]].get(model["id"]) != condition):
+                    raise ValueError(f"{model['id']}: linked campaign condition differs")
+                directory = source["root"] / origin["attempt_id"]
+                if directory.is_symlink():
+                    raise ValueError(f"{origin['attempt_id']}: attempt directory must not be a symlink")
+                try:
+                    recorded = hashlib.sha256((directory / "status.json").read_bytes()).hexdigest()
+                except OSError:
+                    recorded = None
+                if recorded != origin["status_sha256"]:
+                    raise ValueError(f"{origin['attempt_id']}: origin status differs from the queue's frozen record")
+                chain.append(annotate(attempt_row(source["root"], origin["attempt_id"], (source_model, repetition),
+                                                  source["fingerprint"], source["config_sha256"], source["cohort"]),
+                                      source, condition, "repetition"))
+            if origin_reruns(origin):
+                index, previous = (0, None) if origin is None else (1, origin["attempt_id"])
+                previous_campaign = origin["campaign_id"] if origin is not None else None
+                while True:
+                    attempt_id = queue_chain_id(model["id"], repetition, index)
+                    directory = root / attempt_id
+                    if directory.is_symlink():
+                        raise ValueError(f"{attempt_id}: attempt directory must not be a symlink")
+                    if not directory.exists():
+                        if not chain:
+                            # A planned first slot that has not started yet.
+                            chain.append(annotate(attempt_row(root, attempt_id, (model, repetition), fingerprint,
+                                                              config_hash, campaign), own, condition, "repetition"))
+                        break
+                    row = annotate(attempt_row(root, attempt_id, (model, repetition), fingerprint, config_hash,
+                                               campaign, retry_of=previous), own, condition, "repetition")
+                    error = rerun_record_error(root, attempt_id, previous, previous_campaign, config_hash) if previous else None
+                    if error:
+                        row["declared_condition_match"] = False
+                        row["error"] = "; ".join(filter(None, [row["error"], error]))
+                    if chain and not rerunnable(chain[-1]):
+                        raise ValueError(f"{attempt_id}: rerun follows an outcome that is neither unstarted nor a non-model failure")
+                    chain.append(row)
+                    claimed.add(attempt_id)
+                    previous, previous_campaign = attempt_id, own["campaign_id"]
+                    index += 1
+            sample = chain[-1]
+            for row, successor in zip(chain, chain[1:]):
+                row.update(role="superseded", superseded_by=successor["attempt_id"])
+            if not sample["declared_condition_match"] and sample["attempted"]:
+                sample["eligible"], sample["craft"] = False, None
+                sample["error"] = "; ".join(filter(None, [sample["error"], "repetition differs from its declared frozen condition"]))
+            queue_attempts = sum(row["source_campaign_id"] == own["campaign_id"] and row["status"] != "MISSING" for row in chain)
+            sample["queue_pending"] = bool(origin_reruns(origin) and (not sample["terminal"] or rerunnable(sample))
+                                           and queue_attempts < cap)
+            sample["superseded_attempts"] = [{key: row[key] for key in ("attempt_id", "source_campaign_id", "status", "outcome",
+                                                                        "failure_category", "retry_of")} for row in chain[:-1]]
+            samples.append(sample)
+            superseded.extend(chain[:-1])
+        for name in attempt_directories(root):
+            status, _ = metadata(root / name / "status.json")
+            if name not in claimed and (status.get("model") or {}).get("id") == model["id"]:
+                others.append(annotate(attempt_row(root, name, None, fingerprint, config_hash, campaign),
+                                       own, condition, "outside_condition"))
+        scores = [row["craft"] for row in samples if row["eligible"] and finite_number(row["craft"])]
+        pending = [row["attempt_id"] for row in samples if row["queue_pending"] or (not row["terminal"] and not rerunnable(row))]
+        state = ("pending" if pending else
+                 "complete" if len(scores) == len(samples) else
+                 "complete_with_failures" if scores else "no_eligible_repetition")
+        listed = samples + superseded + others
+        groups.append({"group_id": digest({"model_id": model["id"], "condition_fingerprint": condition}),
+                       "model_id": model["id"], "model": model.get("model"),
+                       "route": {key: model.get(key) for key in ROUTE_KEYS},
+                       "effective_settings": model.get("effective_settings"), "cohort_fingerprint": condition,
+                       "condition_fingerprint": condition, "kind": "native", "cohort": campaign, "tier": samples[0]["tier"],
+                       **counts(listed), "attempt_ids": [row["attempt_id"] for row in listed],
+                       "repetitions": [{key: row[key] for key in ("repetition", "attempt_id", "source_campaign_id", "status",
+                                                                 "outcome", "eligible", "craft", "failure_category", "model_failure",
+                                                                 "retry_of", "superseded_attempts", "queue_pending")}
+                                       for row in samples],
+                       "outside_condition_attempts": [{key: row[key] for key in ("attempt_id", "source_campaign_id", "status",
+                                                                                 "repetition", "retry_of", "failure_category",
+                                                                                 "operator_cancellation")} for row in others],
+                       "declared_repetitions": len(samples), "eligible_repetitions": len(scores),
+                       "pending_repetitions": pending, "scores": scores,
+                       "median_craft": statistics.median(scores) if scores else None,
+                       "min_craft": min(scores) if scores else None, "max_craft": max(scores) if scores else None,
+                       "craft_range": max(scores) - min(scores) if scores else None,
+                       "attempted_count": sum(row["attempted"] for row in samples), "state": state,
+                       "selected_attempt_id": None, "selected_attempt_ordinal": None, "selected_craft": None,
+                       "policy_errors": [],
+                       "summary_source": "the last attempt of every predetermined repetition's infrastructure rerun chain",
+                       "summary_note": "Median and range over the eligible repetitions; superseded infrastructure failures are listed beside them."})
+        rows.extend(listed)
+    groups.sort(key=lambda group: (str(group["model"]), group["group_id"]))
+    samples = [row for row in rows if row["role"] == "repetition"]
+    return {"schema": SCHEMA, "root": str(root), "cohort_input": str(cohort),
+            "cohort": campaign, "cohort_tables": [{"cohort": campaign, "group_ids": [group["group_id"] for group in groups]}],
+            "tier_note": TIER_NOTE, "sample_note": QUEUE_NOTE,
+            "campaign_id": config.get("campaign_id"), "campaign_sha256": config_hash,
+            "cohort_fingerprint": fingerprint, "max_attempts": config["max_attempts"],
+            "attempt_selection": QUEUE_SELECTION, "score_role": SCORE_ROLE,
+            "linked_campaigns": [{key: source[key] for key in ("campaign_id", "config_sha256")}
+                                 | {"root": str(source["root"])} for source in [own, *sources.values()]],
+            "selection_note": "No selection: each repetition's sample is the end of its infrastructure rerun chain, which only follows unstarted slots and non-model failures.",
+            "counts": counts(rows), "declared_counts": counts(samples),
+            "groups": groups, "rows": rows}
+
 
 
 def artifact_url(root: Path, directory: Path, relative: str, output: Path) -> str | None:

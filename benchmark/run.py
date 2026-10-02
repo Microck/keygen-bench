@@ -877,6 +877,244 @@ def run_model_sequence(root: Path, config: dict, model: dict, docker: list[str] 
     return summary
 
 
+# A probe reply naming any of these is a provider usage limit or an exhausted credential pool:
+# wait and re-probe instead of starting an attempt that would only record a QUOTA failure.
+PROBE_WAIT_MARKERS = ("rate limit", "rate_limit", "ratelimit", "too many requests", "quota", "usage limit",
+                      "usage_limit", "auth_unavailable", "no auth available", "cooldown", "cooling down",
+                      "exhausted", "insufficient account funds", "gousagelimiterror", "positive credit balance")
+PROBE_TEXT = "Reply with OK."
+
+
+def probe_provider(model: dict, credential: str, timeout: float = 120) -> dict:
+    """Send ONE minimal request on the model's own route; return only its category and HTTP status.
+
+    "ok": HTTP 200. "quota": HTTP 429 or a usage-limit / exhausted-credential reply. "unavailable":
+    any other failure (bridge, tunnel or provider outage). Response bodies are never retained.
+    """
+    import urllib.error
+    import urllib.request
+    if model["api"] == "messages":
+        path, body = "/messages", {"model": model["model"], "max_tokens": 16,
+                                   "messages": [{"role": "user", "content": PROBE_TEXT}]}
+    elif model["api"] == "responses":
+        path, body = "/responses", {"model": model["model"], "input": PROBE_TEXT, "max_output_tokens": 16, "store": False}
+    else:
+        path, body = "/chat/completions", {"model": model["model"], "max_tokens": 16,
+                                           "messages": [{"role": "user", "content": PROBE_TEXT}]}
+    headers = {"Authorization": f"Bearer {credential}", "Content-Type": "application/json"}
+    if model["api"] == "messages":
+        headers.update({"x-api-key": credential, "anthropic-version": "2023-06-01"})
+    request = urllib.request.Request(model["base_url"].rstrip("/") + path, data=json.dumps(body).encode(),
+                                     headers=headers, method="POST")
+    started = time.time()
+    result = {"model": model["model"], "provider": model["provider"], "at": started, "http_status": None}
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            json.loads(response.read())
+            result.update(category="ok", http_status=response.status)
+    except urllib.error.HTTPError as exc:
+        text = exc.read(65536).decode("utf-8", "replace").lower()
+        waiting = exc.code == 429 or any(marker in text for marker in PROBE_WAIT_MARKERS)
+        result.update(category="quota" if waiting else "unavailable", http_status=exc.code)
+    except Exception as exc:
+        result.update(category="unavailable", error=type(exc).__name__)
+    result["seconds"] = round(time.time() - started, 2)
+    return result
+
+
+class RerunQueue:
+    """Run a rerun queue campaign (campaign.QUEUE): every planned ordinal until it holds a sample.
+
+    An ordinal runs when its origin never started, failed for a non-model reason, or does not exist.
+    Each attempt of an ordinal's chain runs only after the previous one ended rerunnable
+    (report.rerunnable, the report's own classification); a scored outcome or a model failure ends
+    the chain. Reruns are separate attempts with status.retry_of and a retry record.
+
+    Every provider is gated: before its work starts, and again after any of its attempts ends in a
+    non-model failure, ONE minimal probe request must succeed. A usage-limit reply re-probes after
+    `probe_interval` seconds, any other probe failure after `retry_interval`; no attempt is spent
+    while the gate is closed. Before each start the Boat balance must keep `boat_reserve` seconds
+    after the worst case (frozen TTL) of every running attempt and the new one; otherwise the
+    queue starts nothing more, lets running attempts finish and stops.
+    """
+
+    def __init__(self, root: Path, config: dict, docker, snapshot: dict, store, *,
+                 probe_interval: int, retry_interval: int, boat_reserve: int, probe=probe_provider, balance=None):
+        import report
+        self.report = report
+        self.root, self.config, self.docker, self.snapshot, self.store = root, config, docker, snapshot, store
+        self.probe_interval, self.retry_interval, self.boat_reserve = probe_interval, retry_interval, boat_reserve
+        self.probe = probe
+        self.balance = balance or self.boat_balance
+        self.policies = config["policies"]
+        self.cap = self.policies["max_queue_attempts"]
+        self.models = {model["id"]: model for model in config["models"]}
+        order = {model["id"]: index for index, model in enumerate(config["models"])}
+        self.ordinals = sorted(((model_id, entry["repetition"], entry["origin"])
+                                for model_id, entries in self.policies["plan"].items() for entry in entries
+                                if report.origin_reruns(entry["origin"])),
+                               key=lambda item: (item[1], order[item[0]]))
+        _, self.config_hash, self.fingerprint = report.open_cohort(root, root / "campaign.lock.json")
+        self.cohort = report.campaign_cohort(config)
+        self.gates = {provider: {"open": False, "next_probe_at": 0.0, "last_probe": None}
+                      for provider in {self.models[model_id]["provider"] for model_id, _, _ in self.ordinals}}
+        self.inflight = {}
+        self.stopped = None
+
+    def event(self, **record) -> None:
+        with (self.root / "queue-events.jsonl").open("a", encoding="utf-8") as stream:
+            stream.write(json.dumps({"at": time.time(), **record}, allow_nan=False) + "\n")
+
+    def boat_balance(self) -> int | None:
+        if self.config["transport"]["backend"] != "boat":
+            return None
+        from boat import doctor
+        try:
+            return doctor(self.config["transport"])["remaining_seconds"]
+        except Exception as exc:
+            self.event(event="boat_balance_error", error=type(exc).__name__)
+            return 0
+
+    def chain(self, model_id: str, repetition: int, origin: dict | None) -> dict:
+        """Where one ordinal stands: next attempt to start, in flight, done or exhausted."""
+        model = self.models[model_id]
+        index, previous = (0, None) if origin is None else (1, origin["attempt_id"])
+        started = 0
+        while True:
+            attempt_id = self.report.queue_chain_id(model_id, repetition, index)
+            if attempt_id in self.inflight:
+                return {"state": "running", "attempt_id": attempt_id}
+            if not (self.root / attempt_id).exists():
+                if started >= self.cap:
+                    return {"state": "exhausted", "attempt_id": previous}
+                first_rerun = index == 1 and origin is not None
+                kind = "fresh" if previous is None else (
+                    "continuation" if first_rerun and origin["outcome"] == "UNATTEMPTED" else "retry")
+                return {"state": "next", "attempt_id": attempt_id, "retry_of": previous, "kind": kind,
+                        "previous_campaign_id": None if previous is None else (
+                            origin["campaign_id"] if first_rerun else self.config["campaign_id"])}
+            started += 1
+            row = self.report.attempt_row(self.root, attempt_id, (model, repetition), self.fingerprint,
+                                          self.config_hash, self.cohort, retry_of=previous)
+            if row["status"] in {"RESERVED", "RUNNING"}:
+                raise RuntimeError(f"{attempt_id}: recover the interrupted attempt before resuming the queue")
+            if not self.report.rerunnable(row):
+                return {"state": "done", "attempt_id": attempt_id, "outcome": row["outcome"],
+                        "failure_category": row["failure_category"]}
+            previous = attempt_id
+            index += 1
+
+    def snapshot_state(self, status: str) -> dict:
+        chains = [{"model_id": model_id, "repetition": repetition, **self.chain(model_id, repetition, origin)}
+                  for model_id, repetition, origin in self.ordinals]
+        state = {"status": status, "updated_at": time.time(), "campaign_sha256": self.config_hash,
+                 "gates": self.gates, "inflight": sorted(self.inflight), "stopped": self.stopped, "ordinals": chains}
+        write_json(self.root / "queue-state.json", state)
+        return state
+
+    def open_gate(self, provider: str, model: dict) -> bool:
+        gate = self.gates[provider]
+        if gate["open"]:
+            return True
+        if time.time() < gate["next_probe_at"]:
+            return False
+        credential = os.environ.get(model["api_key_env"], "")
+        result = self.probe(model, credential)
+        gate["last_probe"] = result
+        self.event(event="probe", **result)
+        if result["category"] == "ok":
+            gate["open"] = True
+        else:
+            gate["next_probe_at"] = time.time() + (self.probe_interval if result["category"] == "quota" else self.retry_interval)
+        return gate["open"]
+
+    def reserve_allows_start(self) -> bool:
+        remaining = self.balance()
+        if remaining is None:
+            return True
+        ttl = self.config["transport"]["boat"]["ttl_seconds"]
+        now = time.time()
+        running = sum(max(0, ttl - (now - started)) for _, _, started in self.inflight.values())
+        projected = remaining - running - ttl
+        if projected < self.boat_reserve:
+            self.stopped = {"reason": "boat_reserve", "remaining_seconds": remaining, "projected_seconds": projected,
+                            "reserve_seconds": self.boat_reserve}
+            self.event(event="stop_starting", **self.stopped)
+            return False
+        return True
+
+    def start(self, pool, model: dict, repetition: int, step: dict) -> None:
+        attempt_id, previous = step["attempt_id"], step["retry_of"]
+        if previous is not None:
+            campaign.publish(self.root / f"retry-{attempt_id}.json",
+                             {"campaign_sha256": self.config_hash, "attempt_id": attempt_id, "model_id": model["id"],
+                              "repetition": repetition, "kind": step["kind"], "retry_of": previous,
+                              "retry_of_campaign_id": step["previous_campaign_id"]})
+        reserve(self.root, model, repetition, attempt_id, previous)
+        future = pool.submit(run_one, self.root, self.config, model, self.docker, self.snapshot["image_id"],
+                             self.snapshot["visualizer_image_id"], repetition, attempt_id, self.store, previous)
+        self.inflight[attempt_id] = (future, model["provider"], time.time())
+        self.event(event="start", attempt_id=attempt_id, kind=step["kind"], retry_of=previous)
+
+    def reap(self) -> list[str]:
+        errors = []
+        for attempt_id, (future, provider, _) in list(self.inflight.items()):
+            if not future.done():
+                continue
+            del self.inflight[attempt_id]
+            if future.exception() is not None:
+                errors.append(type(future.exception()).__name__)
+            status = json.loads((self.root / attempt_id / "status.json").read_text())
+            self.event(event="finish", attempt_id=attempt_id, status=status.get("status"),
+                       failure_category=status.get("failure_category"))
+            if status.get("failure_category") in campaign.NON_MODEL_FAILURES:
+                # Re-verify the provider with one probe before its next start.
+                self.gates[provider].update(open=False, next_probe_at=0.0)
+        return errors
+
+    def run(self) -> dict:
+        concurrency = self.config["concurrency"]
+        for model_id, repetition, origin in self.ordinals:
+            self.chain(model_id, repetition, origin)  # refuse unrecovered attempts before any request
+        errors = []
+        pool = ThreadPoolExecutor(max_workers=concurrency["workers"])
+        try:
+            while True:
+                if STOP.is_set():
+                    raise KeyboardInterrupt()
+                errors.extend(self.reap())
+                waiting = []
+                for model_id, repetition, origin in self.ordinals:
+                    step = self.chain(model_id, repetition, origin)
+                    if step["state"] == "next":
+                        waiting.append((self.models[model_id], repetition, step))
+                if (not waiting or self.stopped) and not self.inflight:
+                    break
+                closed = set()  # one gate decision per provider per pass keeps admission in ordinal order
+                for model, repetition, step in waiting:
+                    if self.stopped or len(self.inflight) >= concurrency["workers"]:
+                        break
+                    provider = model["provider"]
+                    if provider in closed or sum(item[1] == provider for item in self.inflight.values()) >= concurrency["providers"][provider]:
+                        continue
+                    if not self.open_gate(provider, model):
+                        closed.add(provider)
+                        continue
+                    if not self.reserve_allows_start():
+                        break
+                    self.start(pool, model, repetition, step)
+                self.snapshot_state("RUNNING")
+                STOP.wait(5)
+        except KeyboardInterrupt:
+            STOP.set()
+            raise
+        finally:
+            pool.shutdown(wait=True)
+        errors.extend(self.reap())
+        return {**self.snapshot_state("STOPPED_BOAT_RESERVE" if self.stopped else "COMPLETED"), "errors": errors}
+
+
+
 def _run_one(root: Path, config: dict, model: dict, docker: list[str], image: str, visualizer_image: str,
              repetition: int, attempt_id: str, store, retry_of=None) -> None:
     with slot(root, "worker", config["concurrency"]["workers"]):
@@ -1145,12 +1383,18 @@ def main() -> None:
         worker(Path(sys.argv[2]))
         return
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=["doctor", "run", "recover", "retry"])
+    parser.add_argument("command", choices=["doctor", "run", "recover", "retry", "queue"])
     parser.add_argument("--campaign", required=True, type=Path)
     parser.add_argument("--out", required=True, type=Path, help="absolute local artifact root; never a cloud/FUSE mount")
     parser.add_argument("--workers", type=int, help="must match the frozen worker bound")
     parser.add_argument("--retry-of")
     parser.add_argument("--retry-id")
+    parser.add_argument("--probe-interval", type=int, default=1800,
+                        help="queue: seconds before re-probing a provider whose probe hit a usage limit")
+    parser.add_argument("--retry-interval", type=int, default=300,
+                        help="queue: seconds before re-probing after any other probe failure")
+    parser.add_argument("--boat-reserve-seconds", type=int, default=36000,
+                        help="queue: Boat balance every start must leave after all running attempts' worst case")
     args = parser.parse_args()
     def terminate(signum, frame):
         STOP.set()
@@ -1162,6 +1406,9 @@ def main() -> None:
     if args.workers is not None and args.workers != config["concurrency"]["workers"]:
         raise ValueError("Worker count differs from the frozen campaign")
     root.mkdir(parents=True, exist_ok=True)
+    queue = config["policies"].get("attempt_selection") == campaign.QUEUE
+    if args.command in {"run", "retry", "queue"} and queue != (args.command == "queue"):
+        raise ValueError("A rerun queue campaign runs only with the queue command, and the queue command only runs one")
     if args.command == "recover":
         with controller_lock(root):
             frozen = json.loads((root / "campaign.lock.json").read_text())
@@ -1201,6 +1448,17 @@ def main() -> None:
                               "note": "No model request sent. Native protocol readiness evidence is a separate launch gate."}, indent=2))
             return
         lock_campaign(root / "campaign.lock.json", snapshot)
+        if args.command == "queue":
+            if min(args.probe_interval, args.retry_interval) < 60 or args.boat_reserve_seconds < 0:
+                raise ValueError("Probe intervals are at least 60 s and the Boat reserve is non-negative")
+            summary = RerunQueue(root, config, docker, snapshot, store, probe_interval=args.probe_interval,
+                                 retry_interval=args.retry_interval, boat_reserve=args.boat_reserve_seconds).run()
+            unarchived = export_deferred(root, store)
+            print(json.dumps({"status": summary["status"], "stopped": summary["stopped"], "errors": summary["errors"],
+                              "unarchived_attempts": unarchived,
+                              "ordinals": [{key: item.get(key) for key in ("model_id", "repetition", "state", "attempt_id")}
+                                           for item in summary["ordinals"]]}))
+            return
         attempts = [(model, ordinal, f"{model['id']}-rep-{ordinal}", None)
                     for model in config["models"] for ordinal in campaign.repetitions(config)]
         if args.command == "retry":
