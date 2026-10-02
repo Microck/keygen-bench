@@ -55,8 +55,9 @@ Community results stay separate from ranked results.
 ## Run and package
 
 This is one run command. Replace the model, tier, documentation URL, generation
-JSON, and handle with your values. This example shows the Go Messages route;
-confirm model availability, reasoning support, and pricing before spending money.
+JSON, handle, and private work path with your values. Keep the work directory
+outside the checkout. This example shows the Go Messages route; confirm model
+availability, reasoning support, and pricing before spending money.
 
 ```sh
 python benchmark/contrib/run_contrib.py \
@@ -65,7 +66,7 @@ python benchmark/contrib/run_contrib.py \
   --reasoning-tier xhigh --tier-source https://opencode.ai/docs/go/ \
   --generation '{"max_tokens":32768,"thinking":{"type":"adaptive"},"output_config":{"effort":"xhigh"}}' \
   --attempts 3 --handle YOUR-HANDLE \
-  --work .private-runs/community-run \
+  --work /absolute/private/community-run \
   --out submissions/qwen3.8-flash/$(date -u +%F)-YOUR-HANDLE
 unset KEYGEN_CONTRIB_API_KEY
 ```

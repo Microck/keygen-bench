@@ -34,6 +34,8 @@ The [website guide](web/classic/README.md) explains how to export a reviewed loc
 
 ## Development
 
+For code or documentation changes, follow [AGENTS.md](AGENTS.md). It links the task-specific guides and defines privacy, experiment provenance and verification requirements.
+
 Use the pinned requirements and build instructions in the benchmark guide. Tests do not require paid model calls:
 
 ```sh
