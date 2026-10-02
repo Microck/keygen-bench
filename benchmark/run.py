@@ -737,13 +737,11 @@ def credential_lease(config: dict, model: dict, held: KeyLease | None = None):
 
     The attempt never switches keys, so native history and billing provenance stay
     with one credential. Only the key name is yielded and recorded. A rerun queue passes the
-    lease it already took for a key it probed (`held`); it is released on exit as well.
+    lease it already took for a key it probed (`held`) and keeps it until it has classified the
+    attempt's outcome, so a key that just hit its usage limit never serves the next attempt.
     """
     if held is not None:
-        try:
-            yield held.name
-        finally:
-            held.release()
+        yield held.name
         return
     pool = credential_pool(config, model)
     if pool == {model["api_key_env"]: None}:
@@ -846,8 +844,6 @@ def run_one(root: Path, config: dict, model: dict, docker: list[str] | None, ima
         write_json(run_dir / "status.json", status)
         raise
     finally:
-        if key_lease is not None:
-            key_lease.release()  # never left held when the attempt ended before its worker started
         finalize_attempt(run_dir, store)
 
 
@@ -980,6 +976,9 @@ def probe_provider(model: dict, credential: str, timeout: float = 120) -> dict:
         text = exc.read(65536).decode("utf-8", "replace").lower()
         waiting = exc.code == 429 or any(marker in text for marker in PROBE_WAIT_MARKERS)
         result.update(category="quota" if waiting else "unavailable", http_status=exc.code)
+        limit = re.search(r'"limitname"\s*:\s*"([a-z0-9_-]{1,32})"', text)
+        if waiting and limit:
+            result["limit_name"] = limit.group(1)  # e.g. Go's "weekly" window; never the body itself
     except Exception as exc:
         result.update(category="unavailable", error=type(exc).__name__)
     result["seconds"] = round(time.time() - started, 2)
@@ -988,6 +987,13 @@ def probe_provider(model: dict, credential: str, timeout: float = 120) -> dict:
 
 # A key gate a probe or a finished attempt verified stays open this long without fresh evidence.
 KEY_GATE_FRESH_SECONDS = 3600
+# A key whose provider reports its weekly usage window spent re-probes only this often.
+WEEKLY_LIMIT_BACKOFF_SECONDS = 6 * 3600
+
+
+def quota_wait(probe_interval: int, limit_text: str) -> int:
+    """Seconds a usage-limited key waits before its next probe: longer for a weekly window."""
+    return max(probe_interval, WEEKLY_LIMIT_BACKOFF_SECONDS) if "weekly" in limit_text.lower() else probe_interval
 
 
 def process_start_ticks(pid: int) -> str | None:
@@ -1092,6 +1098,7 @@ class RerunQueue:
         self.key_gates = KeyGates()
         self.demand_path = controller_resource_dir() / f"queue-demand-{config['campaign_id']}.json"
         self.inflight = {}
+        self.leases = {}
         self.stopped = None
 
     def pooled(self, model: dict) -> bool:
@@ -1193,7 +1200,8 @@ class RerunQueue:
                         gates[name] = {"open": True, "verified_at": now, "next_probe_at": 0.0,
                                        "last_probe": result, "campaign_id": self.config["campaign_id"]}
                     else:
-                        wait = self.probe_interval if result["category"] == "quota" else self.retry_interval
+                        wait = (quota_wait(self.probe_interval, str(result.get("limit_name") or ""))
+                                if result["category"] == "quota" else self.retry_interval)
                         gates[name] = {"open": False, "verified_at": None, "next_probe_at": now + wait,
                                        "last_probe": result, "campaign_id": self.config["campaign_id"]}
                 if result["category"] == "ok":
@@ -1201,22 +1209,24 @@ class RerunQueue:
             lease.release()
         return None
 
-    def close_key(self, name: str, attempt_id: str, category: str | None) -> None:
+    def close_key(self, name: str, attempt_id: str, category: str | None, error: str = "") -> None:
         """Record what a finished attempt showed about its key."""
         now = time.time()
+        wait = quota_wait(self.probe_interval, error)
         with self.key_gates.edit() as gates:
             gate = gates.get(name, {})
             if category == "QUOTA":
-                # The key's usage window is spent: it waits a full probe interval before its next probe.
-                gates[name] = {**gate, "open": False, "verified_at": None, "next_probe_at": now + self.probe_interval,
-                               "closed_by": attempt_id, "campaign_id": self.config["campaign_id"]}
+                # The key's usage window is spent: it waits before its next probe (6 h for a weekly window).
+                gates[name] = {**gate, "open": False, "verified_at": None, "next_probe_at": now + wait,
+                               "closed_by": attempt_id, "campaign_id": self.config["campaign_id"],
+                               "limit_name": "weekly" if "weekly" in error.lower() else None}
             elif category in campaign.NON_MODEL_FAILURES:
                 gates[name] = {**gate, "open": False, "verified_at": None, "next_probe_at": 0.0,
                                "closed_by": attempt_id, "campaign_id": self.config["campaign_id"]}
             elif gate.get("open"):
                 gates[name] = {**gate, "verified_at": now}  # the key served a whole attempt
         if category == "QUOTA":
-            self.event(event="key_waiting", key=name, attempt_id=attempt_id, next_probe_in=self.probe_interval)
+            self.event(event="key_waiting", key=name, attempt_id=attempt_id, next_probe_in=wait)
 
     def others(self) -> list[dict]:
         """Demand records of the other live queues on this controller."""
@@ -1274,6 +1284,8 @@ class RerunQueue:
                 key_lease.release()
             raise
         key = None if key_lease is None else key_lease.name
+        if key_lease is not None:
+            self.leases[attempt_id] = key_lease  # held until reap() has classified the outcome
         self.inflight[attempt_id] = (future, model["provider"], time.time(), key)
         self.event(event="start", attempt_id=attempt_id, kind=step["kind"], retry_of=previous, key=key)
 
@@ -1289,7 +1301,8 @@ class RerunQueue:
             self.event(event="finish", attempt_id=attempt_id, status=status.get("status"),
                        failure_category=status.get("failure_category"), key=key)
             if key is not None:
-                self.close_key(key, attempt_id, status.get("failure_category"))
+                self.close_key(key, attempt_id, status.get("failure_category"), str(status.get("error") or ""))
+                self.leases.pop(attempt_id).release()
             elif status.get("failure_category") in campaign.NON_MODEL_FAILURES:
                 # Re-verify this model with one probe before its next start.
                 self.gates[status["model"]["id"]].update(open=False, next_probe_at=0.0)
@@ -1349,6 +1362,8 @@ class RerunQueue:
         finally:
             pool.shutdown(wait=True)
             self.demand_path.unlink(missing_ok=True)
+            for lease in self.leases.values():
+                lease.release()  # only interrupted or failed runs leave leases here
         errors.extend(self.reap())
         final = self.snapshot_state("STOPPED_BOAT_RESERVE" if self.stopped else "COMPLETED")
         if not self.stopped and any(item["state"] == "held" for item in final["ordinals"]):

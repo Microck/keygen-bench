@@ -714,15 +714,17 @@ class ModelSequenceTests(unittest.TestCase):
         attempt = self.queue_attempt({"model-rep-1": "QUOTA", "model-rep-1-retry-1": "success", "model-rep-2-retry-1": "success"})
         both_started = threading.Event()
         def pooled_attempt(*args, key_lease):
+            # The queue, not the attempt, releases the key once it has classified the outcome.
             keys[args[7]] = key_lease.name
             if args[7] == "model-rep-2-retry-1":
                 both_started.set()
             elif args[7] == "model-rep-1":
                 both_started.wait(5)  # hold key A while the second ordinal is admitted
-            try:
-                attempt(*args)
-            finally:
-                key_lease.release()
+            attempt(*args)
+            if args[7] == "model-rep-1":
+                status = json.loads((root / "model-rep-1/status.json").read_text())
+                status["error"] = 'GoUsageLimitError "limitName":"weekly"'
+                run.write_json(root / "model-rep-1/status.json", status)
         controller = self.root / "controller"
         controller.mkdir()
         with patch.object(run, "run_one", side_effect=pooled_attempt), patch.object(run.STOP, "wait"), \
@@ -731,13 +733,14 @@ class ModelSequenceTests(unittest.TestCase):
             result = run.RerunQueue(root, config, None, snapshot, None, probe_interval=3600, retry_interval=60,
                                     boat_reserve=0, probe=probe).run()
         # One probe per key before its first use, each on its own credential; the QUOTA attempt
-        # closes only its key, so the rerun goes to the other, already verified key without a probe.
+        # closes only its key (6 h for a weekly window), so the rerun goes to the other, already
+        # verified key without a probe.
         self.assertEqual(probed, ["synthetic-a", "synthetic-b"])
         self.assertEqual(keys, {"model-rep-1": "TEST_KEY_A", "model-rep-2-retry-1": "TEST_KEY_B",
                                 "model-rep-1-retry-1": "TEST_KEY_B"})
         gates = result["key_gates"]
         self.assertEqual((gates["TEST_KEY_A"]["open"], gates["TEST_KEY_A"]["closed_by"]), (False, "model-rep-1"))
-        self.assertGreater(gates["TEST_KEY_A"]["next_probe_at"], time.time() + 3000)
+        self.assertGreater(gates["TEST_KEY_A"]["next_probe_at"], time.time() + 6 * 3600 - 60)
         self.assertTrue(gates["TEST_KEY_B"]["open"])
         self.assertEqual(result["status"], "COMPLETED")
 
