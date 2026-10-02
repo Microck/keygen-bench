@@ -16,7 +16,7 @@ import tempfile
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 from native_models import MAX_TRANSPORT_RETRIES, REASONING_FIELDS, TIERS, check_tier, declared_reasoning
-from report import NON_MODEL_FAILURES, QUEUE_SELECTION, condition_fingerprint, origin_reruns, queue_chain_id
+from report import NON_MODEL_FAILURES, QUEUE_SELECTION, condition_fingerprint, entry_links, origin_reruns, queue_chain_id
 
 SCHEMA = "keygen-native-campaign-3"
 # Cohort label of the frozen prompts/system.txt + prompts/task.txt pair. Campaigns compiled
@@ -264,19 +264,26 @@ def check_queue_policies(config: dict) -> None:
                                               for entry in entries] != ordinals:
             raise ValueError(f"{model_id}: plan every repetition once, in order")
         for entry in entries:
-            origin = entry.get("origin")
-            if set(entry) != {"repetition", "origin"}:
-                raise ValueError(f"{model_id}: a plan entry declares only its repetition and origin")
-            if origin is not None:
-                if (not isinstance(origin, dict) or set(origin) != ORIGIN_KEYS or origin["campaign_id"] not in linked
-                        or origin["attempt_id"] != queue_chain_id(model_id, entry["repetition"], 0)
-                        or origin["outcome"] not in {"SUCCESS", "FAILURE", "UNATTEMPTED"}
-                        or (origin["outcome"] == "UNATTEMPTED") != (origin["status"] == "RESERVED")
-                        or (origin["outcome"] == "FAILURE") != bool(origin["failure_category"])
-                        or not re.fullmatch(r"[a-f0-9]{64}", str(origin["status_sha256"]))):
-                    raise ValueError(f"{model_id}: an origin names its linked slot and its recorded outcome")
-                referenced[origin["campaign_id"]].add(model_id)
-            runs += origin_reruns(origin)
+            if not {"repetition", "origin"} <= set(entry) <= {"repetition", "origin", "reruns"}:
+                raise ValueError(f"{model_id}: a plan entry declares its repetition, origin and optional earlier reruns")
+            origin, reruns = entry["origin"], entry.get("reruns", [])
+            if not isinstance(reruns, list) or ("reruns" in entry and not reruns):
+                raise ValueError(f"{model_id}: earlier reruns are a non-empty list when declared")
+            start = 0 if origin is None else 1
+            links = [(0, origin)] if origin is not None else []
+            links += [(start + offset, link) for offset, link in enumerate(reruns)]
+            for position, (index, link) in enumerate(links):
+                if (not isinstance(link, dict) or set(link) != ORIGIN_KEYS or link["campaign_id"] not in linked
+                        or link["attempt_id"] != queue_chain_id(model_id, entry["repetition"], index)
+                        or link["outcome"] not in {"SUCCESS", "FAILURE", "UNATTEMPTED"}
+                        or (link["outcome"] == "UNATTEMPTED") != (link["status"] == "RESERVED")
+                        or (link["outcome"] == "FAILURE") != bool(link["failure_category"])
+                        or not re.fullmatch(r"[a-f0-9]{64}", str(link["status_sha256"]))):
+                    raise ValueError(f"{model_id}: an origin or rerun names its linked slot and its recorded outcome")
+                if position < len(links) - 1 and not origin_reruns(link):
+                    raise ValueError(f"{model_id}: a frozen rerun follows only an unstarted slot or a non-model failure")
+                referenced[link["campaign_id"]].add(model_id)
+            runs += origin_reruns(links[-1][1] if links else None)
     if not runs:
         raise ValueError("A rerun queue must run at least one repetition")
     for campaign_id, link in linked.items():
@@ -548,8 +555,8 @@ def queue_policies(plan_path: Path, linked_paths: list[Path]) -> tuple[dict, dic
     for path in linked_paths:
         manifest = read_manifest(path)
         linked[manifest["campaign_id"]] = manifest
-    used = {entry["origin"]["campaign_id"] for entries in plan["models"].values() for entry in entries
-            if isinstance(entry, dict) and entry.get("origin")}
+    used = {link["campaign_id"] for entries in plan["models"].values() for entry in entries
+            if isinstance(entry, dict) for link in entry_links(entry) if isinstance(link, dict)}
     if set(linked) != used:
         raise ValueError("Pass exactly the linked campaigns the queue plan's origins name")
     policies = {**POLICIES, "attempt_selection": QUEUE, "repetitions": [1, 2, 3], "plan": plan["models"],
@@ -607,14 +614,12 @@ def compile_campaign(inventory_path: Path, selection_path: Path, output: Path, t
         for model in config["models"]:
             fingerprint = condition_fingerprint(config, model)
             for entry in policies["plan"].get(model["id"], []):
-                origin = entry.get("origin") if isinstance(entry, dict) else None
-                if not origin:
-                    continue
-                frozen = {item.get("id"): item for item in queue_linked[origin["campaign_id"]].get("models", [])}
-                if (model["id"] not in frozen
-                        or condition_fingerprint(queue_linked[origin["campaign_id"]], frozen[model["id"]]) != fingerprint):
-                    raise ValueError(f"{model['id']}: condition differs from the linked campaign's frozen model")
-                links[origin["campaign_id"]]["condition_fingerprints"][model["id"]] = fingerprint
+                for link in entry_links(entry) if isinstance(entry, dict) else []:
+                    frozen = {item.get("id"): item for item in queue_linked[link["campaign_id"]].get("models", [])}
+                    if (model["id"] not in frozen
+                            or condition_fingerprint(queue_linked[link["campaign_id"]], frozen[model["id"]]) != fingerprint):
+                        raise ValueError(f"{model['id']}: condition differs from the linked campaign's frozen model")
+                    links[link["campaign_id"]]["condition_fingerprints"][model["id"]] = fingerprint
     validate(config)
     publish(output, {"sha256": digest(config), "campaign": config})
     return config

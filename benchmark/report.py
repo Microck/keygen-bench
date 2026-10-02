@@ -87,6 +87,22 @@ def queue_chain_id(model_id: str, repetition: int, index: int) -> str:
     return base if index == 0 else f"{base}-retry-{index}"
 
 
+def entry_links(entry: dict) -> list[dict]:
+    """Frozen links of one planned ordinal: its origin slot, then reruns an earlier queue ran."""
+    return ([entry["origin"]] if entry["origin"] is not None else []) + list(entry.get("reruns") or [])
+
+
+def entry_reruns(entry: dict) -> bool:
+    """Whether this queue runs the ordinal: its last frozen link (or none) leaves it unscored."""
+    links = entry_links(entry)
+    return origin_reruns(links[-1] if links else None)
+
+
+def entry_next_index(entry: dict) -> int:
+    """Chain index of the first attempt this queue runs for the ordinal."""
+    return (1 if entry["origin"] is not None else 0) + len(entry.get("reruns") or [])
+
+
 def read_object(path: Path) -> dict:
     value = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(value, dict):
@@ -667,29 +683,40 @@ def queue_report(root: Path, cohort: Path, config: dict, config_hash: str, finge
         condition = condition_fingerprint(config, model)
         samples, superseded, others = [], [], []
         for entry in policies["plan"][model["id"]]:
-            repetition, origin = entry["repetition"], entry["origin"]
-            chain = []
-            if origin is not None:
-                source = sources[origin["campaign_id"]]
+            repetition = entry["repetition"]
+            links = entry_links(entry)
+            chain, previous, previous_campaign = [], None, None
+            for link in links:
+                source = sources[link["campaign_id"]]
                 source_model = source["models"].get(model["id"])
                 if (source_model is None or condition_fingerprint(source["config"], source_model) != condition
-                        or fingerprints[origin["campaign_id"]].get(model["id"]) != condition):
+                        or fingerprints[link["campaign_id"]].get(model["id"]) != condition):
                     raise ValueError(f"{model['id']}: linked campaign condition differs")
-                directory = source["root"] / origin["attempt_id"]
+                directory = source["root"] / link["attempt_id"]
                 if directory.is_symlink():
-                    raise ValueError(f"{origin['attempt_id']}: attempt directory must not be a symlink")
+                    raise ValueError(f"{link['attempt_id']}: attempt directory must not be a symlink")
                 try:
                     recorded = hashlib.sha256((directory / "status.json").read_bytes()).hexdigest()
                 except OSError:
                     recorded = None
-                if recorded != origin["status_sha256"]:
-                    raise ValueError(f"{origin['attempt_id']}: origin status differs from the queue's frozen record")
-                chain.append(annotate(attempt_row(source["root"], origin["attempt_id"], (source_model, repetition),
-                                                  source["fingerprint"], source["config_sha256"], source["cohort"]),
-                                      source, condition, "repetition"))
-            if origin_reruns(origin):
-                index, previous = (0, None) if origin is None else (1, origin["attempt_id"])
-                previous_campaign = origin["campaign_id"] if origin is not None else None
+                if recorded != link["status_sha256"]:
+                    raise ValueError(f"{link['attempt_id']}: origin status differs from the queue's frozen record")
+                row = annotate(attempt_row(source["root"], link["attempt_id"], (source_model, repetition),
+                                           source["fingerprint"], source["config_sha256"], source["cohort"],
+                                           retry_of=previous), source, condition, "repetition")
+                if previous is not None:
+                    error = rerun_record_error(source["root"], link["attempt_id"], previous, previous_campaign,
+                                               source["config_sha256"])
+                    if error:
+                        row["declared_condition_match"] = False
+                        row["error"] = "; ".join(filter(None, [row["error"], error]))
+                if chain and not rerunnable(chain[-1]):
+                    raise ValueError(f"{link['attempt_id']}: rerun follows an outcome that is neither unstarted nor a non-model failure")
+                chain.append(row)
+                previous, previous_campaign = link["attempt_id"], link["campaign_id"]
+            runs_here = entry_reruns(entry)
+            if runs_here:
+                index = entry_next_index(entry)
                 while True:
                     attempt_id = queue_chain_id(model["id"], repetition, index)
                     directory = root / attempt_id
@@ -720,7 +747,7 @@ def queue_report(root: Path, cohort: Path, config: dict, config_hash: str, finge
                 sample["eligible"], sample["craft"] = False, None
                 sample["error"] = "; ".join(filter(None, [sample["error"], "repetition differs from its declared frozen condition"]))
             queue_attempts = sum(row["source_campaign_id"] == own["campaign_id"] and row["status"] != "MISSING" for row in chain)
-            sample["queue_pending"] = bool(origin_reruns(origin) and (not sample["terminal"] or rerunnable(sample))
+            sample["queue_pending"] = bool(runs_here and (not sample["terminal"] or rerunnable(sample))
                                            and queue_attempts < cap)
             sample["superseded_attempts"] = [{key: row[key] for key in ("attempt_id", "source_campaign_id", "status", "outcome",
                                                                         "failure_category", "retry_of")} for row in chain[:-1]]

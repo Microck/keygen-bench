@@ -961,9 +961,13 @@ def probe_provider(model: dict, credential: str, timeout: float = 120) -> dict:
     else:
         path, body = "/chat/completions", {"model": model["model"], "max_tokens": 16,
                                            "messages": [{"role": "user", "content": PROBE_TEXT}]}
-    headers = {"Authorization": f"Bearer {credential}", "Content-Type": "application/json"}
+    # Go rejects urllib's default User-Agent (HTTP 403) and unrouted requests without a session.
+    headers = {"Authorization": f"Bearer {credential}", "Content-Type": "application/json",
+               "User-Agent": "keygen-benchmark/queue-probe-1.0"}
     if model["api"] == "messages":
         headers.update({"x-api-key": credential, "anthropic-version": "2023-06-01"})
+    if model["provider"] == "go":
+        headers["x-opencode-session"] = uuid.uuid4().hex
     request = urllib.request.Request(model["base_url"].rstrip("/") + path, data=json.dumps(body).encode(),
                                      headers=headers, method="POST")
     started = time.time()
@@ -1037,12 +1041,18 @@ class RerunQueue:
     (report.rerunnable, the report's own classification); a scored outcome or a model failure ends
     the chain. Reruns are separate attempts with status.retry_of and a retry record.
 
-    Every provider is gated: before its work starts, and again after any of its attempts ends in a
-    non-model failure, ONE minimal probe request must succeed. A usage-limit reply re-probes after
-    `probe_interval` seconds, any other probe failure after `retry_interval`; no attempt is spent
-    while the gate is closed. Before each start the Boat balance must keep `boat_reserve` seconds
-    after the worst case (frozen TTL) of every running attempt and the new one; otherwise the
-    queue starts nothing more, lets running attempts finish and stops.
+    Every non-pooled model is gated on its own: before its work starts, and again after any of its
+    attempts ends in a non-model failure, ONE minimal probe request on that model must succeed, so
+    one model's usage limit (for example a separately metered model) never blocks another model of
+    the same provider. A usage-limit reply re-probes after `probe_interval` seconds, any other probe
+    failure after `retry_interval`; no attempt is spent while the gate is closed. Models in `holds`
+    (operator deferral) are never probed or started; their ordinals stay pending ("held"), and a
+    later `run.py queue` without the hold resumes them. Before each start the Boat balance must keep
+    `boat_reserve` seconds after the worst case (frozen TTL) of every running attempt and the new
+    one; otherwise the queue starts nothing more, lets running attempts finish and stops.
+
+    A plan entry may carry frozen `reruns` an earlier queue campaign ran after the origin; the chain
+    then continues after the last of them (report.entry_next_index).
 
     A pooled route (concurrency.key_pools) is gated per key instead (KeyGates): an attempt starts
     only on a pool member with a free controller-wide cap slot whose gate is open, probing that
@@ -1056,7 +1066,8 @@ class RerunQueue:
     """
 
     def __init__(self, root: Path, config: dict, docker, snapshot: dict, store, *,
-                 probe_interval: int, retry_interval: int, boat_reserve: int, probe=probe_provider, balance=None):
+                 probe_interval: int, retry_interval: int, boat_reserve: int, probe=probe_provider, balance=None,
+                 holds=()):
         import report
         self.report = report
         self.root, self.config, self.docker, self.snapshot, self.store = root, config, docker, snapshot, store
@@ -1067,14 +1078,17 @@ class RerunQueue:
         self.cap = self.policies["max_queue_attempts"]
         self.models = {model["id"]: model for model in config["models"]}
         order = {model["id"]: index for index, model in enumerate(config["models"])}
-        self.ordinals = sorted(((model_id, entry["repetition"], entry["origin"])
+        self.holds = set(holds)
+        if not self.holds <= set(self.models):
+            raise ValueError("Held models must belong to this campaign")
+        self.ordinals = sorted(((model_id, entry["repetition"], entry)
                                 for model_id, entries in self.policies["plan"].items() for entry in entries
-                                if report.origin_reruns(entry["origin"])),
+                                if report.entry_reruns(entry)),
                                key=lambda item: (item[1], order[item[0]]))
         _, self.config_hash, self.fingerprint = report.open_cohort(root, root / "campaign.lock.json")
         self.cohort = report.campaign_cohort(config)
-        self.gates = {provider: {"open": False, "next_probe_at": 0.0, "last_probe": None}
-                      for provider in {self.models[model_id]["provider"] for model_id, _, _ in self.ordinals}}
+        self.gates = {model_id: {"open": False, "next_probe_at": 0.0, "last_probe": None}
+                      for model_id in {model_id for model_id, _, _ in self.ordinals}}
         self.key_gates = KeyGates()
         self.demand_path = controller_resource_dir() / f"queue-demand-{config['campaign_id']}.json"
         self.inflight = {}
@@ -1097,10 +1111,12 @@ class RerunQueue:
             self.event(event="boat_balance_error", error=type(exc).__name__)
             return 0
 
-    def chain(self, model_id: str, repetition: int, origin: dict | None) -> dict:
-        """Where one ordinal stands: next attempt to start, in flight, done or exhausted."""
+    def chain(self, model_id: str, repetition: int, entry: dict) -> dict:
+        """Where one ordinal stands: next attempt to start, held, in flight, done or exhausted."""
         model = self.models[model_id]
-        index, previous = (0, None) if origin is None else (1, origin["attempt_id"])
+        links = self.report.entry_links(entry)
+        first = index = self.report.entry_next_index(entry)
+        previous = links[-1]["attempt_id"] if links else None
         started = 0
         while True:
             attempt_id = self.report.queue_chain_id(model_id, repetition, index)
@@ -1109,12 +1125,14 @@ class RerunQueue:
             if not (self.root / attempt_id).exists():
                 if started >= self.cap:
                     return {"state": "exhausted", "attempt_id": previous}
-                first_rerun = index == 1 and origin is not None
+                if model_id in self.holds:
+                    return {"state": "held", "attempt_id": attempt_id}
+                from_link = index == first and bool(links)
                 kind = "fresh" if previous is None else (
-                    "continuation" if first_rerun and origin["outcome"] == "UNATTEMPTED" else "retry")
+                    "continuation" if from_link and links[-1]["outcome"] == "UNATTEMPTED" else "retry")
                 return {"state": "next", "attempt_id": attempt_id, "retry_of": previous, "kind": kind,
                         "previous_campaign_id": None if previous is None else (
-                            origin["campaign_id"] if first_rerun else self.config["campaign_id"])}
+                            links[-1]["campaign_id"] if from_link else self.config["campaign_id"])}
             started += 1
             row = self.report.attempt_row(self.root, attempt_id, (model, repetition), self.fingerprint,
                                           self.config_hash, self.cohort, retry_of=previous)
@@ -1127,8 +1145,8 @@ class RerunQueue:
             index += 1
 
     def snapshot_state(self, status: str) -> dict:
-        chains = [{"model_id": model_id, "repetition": repetition, **self.chain(model_id, repetition, origin)}
-                  for model_id, repetition, origin in self.ordinals]
+        chains = [{"model_id": model_id, "repetition": repetition, **self.chain(model_id, repetition, entry)}
+                  for model_id, repetition, entry in self.ordinals]
         state = {"status": status, "updated_at": time.time(), "campaign_sha256": self.config_hash,
                  "gates": self.gates, "key_gates": self.key_gates.read(),
                  "inflight": {attempt_id: item[3] for attempt_id, item in sorted(self.inflight.items())},
@@ -1136,8 +1154,8 @@ class RerunQueue:
         write_json(self.root / "queue-state.json", state)
         return state
 
-    def open_gate(self, provider: str, model: dict) -> bool:
-        gate = self.gates[provider]
+    def open_gate(self, model: dict) -> bool:
+        gate = self.gates[model["id"]]
         if gate["open"]:
             return True
         if time.time() < gate["next_probe_at"]:
@@ -1273,14 +1291,14 @@ class RerunQueue:
             if key is not None:
                 self.close_key(key, attempt_id, status.get("failure_category"))
             elif status.get("failure_category") in campaign.NON_MODEL_FAILURES:
-                # Re-verify the provider with one probe before its next start.
-                self.gates[provider].update(open=False, next_probe_at=0.0)
+                # Re-verify this model with one probe before its next start.
+                self.gates[status["model"]["id"]].update(open=False, next_probe_at=0.0)
         return errors
 
     def run(self) -> dict:
         concurrency = self.config["concurrency"]
-        for model_id, repetition, origin in self.ordinals:
-            self.chain(model_id, repetition, origin)  # refuse unrecovered attempts before any request
+        for model_id, repetition, entry in self.ordinals:
+            self.chain(model_id, repetition, entry)  # refuse unrecovered attempts before any request
         errors = []
         pool = ThreadPoolExecutor(max_workers=concurrency["workers"])
         try:
@@ -1289,20 +1307,21 @@ class RerunQueue:
                     raise KeyboardInterrupt()
                 errors.extend(self.reap())
                 waiting = []
-                for model_id, repetition, origin in self.ordinals:
-                    step = self.chain(model_id, repetition, origin)
+                for model_id, repetition, entry in self.ordinals:
+                    step = self.chain(model_id, repetition, entry)
                     if step["state"] == "next":
                         waiting.append((self.models[model_id], repetition, step))
                 if (not waiting or self.stopped) and not self.inflight:
                     break
                 self.publish_demand(waiting)
                 others = self.others()
-                closed = set()  # one gate decision per provider per pass keeps admission in ordinal order
+                closed = set()  # one gate decision per provider or model per pass keeps admission in ordinal order
                 for model, repetition, step in waiting:
                     if self.stopped or len(self.inflight) >= concurrency["workers"]:
                         break
                     provider = model["provider"]
-                    if provider in closed or sum(item[1] == provider for item in self.inflight.values()) >= concurrency["providers"][provider]:
+                    if (provider in closed or model["id"] in closed
+                            or sum(item[1] == provider for item in self.inflight.values()) >= concurrency["providers"][provider]):
                         continue
                     if any(record["waiting"].get(provider, repetition) < repetition for record in others):
                         closed.add(provider)  # another queue here still waits to start a lower repetition
@@ -1313,8 +1332,8 @@ class RerunQueue:
                         if key_lease is None:
                             closed.add(provider)
                             continue
-                    elif not self.open_gate(provider, model):
-                        closed.add(provider)
+                    elif not self.open_gate(model):
+                        closed.add(model["id"])  # a closed model gate never blocks another model
                         continue
                     if not self.reserve_allows_start(others):
                         if key_lease is not None:
@@ -1331,7 +1350,10 @@ class RerunQueue:
             pool.shutdown(wait=True)
             self.demand_path.unlink(missing_ok=True)
         errors.extend(self.reap())
-        return {**self.snapshot_state("STOPPED_BOAT_RESERVE" if self.stopped else "COMPLETED"), "errors": errors}
+        final = self.snapshot_state("STOPPED_BOAT_RESERVE" if self.stopped else "COMPLETED")
+        if not self.stopped and any(item["state"] == "held" for item in final["ordinals"]):
+            final = self.snapshot_state("COMPLETED_WITH_HOLDS")
+        return {**final, "errors": errors}
 
 
 
@@ -1615,6 +1637,8 @@ def main() -> None:
                         help="queue: seconds before re-probing after any other probe failure")
     parser.add_argument("--boat-reserve-seconds", type=int, default=36000,
                         help="queue: Boat balance every start must leave after all running attempts' worst case")
+    parser.add_argument("--hold", action="append", default=[], metavar="MODEL_ID",
+                        help="queue: operator deferral; never probe or start this model's ordinals (they stay pending)")
     args = parser.parse_args()
     def terminate(signum, frame):
         STOP.set()
@@ -1672,7 +1696,8 @@ def main() -> None:
             if min(args.probe_interval, args.retry_interval) < 60 or args.boat_reserve_seconds < 0:
                 raise ValueError("Probe intervals are at least 60 s and the Boat reserve is non-negative")
             summary = RerunQueue(root, config, docker, snapshot, store, probe_interval=args.probe_interval,
-                                 retry_interval=args.retry_interval, boat_reserve=args.boat_reserve_seconds).run()
+                                 retry_interval=args.retry_interval, boat_reserve=args.boat_reserve_seconds,
+                                 holds=args.hold).run()
             unarchived = export_deferred(root, store)
             print(json.dumps({"status": summary["status"], "stopped": summary["stopped"], "errors": summary["errors"],
                               "unarchived_attempts": unarchived,
