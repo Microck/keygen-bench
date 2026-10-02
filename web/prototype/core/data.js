@@ -6,8 +6,10 @@ export async function loadData(base = "./dist/") {
   if (!res.ok) throw new Error("Run `python web/prototype/build.py` first (dist/data.json missing)");
   const data = await res.json();
   data.base = base;
+  // Unranked later attempts (attempt_of: their ranked row's slug) are reached through that row's attempt switcher.
+  data.listed = data.runs.filter((r) => !r.attempt_of);
   const byMaker = new Map();
-  for (const r of data.runs) {
+  for (const r of data.listed) {
     if (!byMaker.has(r.maker)) byMaker.set(r.maker, []);
     byMaker.get(r.maker).push(r);
   }

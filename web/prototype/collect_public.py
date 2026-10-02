@@ -243,17 +243,22 @@ def pending_reason(group: dict, rows: dict) -> str:
 
 
 def repetition_group(group: dict, rows: dict, slugs: dict, prices: dict) -> dict:
-    """One model's predetermined repetitions; only eligible ones carry a playable slug."""
+    """One model's predetermined repetitions; only eligible ones carry a playable slug. No aggregate is exported."""
     name = price_id(group["model"])
     attempts = []
     for repetition in group["repetitions"]:
         row = rows[(repetition["source_campaign_id"], repetition["attempt_id"])]
         attempts.append({"ordinal": repetition["repetition"], "status": public_status(row), "outcome": repetition["outcome"],
-                         "eligible": repetition["eligible"], "failure_category": repetition["failure_category"],
+                         "eligible": repetition["eligible"], "attempted": row["attempted"], "failure_category": repetition["failure_category"],
                          "model_failure": repetition["model_failure"], "score": repetition["craft"],
                          "slug": slugs.get((repetition["source_campaign_id"], repetition["attempt_id"])),
                          "source_campaign_id": repetition["source_campaign_id"],
                          "source_campaign_sha256": row["source_campaign_sha256"]})
+    # A slot the frozen runner never started after a stopping failure in its own campaign names that category.
+    for attempt in attempts:
+        stops = [earlier["failure_category"] for earlier in attempts if earlier["ordinal"] < attempt["ordinal"] and earlier["attempted"]
+                 and earlier["source_campaign_id"] == attempt["source_campaign_id"] and earlier["failure_category"] in STOPPING_CATEGORIES]
+        attempt["stopped_by"] = stops[-1] if not attempt["attempted"] and stops else None
     outside = []
     for attempt in group["outside_condition_attempts"]:
         row = rows[(attempt["source_campaign_id"], attempt["attempt_id"])]
@@ -265,7 +270,6 @@ def repetition_group(group: dict, rows: dict, slugs: dict, prices: dict) -> dict
             "maker": public_maker(name, prices.get(name, {})), "tier": group["tier"], "cohort": group["cohort"],
             "condition_fingerprint": group["condition_fingerprint"], "declared": group["declared_repetitions"],
             "eligible": group["eligible_repetitions"], "pending": len(group["pending_repetitions"]),
-            "median": group["median_craft"], "min": group["min_craft"], "max": group["max_craft"], "range": group["craft_range"],
             "state": group["state"], "attempts": attempts, "outside_condition": outside}
 
 
