@@ -7,6 +7,7 @@
 - Community-run guide, three-attempt runner, bundle validator, submission templates and trusted-base validation workflow.
 - FT2-style results site with per-model routes, attempt selection, loop playback, scoring explanations and generated Open Graph cards.
 - Public-launch checklist covering Git history, personal data, credentials, licenses and release verification.
+- Repository agent instructions linking the maintained guides and defining local execution, privacy, provenance and verification boundaries.
 
 ### Changed
 
