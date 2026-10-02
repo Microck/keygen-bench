@@ -2,6 +2,12 @@
 
 This is the canonical frontend. It keeps the FT2 tracker, audio playback and looping, rankings with best/first/all-attempt views, scoring explanation, and support page. There is no JavaScript build step and no checked-in result dataset.
 
+## Design and historical results
+
+The hosted FT2 interface is the main design. Maintain it here; updating campaign data does not authorize a redesign. Legacy and current results should use this same frontend with distinct cohort labels and provenance.
+
+An archived `dist/` directory holds a generated dataset and media, not the frontend implementation. Older frontend revisions belong in a separate private archive or retained history, not a second active source tree. Preserve their associated run evidence before removing an operational checkout. Neither this source repository nor a published results snapshot is a complete backup of all attempts.
+
 All commands below run from the repository root. Use your own local campaign and dedicated output directories. The tools do not contact a private host, discover campaigns, or fetch results from remote storage.
 
 ## Requirements
