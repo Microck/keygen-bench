@@ -1,0 +1,84 @@
+{
+  "schema": "keygen-campaign-launch-record-1",
+  "recorded_at_utc": "2026-10-02T16:52:00Z",
+  "campaign_id": "next-max-tier-prompt-v2-oauth-queue-2-20261002",
+  "status_at_record": "RUNNING (supervisor, runner and terminal guard alive by PID + start tick; per-model probe gates open for opus-4-6 and opus-4-7, both in flight; Fable held)",
+  "authorization": {
+    "requested_by": "user via Main (2026-10-02 brief): follow-up queue after queue 1 stops, Fable held until it has quota",
+    "intent": "Continue queue 1's rerun chains so every launch-ready Claude max-tier model ends with 3 scored attempts under the main campaign's frozen condition. Infrastructure failures and unstarted slots are rerun as separate linked attempts. Scored outcomes and model failures are never rerun, and no existing outcome is rewritten.",
+    "held": {
+      "anthropic_oauth-claude-fable-5": "operator deferral (user): Fable quota; run.py queue --hold, never probed or started; rep 3 stays pending (held)",
+      "anthropic_oauth-claude-fable-5-1": "same"
+    },
+    "vercel": "not used", "nim": "not used", "cloudflare": "not used",
+    "minecraft_restoration": "forbidden (Ashburn has no Minecraft; Paris untouched)"
+  },
+  "predecessor": {
+    "campaign_id": "next-max-tier-prompt-v2-oauth-queue-20261002",
+    "stop": "fable-stop.py held both anthropic slot locks after the last non-Fable rep-2 start, wrote cancel.request at ~16:05Z once only the two blocked Fable rep-3 attempts were in flight, then released the locks: supervisor CANCELLED (authorized_cancel, runner rc -2), finished 16:13Z; terminal guard COMPLETED 16:43Z; tunnel owner 1045149 closed itself after the guard COMPLETED",
+    "attempts": "10 eligible SUCCESS (opus-5-5 reps 1-2; opus-4-6, opus-4-7, opus-4-8, sonnet-4-6, sonnet-5, sonnet-5-5 rep-2-retry-1; gpt-6-sol rep-2-retry-1 and rep-3-retry-1); fable-5 and fable-5-1 rep-3-retry-1 INTERRUPTED/INFRA with 0 model requests and no Boat VM",
+    "archive_gap": "anthropic_oauth-claude-sonnet-5-5-rep-2-retry-1: gdrive archive upload TimeoutExpired, and the guard's archive-only recovery hit its 1800 s deadline; local files retained on Ashburn (archive-error.json local_files_retained true)"
+  },
+  "design": {
+    "attempt_selection": "independent_repetitions_infrastructure_reruns",
+    "max_queue_attempts_per_repetition": 4,
+    "plan_builder": "oauth-queue/build-followup.py on Ashburn with the a4f44a7f benchmark/ on PYTHONPATH: frozen origins kept; every queue-1 attempt appended as a frozen plan-entry `reruns` link (status, status.json sha256, outcome and category from benchmark.report.attempt_row); models with every ordinal settled dropped (gpt-6-sol); selection rows copied from queue 1 with only campaign_id changed",
+    "queued_ordinals": {
+      "anthropic_oauth-claude-opus-4-6": "rep 3 -> rep-3-retry-1 (origin UNATTEMPTED)",
+      "anthropic_oauth-claude-opus-4-7": "rep 3 -> rep-3-retry-1 (origin UNATTEMPTED)",
+      "anthropic_oauth-claude-opus-4-8": "rep 3 -> rep-3-retry-1 (origin UNATTEMPTED)",
+      "anthropic_oauth-claude-sonnet-4-6": "rep 3 -> rep-3-retry-1 (origin UNATTEMPTED)",
+      "anthropic_oauth-claude-sonnet-5": "rep 3 -> rep-3-retry-1 (origin UNATTEMPTED)",
+      "anthropic_oauth-claude-sonnet-5-5": "rep 3 -> rep-3-retry-1 (origin TRANSPORT)",
+      "anthropic_oauth-claude-opus-5-5": "rep 3 -> rep-3 (fresh, no origin)",
+      "anthropic_oauth-claude-fable-5": "rep 3 -> rep-3-retry-2 (origin QUOTA, queue-1 retry-1 INFRA); held",
+      "anthropic_oauth-claude-fable-5-1": "rep 3 -> rep-3-retry-2 (origin QUOTA, queue-1 retry-1 INFRA); held"
+    },
+    "compile_summary_note": "campaign.py prints queued_repetitions 17: that counter tallies rerunnable origins and ignores plan-entry reruns. The runnable ordinals (benchmark.report.entry_reruns) are the 9 above.",
+    "probe_gate": "a4f44a7f: per-model gates on the non-pooled anthropic_oauth route, so one model's usage-limit reply closes only that model's gate; usage-limit re-probe 1800 s, other probe failures 300 s; no attempt starts while closed",
+    "boat_reserve": "before each start: live Boat balance minus every running attempt's remaining frozen TTL minus one TTL must stay >= 36000 s (10 h)"
+  },
+  "operational_differences_from_main": {
+    "concurrency": "workers 6; anthropic_oauth 2 (frozen config also lists codex_oauth 4, unused: no codex ordinal)",
+    "controller": "Ashburn (same as main), new root /home/ubuntu/keygen-full.OGHjBAkO/oauth-queue-2-20261002",
+    "engine": "commit a4f44a7f benchmark/ (git archive) with benchmark/native_models.py pinned to d3ae5963 (sha256 6a7e1dff...), so every frozen proof's native_source_sha256 matches; files differ from queue 1's deployed repo only in a4f44a7f's README.md, campaign.py, report.py, run.py and tests",
+    "runtime": "Ashburn runtime python3.11 (same as main)",
+    "launch_driver": "oauth-queue-2/launch-driver.py = queue 1's driver plus plan queue.holds -> run.py queue --hold"
+  },
+  "manifest": {
+    "path": "/home/ubuntu/keygen-full.OGHjBAkO/oauth-queue-2-20261002/control/oauth-queue-2-campaign.json",
+    "local_copy": "benchmark/runs/next-launch-prep-20261001/oauth-queue-2/oauth-queue-2-campaign.json",
+    "config_sha256": "16e4d123c3e74f14bd8caf267a7881e23cae72b4c6944ae9df037352b4d2d78f",
+    "file_sha256": "007aacaba9dc4d0f02976c0d3c41e85f83d87b8a1e81c4c5a239e03c1d5fa31d",
+    "plan_sha256": "3aec35888dbb967d (oauth-queue-2-plan.json)",
+    "selection_sha256": "e5156f527fc20aea (oauth-queue-2-selection.json)",
+    "compile": "cd $A/repo && env -i PATH=... python3.11 -I benchmark/campaign.py --inventory $A/repo/MODEL-TEST-PLAN.oauth-first.json --selection $A/control/oauth-queue-2-selection.json --tier-spec $A/control/tier-spec-c8cba354.json --out $A/control/oauth-queue-2-campaign.json --queue-plan $A/control/oauth-queue-2-plan.json --linked-campaign $A/control/ashburn-campaign.json --linked-campaign $A/control/oauth-repeats-campaign.json --linked-campaign $A/control/oauth-queue-campaign.json (A=/home/ubuntu/keygen-full.OGHjBAkO/oauth-queue-2-20261002)",
+    "linked": {
+      "next-max-tier-prompt-v2-ashburn-20261001": "ashburn-campaign.json file sha256 1a0f8c57...",
+      "next-max-tier-prompt-v2-oauth-repeats-20261001": "oauth-repeats-campaign.json file sha256 e6dc65d1...",
+      "next-max-tier-prompt-v2-oauth-queue-20261002": "oauth-queue-campaign.json file sha256 bcac6c4b..."
+    },
+    "condition": "compile verified condition_fingerprint equality of every model with each linked campaign that its plan entries name"
+  },
+  "launch_doctor": {"status": "configuration_checked", "memory": {"available_bytes": 11286511616, "required_bytes": 3221225472, "workers": 6}, "boat": {"can_start": true, "remaining_seconds": 170265, "note": "~47 h; shared with GoThree's Paris Go work"}},
+  "processes": {
+    "controller": "ubuntu@100.92.22.120 (Ashburn)",
+    "supervisor": {"pid": 218053, "start_ticks": "8730654", "command": "runtime python3.11 -I control/launch-driver.py supervise control/launch-plan.json"},
+    "runner": {"pid": 218055, "start_ticks": "8730660", "command": "run.py queue --campaign control/oauth-queue-2-campaign.json --out results/next-max-tier-prompt-v2-oauth-queue-2-20261002 --workers 6 --probe-interval 1800 --retry-interval 300 --boat-reserve-seconds 36000 --hold anthropic_oauth-claude-fable-5 --hold anthropic_oauth-claude-fable-5-1"},
+    "terminal_guard": {"pid": 218071, "start_ticks": "8731057"},
+    "tunnel_owner": {"host": "local workstation", "pid": 1240435, "start_ticks": "11648143", "tunnel_pid": 1240436, "forward": "-R 127.0.0.1:8417:127.0.0.1:8417 to Ashburn (local CLIProxyAPI pid 808, exe sha256 9a7cb93b...cb720, unchanged)", "plan": "oauth-queue-2/tunnel-owner-plan.json", "started": "16:46Z, after queue 1's owner closed its forward", "policy": "closes after the queue-2 terminal guard reports COMPLETED; never touches the bridge"}
+  },
+  "launch_plan": {
+    "path": "/home/ubuntu/keygen-full.OGHjBAkO/oauth-queue-2-20261002/control/launch-plan.json",
+    "sha256": "877fa458b187a911b6fa8d70cbb2ca1c106f317b40b84b925688fb350cd296bc",
+    "holds": ["anthropic_oauth-claude-fable-5", "anthropic_oauth-claude-fable-5-1"],
+    "controller_lock": "/home/ubuntu/keygen-full.OGHjBAkO/launch-control/controller.lock (held for the whole run)",
+    "deadline_seconds": 252000,
+    "credentials_loaded": ["BOAT_API_KEY", "CODEX_BRIDGE_API_KEY", "ANTHROPIC_BRIDGE_API_KEY"]
+  },
+  "status_commands": {
+    "status": "ssh ubuntu@100.92.22.120 '/home/ubuntu/keygen-full.OGHjBAkO/runtime/bin/python3.11 -I /home/ubuntu/keygen-full.OGHjBAkO/oauth-queue-2-20261002/control/launch-status.py /home/ubuntu/keygen-full.OGHjBAkO/oauth-queue-2-20261002/control/launch-plan.json'",
+    "cancel": "ssh ubuntu@100.92.22.120 touch /home/ubuntu/keygen-full.OGHjBAkO/oauth-queue-2-20261002/control/cancel.request",
+    "release_fable_hold": "after this queue stops: write a launch plan without holds (make-launch-plan.py with no arguments) for the same frozen campaign and out root, with fresh supervisor/guard state (launch-driver.py creates runner.private.log exclusively); the held ordinals resume at rep-3-retry-2"
+  }
+}
