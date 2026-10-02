@@ -13,6 +13,7 @@ import subprocess
 import tarfile
 import tempfile
 import threading
+import time
 import unittest
 from unittest.mock import Mock, patch
 import wave
@@ -362,12 +363,12 @@ class BenchmarkTests(unittest.TestCase):
                   "concurrency": {"key_pools": {"TEST_GO_KEY": {"TEST_GO_KEY_1": 2, "TEST_GO_KEY_2": 1}}}}
         model = {**self.model, "effective_settings": self.proof["effective_settings"]}
         with ExitStack() as stack:
-            held = [stack.enter_context(run.credential_lease(self.root, config, model)) for _ in range(3)]
+            held = [stack.enter_context(run.credential_lease(config, model)) for _ in range(3)]
             # Least loaded first (ties in declared order), never beyond a key's cap.
             self.assertEqual(held, ["TEST_GO_KEY_1", "TEST_GO_KEY_2", "TEST_GO_KEY_1"])
             blocked = threading.Event()
             def fourth():
-                with run.credential_lease(self.root, config, model):
+                with run.credential_lease(config, model):
                     blocked.set()
             waiter = threading.Thread(target=fourth, daemon=True)
             waiter.start()
@@ -656,6 +657,46 @@ class ModelSequenceTests(unittest.TestCase):
                                     boat_reserve=36000, probe=lambda model, key: {"category": "ok"},
                                     balance=lambda: 46799).run()
         self.assertEqual((self.invoked, result["status"], result["stopped"]["reason"]), ([], "STOPPED_BOAT_RESERVE", "boat_reserve"))
+
+    def test_pooled_queue_probes_each_key_once_and_a_quota_closes_only_that_key(self):
+        root, config, snapshot = self.queue_root()
+        config["concurrency"] = {"workers": 2, "providers": {"go": 2}, "key_pools": {"TEST_KEY": {"TEST_KEY_A": 1, "TEST_KEY_B": 1}}}
+        snapshot = {**snapshot, "config_sha256": campaign.digest(config), "campaign": config}
+        (root / "campaign.lock.json").unlink()
+        run.lock_campaign(root / "campaign.lock.json", snapshot)
+        probed, keys = [], {}
+        def probe(model, credential):
+            probed.append(credential)
+            return {"category": "ok", "http_status": 200}
+        attempt = self.queue_attempt({"model-rep-1": "QUOTA", "model-rep-1-retry-1": "success", "model-rep-2-retry-1": "success"})
+        both_started = threading.Event()
+        def pooled_attempt(*args, key_lease):
+            keys[args[7]] = key_lease.name
+            if args[7] == "model-rep-2-retry-1":
+                both_started.set()
+            elif args[7] == "model-rep-1":
+                both_started.wait(5)  # hold key A while the second ordinal is admitted
+            try:
+                attempt(*args)
+            finally:
+                key_lease.release()
+        controller = self.root / "controller"
+        controller.mkdir()
+        with patch.object(run, "run_one", side_effect=pooled_attempt), patch.object(run.STOP, "wait"), \
+                patch.object(tempfile, "tempdir", str(controller)), \
+                patch.dict("os.environ", {"TEST_KEY_A": "synthetic-a", "TEST_KEY_B": "synthetic-b"}):
+            result = run.RerunQueue(root, config, None, snapshot, None, probe_interval=3600, retry_interval=60,
+                                    boat_reserve=0, probe=probe).run()
+        # One probe per key before its first use, each on its own credential; the QUOTA attempt
+        # closes only its key, so the rerun goes to the other, already verified key without a probe.
+        self.assertEqual(probed, ["synthetic-a", "synthetic-b"])
+        self.assertEqual(keys, {"model-rep-1": "TEST_KEY_A", "model-rep-2-retry-1": "TEST_KEY_B",
+                                "model-rep-1-retry-1": "TEST_KEY_B"})
+        gates = result["key_gates"]
+        self.assertEqual((gates["TEST_KEY_A"]["open"], gates["TEST_KEY_A"]["closed_by"]), (False, "model-rep-1"))
+        self.assertGreater(gates["TEST_KEY_A"]["next_probe_at"], time.time() + 3000)
+        self.assertTrue(gates["TEST_KEY_B"]["open"])
+        self.assertEqual(result["status"], "COMPLETED")
 
     def test_funds_usage_limit_and_rate_limit_errors_are_quota_not_protocol(self):
         import litellm
