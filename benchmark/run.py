@@ -655,13 +655,24 @@ def artifact_root(path: Path) -> Path:
     return root
 
 
-@contextmanager
-def slot(root: Path, name: str, count: int):
-    directory = (Path(tempfile.gettempdir()) / f"keygen-benchmark-{os.getuid()}-resources"
-                 if name in {"render", "video", "scoring"} else root / ".resource-locks")
+def controller_resource_dir() -> Path:
+    """Lock and gate directory shared by every campaign root this user runs on this controller."""
+    directory = Path(tempfile.gettempdir()) / f"keygen-benchmark-{os.getuid()}-resources"
     directory.mkdir(mode=0o700, exist_ok=True)
     if directory.is_symlink() or directory.stat().st_uid != os.getuid():
         raise RuntimeError("Unsafe resource-lock directory")
+    return directory
+
+
+@contextmanager
+def slot(root: Path, name: str, count: int):
+    if name in {"render", "video", "scoring"}:
+        directory = controller_resource_dir()
+    else:
+        directory = root / ".resource-locks"
+        directory.mkdir(mode=0o700, exist_ok=True)
+        if directory.is_symlink() or directory.stat().st_uid != os.getuid():
+            raise RuntimeError("Unsafe resource-lock directory")
     handles = [(directory / f"{name}-{index}.lock").open("a") for index in range(count)]
     acquired = None
     try:
@@ -683,24 +694,64 @@ def slot(root: Path, name: str, count: int):
             handle.close()
 
 
+class KeyLease:
+    """One held pool-member cap lock. release() is idempotent and may run on any thread."""
+
+    def __init__(self, name: str, handle):
+        self.name, self._handle, self._lock = name, handle, threading.Lock()
+
+    def release(self) -> None:
+        with self._lock:
+            if self._handle is not None:
+                fcntl.flock(self._handle, fcntl.LOCK_UN)
+                self._handle.close()
+                self._handle = None
+
+
+def key_lock_paths(model: dict, pool: dict) -> tuple[Path, dict]:
+    """Pool mutex and per-member cap locks. They are controller-wide: every campaign on this
+    controller counts against the same per-key cap, so a key never serves more attempts at once."""
+    directory = controller_resource_dir()
+    return (directory / f"key-pool-{model['api_key_env']}.lock",
+            {name: [directory / f"key-{name}-{index}.lock" for index in range(cap)] for name, cap in pool.items()})
+
+
+def try_key_lease(config: dict, model: dict, name: str) -> KeyLease | None:
+    """Take one free cap slot of pool member `name` without waiting; None when it is full."""
+    mutex_path, paths = key_lock_paths(model, credential_pool(config, model))
+    with mutex_path.open("a") as mutex:
+        fcntl.flock(mutex, fcntl.LOCK_EX)
+        for path in paths[name]:
+            handle = path.open("a")
+            try:
+                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                return KeyLease(name, handle)
+            except BlockingIOError:
+                handle.close()
+    return None
+
+
 @contextmanager
-def credential_lease(root: Path, config: dict, model: dict):
+def credential_lease(config: dict, model: dict, held: KeyLease | None = None):
     """Assign one key for the whole attempt: the least-loaded pool member under its cap.
 
     The attempt never switches keys, so native history and billing provenance stay
-    with one credential. Only the key name is yielded and recorded.
+    with one credential. Only the key name is yielded and recorded. A rerun queue passes the
+    lease it already took for a key it probed (`held`); it is released on exit as well.
     """
+    if held is not None:
+        try:
+            yield held.name
+        finally:
+            held.release()
+        return
     pool = credential_pool(config, model)
     if pool == {model["api_key_env"]: None}:
         yield model["api_key_env"]
         return
-    directory = root / ".resource-locks"
-    directory.mkdir(mode=0o700, exist_ok=True)
-    if directory.is_symlink() or directory.stat().st_uid != os.getuid():
-        raise RuntimeError("Unsafe resource-lock directory")
-    mutex = (directory / f"key-pool-{model['api_key_env']}.lock").open("a")
-    handles = {name: [(directory / f"key-{name}-{index}.lock").open("a") for index in range(cap)]
-               for name, cap in pool.items()}
+    mutex_path, paths = key_lock_paths(model, pool)
+    mutex = mutex_path.open("a")
+    handles = {name: [path.open("a") for path in files] for name, files in paths.items()}
     acquired = None
     try:
         while acquired is None:
@@ -743,13 +794,18 @@ def credential_lease(root: Path, config: dict, model: dict):
 
 
 def pace_boat_allocation(root: Path, interval_seconds: int) -> None:
-    """Serialize this controller's starts before the VM startup deadline begins."""
+    """Serialize this controller's starts before the VM startup deadline begins.
+
+    The lock and the last start are controller-wide, so campaigns running side by side on one
+    controller share the interval; the campaign root keeps its own record of its latest start.
+    """
     if not interval_seconds:
         return
-    with (root / ".boat-allocation.lock").open("a") as lock:
+    shared = controller_resource_dir()
+    with (shared / "boat-allocation.lock").open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
-        path = root / "boat-allocation.json"
-        last = json.loads(path.read_text())["last_start_at"] if path.exists() else 0
+        paths = (root / "boat-allocation.json", shared / "boat-allocation.json")
+        last = max([json.loads(path.read_text())["last_start_at"] for path in paths if path.exists()], default=0)
         while True:
             if STOP.is_set():
                 raise KeyboardInterrupt()
@@ -757,11 +813,13 @@ def pace_boat_allocation(root: Path, interval_seconds: int) -> None:
             if delay <= 0:
                 break
             STOP.wait(min(delay, 0.25))
-        write_json(path, {"last_start_at": time.time(), "interval_seconds": interval_seconds})
+        record = {"last_start_at": time.time(), "interval_seconds": interval_seconds}
+        for path in paths:
+            write_json(path, record)
 
 
 def run_one(root: Path, config: dict, model: dict, docker: list[str] | None, image: str, visualizer_image: str,
-            repetition: int, attempt_id: str, store, retry_of=None) -> None:
+            repetition: int, attempt_id: str, store, retry_of=None, key_lease: KeyLease | None = None) -> None:
     run_dir = root / attempt_id
     try:
         with slot(root, model["provider"], config["concurrency"]["providers"][model["provider"]]):
@@ -779,7 +837,7 @@ def run_one(root: Path, config: dict, model: dict, docker: list[str] | None, ima
                     required = config["limits"]["wall_seconds"] + 4 * config["limits"]["render_seconds"] + config["limits"]["video_seconds"] + 600
                     if session.archive_deadline - time.time() < required:
                         raise RuntimeError("Boat delivered TTL cannot cover the frozen runtime and export budgets")
-                _run_one(root, config, model, docker, image, visualizer_image, repetition, attempt_id, store, retry_of)
+                _run_one(root, config, model, docker, image, visualizer_image, repetition, attempt_id, store, retry_of, key_lease)
     except BaseException as exc:
         status = json.loads((run_dir / "status.json").read_text())
         status.update(status="INTERRUPTED" if isinstance(exc, (KeyboardInterrupt, SystemExit)) else "INFRA_ERROR",
@@ -788,6 +846,8 @@ def run_one(root: Path, config: dict, model: dict, docker: list[str] | None, ima
         write_json(run_dir / "status.json", status)
         raise
     finally:
+        if key_lease is not None:
+            key_lease.release()  # never left held when the attempt ended before its worker started
         finalize_attempt(run_dir, store)
 
 
@@ -922,6 +982,53 @@ def probe_provider(model: dict, credential: str, timeout: float = 120) -> dict:
     return result
 
 
+# A key gate a probe or a finished attempt verified stays open this long without fresh evidence.
+KEY_GATE_FRESH_SECONDS = 3600
+
+
+def process_start_ticks(pid: int) -> str | None:
+    try:
+        fields = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()
+        return None if fields[0] == "Z" else fields[19]
+    except (OSError, IndexError):
+        return None
+
+
+class KeyGates:
+    """Usage gates of pooled credentials, one record per key name in a controller-wide file.
+
+    Every rerun queue on this controller reads and writes the same records, so a key that a probe
+    or an attempt found usage-limited stays closed for every campaign until its next probe, and a
+    key is probed once before use rather than once per campaign. Records hold key names, probe
+    categories and HTTP statuses only, never credential values or response bodies.
+    """
+
+    def __init__(self):
+        directory = controller_resource_dir()
+        self.path, self.lock_path = directory / "key-gates.json", directory / "key-gates.lock"
+
+    @contextmanager
+    def edit(self):
+        with self.lock_path.open("a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            gates = json.loads(self.path.read_text()) if self.path.exists() else {}
+            yield gates
+            write_json(self.path, gates)
+
+    def read(self) -> dict:
+        with self.edit() as gates:
+            return json.loads(json.dumps(gates))
+
+    @staticmethod
+    def state(gate: dict, now: float) -> str:
+        """"open": usable without a probe; "wait": closed until next_probe_at; "probe": probe first."""
+        if gate.get("open") and now - (gate.get("verified_at") or 0) <= KEY_GATE_FRESH_SECONDS:
+            return "open"
+        if not gate.get("open") and now < (gate.get("next_probe_at") or 0):
+            return "wait"
+        return "probe"
+
+
 class RerunQueue:
     """Run a rerun queue campaign (campaign.QUEUE): every planned ordinal until it holds a sample.
 
@@ -936,6 +1043,16 @@ class RerunQueue:
     while the gate is closed. Before each start the Boat balance must keep `boat_reserve` seconds
     after the worst case (frozen TTL) of every running attempt and the new one; otherwise the
     queue starts nothing more, lets running attempts finish and stops.
+
+    A pooled route (concurrency.key_pools) is gated per key instead (KeyGates): an attempt starts
+    only on a pool member with a free controller-wide cap slot whose gate is open, probing that
+    key with its own credential first when needed. An attempt that ends QUOTA closes only its key
+    for `probe_interval`; any other non-model failure makes its key re-probe before its next use.
+
+    Queues running side by side on one controller publish their waiting ordinals and running
+    attempts (queue-demand-<campaign>.json beside the key gates): a queue never starts a provider's
+    repetition while another live queue still waits to start a lower repetition on that provider,
+    and the Boat reserve counts every live queue's running attempts.
     """
 
     def __init__(self, root: Path, config: dict, docker, snapshot: dict, store, *,
@@ -958,8 +1075,13 @@ class RerunQueue:
         self.cohort = report.campaign_cohort(config)
         self.gates = {provider: {"open": False, "next_probe_at": 0.0, "last_probe": None}
                       for provider in {self.models[model_id]["provider"] for model_id, _, _ in self.ordinals}}
+        self.key_gates = KeyGates()
+        self.demand_path = controller_resource_dir() / f"queue-demand-{config['campaign_id']}.json"
         self.inflight = {}
         self.stopped = None
+
+    def pooled(self, model: dict) -> bool:
+        return credential_pool(self.config, model) != {model["api_key_env"]: None}
 
     def event(self, **record) -> None:
         with (self.root / "queue-events.jsonl").open("a", encoding="utf-8") as stream:
@@ -1008,7 +1130,9 @@ class RerunQueue:
         chains = [{"model_id": model_id, "repetition": repetition, **self.chain(model_id, repetition, origin)}
                   for model_id, repetition, origin in self.ordinals]
         state = {"status": status, "updated_at": time.time(), "campaign_sha256": self.config_hash,
-                 "gates": self.gates, "inflight": sorted(self.inflight), "stopped": self.stopped, "ordinals": chains}
+                 "gates": self.gates, "key_gates": self.key_gates.read(),
+                 "inflight": {attempt_id: item[3] for attempt_id, item in sorted(self.inflight.items())},
+                 "stopped": self.stopped, "ordinals": chains}
         write_json(self.root / "queue-state.json", state)
         return state
 
@@ -1028,13 +1152,85 @@ class RerunQueue:
             gate["next_probe_at"] = time.time() + (self.probe_interval if result["category"] == "quota" else self.retry_interval)
         return gate["open"]
 
-    def reserve_allows_start(self) -> bool:
+    def open_key(self, model: dict) -> KeyLease | None:
+        """A held cap slot of the first pool member, in declared order, whose gate is open.
+
+        A member whose gate needs a probe is probed with ONE request on its own credential while
+        its slot is held, so no other queue on this controller probes or uses it meanwhile.
+        """
+        for name in credential_pool(self.config, model):
+            lease = try_key_lease(self.config, model, name)
+            if lease is None:
+                continue
+            with self.key_gates.edit() as gates:
+                state = KeyGates.state(gates.get(name, {}), time.time())
+            if state == "open":
+                return lease
+            if state == "probe":
+                result = {**self.probe(model, os.environ.get(name, "")), "key": name}
+                self.event(event="probe", **result)
+                now = time.time()
+                with self.key_gates.edit() as gates:
+                    if result["category"] == "ok":
+                        gates[name] = {"open": True, "verified_at": now, "next_probe_at": 0.0,
+                                       "last_probe": result, "campaign_id": self.config["campaign_id"]}
+                    else:
+                        wait = self.probe_interval if result["category"] == "quota" else self.retry_interval
+                        gates[name] = {"open": False, "verified_at": None, "next_probe_at": now + wait,
+                                       "last_probe": result, "campaign_id": self.config["campaign_id"]}
+                if result["category"] == "ok":
+                    return lease
+            lease.release()
+        return None
+
+    def close_key(self, name: str, attempt_id: str, category: str | None) -> None:
+        """Record what a finished attempt showed about its key."""
+        now = time.time()
+        with self.key_gates.edit() as gates:
+            gate = gates.get(name, {})
+            if category == "QUOTA":
+                # The key's usage window is spent: it waits a full probe interval before its next probe.
+                gates[name] = {**gate, "open": False, "verified_at": None, "next_probe_at": now + self.probe_interval,
+                               "closed_by": attempt_id, "campaign_id": self.config["campaign_id"]}
+            elif category in campaign.NON_MODEL_FAILURES:
+                gates[name] = {**gate, "open": False, "verified_at": None, "next_probe_at": 0.0,
+                               "closed_by": attempt_id, "campaign_id": self.config["campaign_id"]}
+            elif gate.get("open"):
+                gates[name] = {**gate, "verified_at": now}  # the key served a whole attempt
+        if category == "QUOTA":
+            self.event(event="key_waiting", key=name, attempt_id=attempt_id, next_probe_in=self.probe_interval)
+
+    def others(self) -> list[dict]:
+        """Demand records of the other live queues on this controller."""
+        records = []
+        for path in self.demand_path.parent.glob("queue-demand-*.json"):
+            if path == self.demand_path:
+                continue
+            try:
+                record = json.loads(path.read_text())
+            except (OSError, ValueError):
+                continue
+            if record.get("pid") != os.getpid() and process_start_ticks(record.get("pid", 0)) == record.get("start_ticks"):
+                records.append(record)
+        return records
+
+    def publish_demand(self, waiting: list) -> None:
+        lowest = {}
+        if not self.stopped:
+            for model, repetition, _ in waiting:
+                lowest[model["provider"]] = min(repetition, lowest.get(model["provider"], repetition))
+        write_json(self.demand_path, {"pid": os.getpid(), "start_ticks": process_start_ticks(os.getpid()),
+                                      "campaign_id": self.config["campaign_id"], "updated_at": time.time(),
+                                      "waiting": lowest, "inflight_started": [item[2] for item in self.inflight.values()]})
+
+    def reserve_allows_start(self, others: list[dict] = ()) -> bool:
         remaining = self.balance()
         if remaining is None:
             return True
         ttl = self.config["transport"]["boat"]["ttl_seconds"]
         now = time.time()
-        running = sum(max(0, ttl - (now - started)) for _, _, started in self.inflight.values())
+        started = [item[2] for item in self.inflight.values()] + [value for record in others for value in record["inflight_started"]]
+        running = sum(max(0, ttl - (now - value)) for value in started)
         projected = remaining - running - ttl
         if projected < self.boat_reserve:
             self.stopped = {"reason": "boat_reserve", "remaining_seconds": remaining, "projected_seconds": projected,
@@ -1043,22 +1239,29 @@ class RerunQueue:
             return False
         return True
 
-    def start(self, pool, model: dict, repetition: int, step: dict) -> None:
+    def start(self, pool, model: dict, repetition: int, step: dict, key_lease: KeyLease | None = None) -> None:
         attempt_id, previous = step["attempt_id"], step["retry_of"]
-        if previous is not None:
-            campaign.publish(self.root / f"retry-{attempt_id}.json",
-                             {"campaign_sha256": self.config_hash, "attempt_id": attempt_id, "model_id": model["id"],
-                              "repetition": repetition, "kind": step["kind"], "retry_of": previous,
-                              "retry_of_campaign_id": step["previous_campaign_id"]})
-        reserve(self.root, model, repetition, attempt_id, previous)
-        future = pool.submit(run_one, self.root, self.config, model, self.docker, self.snapshot["image_id"],
-                             self.snapshot["visualizer_image_id"], repetition, attempt_id, self.store, previous)
-        self.inflight[attempt_id] = (future, model["provider"], time.time())
-        self.event(event="start", attempt_id=attempt_id, kind=step["kind"], retry_of=previous)
+        try:
+            if previous is not None:
+                campaign.publish(self.root / f"retry-{attempt_id}.json",
+                                 {"campaign_sha256": self.config_hash, "attempt_id": attempt_id, "model_id": model["id"],
+                                  "repetition": repetition, "kind": step["kind"], "retry_of": previous,
+                                  "retry_of_campaign_id": step["previous_campaign_id"]})
+            reserve(self.root, model, repetition, attempt_id, previous)
+            extra = {} if key_lease is None else {"key_lease": key_lease}
+            future = pool.submit(run_one, self.root, self.config, model, self.docker, self.snapshot["image_id"],
+                                 self.snapshot["visualizer_image_id"], repetition, attempt_id, self.store, previous, **extra)
+        except BaseException:
+            if key_lease is not None:
+                key_lease.release()
+            raise
+        key = None if key_lease is None else key_lease.name
+        self.inflight[attempt_id] = (future, model["provider"], time.time(), key)
+        self.event(event="start", attempt_id=attempt_id, kind=step["kind"], retry_of=previous, key=key)
 
     def reap(self) -> list[str]:
         errors = []
-        for attempt_id, (future, provider, _) in list(self.inflight.items()):
+        for attempt_id, (future, provider, _, key) in list(self.inflight.items()):
             if not future.done():
                 continue
             del self.inflight[attempt_id]
@@ -1066,8 +1269,10 @@ class RerunQueue:
                 errors.append(type(future.exception()).__name__)
             status = json.loads((self.root / attempt_id / "status.json").read_text())
             self.event(event="finish", attempt_id=attempt_id, status=status.get("status"),
-                       failure_category=status.get("failure_category"))
-            if status.get("failure_category") in campaign.NON_MODEL_FAILURES:
+                       failure_category=status.get("failure_category"), key=key)
+            if key is not None:
+                self.close_key(key, attempt_id, status.get("failure_category"))
+            elif status.get("failure_category") in campaign.NON_MODEL_FAILURES:
                 # Re-verify the provider with one probe before its next start.
                 self.gates[provider].update(open=False, next_probe_at=0.0)
         return errors
@@ -1090,6 +1295,8 @@ class RerunQueue:
                         waiting.append((self.models[model_id], repetition, step))
                 if (not waiting or self.stopped) and not self.inflight:
                     break
+                self.publish_demand(waiting)
+                others = self.others()
                 closed = set()  # one gate decision per provider per pass keeps admission in ordinal order
                 for model, repetition, step in waiting:
                     if self.stopped or len(self.inflight) >= concurrency["workers"]:
@@ -1097,12 +1304,24 @@ class RerunQueue:
                     provider = model["provider"]
                     if provider in closed or sum(item[1] == provider for item in self.inflight.values()) >= concurrency["providers"][provider]:
                         continue
-                    if not self.open_gate(provider, model):
+                    if any(record["waiting"].get(provider, repetition) < repetition for record in others):
+                        closed.add(provider)  # another queue here still waits to start a lower repetition
+                        continue
+                    key_lease = None
+                    if self.pooled(model):
+                        key_lease = self.open_key(model)
+                        if key_lease is None:
+                            closed.add(provider)
+                            continue
+                    elif not self.open_gate(provider, model):
                         closed.add(provider)
                         continue
-                    if not self.reserve_allows_start():
+                    if not self.reserve_allows_start(others):
+                        if key_lease is not None:
+                            key_lease.release()
                         break
-                    self.start(pool, model, repetition, step)
+                    self.start(pool, model, repetition, step, key_lease)
+                self.publish_demand(waiting)
                 self.snapshot_state("RUNNING")
                 STOP.wait(5)
         except KeyboardInterrupt:
@@ -1110,13 +1329,14 @@ class RerunQueue:
             raise
         finally:
             pool.shutdown(wait=True)
+            self.demand_path.unlink(missing_ok=True)
         errors.extend(self.reap())
         return {**self.snapshot_state("STOPPED_BOAT_RESERVE" if self.stopped else "COMPLETED"), "errors": errors}
 
 
 
 def _run_one(root: Path, config: dict, model: dict, docker: list[str], image: str, visualizer_image: str,
-             repetition: int, attempt_id: str, store, retry_of=None) -> None:
+             repetition: int, attempt_id: str, store, retry_of=None, key_lease: KeyLease | None = None) -> None:
     with slot(root, "worker", config["concurrency"]["workers"]):
         run_dir = root / attempt_id
         name = "keygen-create-" + uuid.uuid4().hex[:16]
@@ -1135,7 +1355,7 @@ def _run_one(root: Path, config: dict, model: dict, docker: list[str], image: st
             store.preflight(root, parallelism=config["concurrency"]["workers"],
                             peak_per_attempt=config["storage"]["peak_bytes_per_attempt"])
             # One key for the whole model attempt; released once the worker has exited.
-            result["credential_env"] = lease.enter_context(credential_lease(root, config, model))
+            result["credential_env"] = lease.enter_context(credential_lease(config, model, key_lease))
             start_container(docker, image, name)
             home = run_dir / "isolated-host-home"
             (home / "mini-config").mkdir(parents=True)

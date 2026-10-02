@@ -22,7 +22,7 @@ def main():
     spec.loader.exec_module(helpers)
     os.environ.clear()
     os.environ.update(helpers.environment(plan))
-    sys.path.insert(0, str(root / 'repo/benchmark'))
+    sys.path.insert(0, str(root / plan['repo'] / 'benchmark'))
     import run
     from artifacts import ArtifactStore
     config = json.loads(Path(plan['original_manifest']).read_text())['campaign']

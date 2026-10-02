@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
-"""Owned supervisor for one frozen campaign: `run.py run` under resource and deadline guards.
+"""Owned supervisor for the go-three launch: one engine runner per frozen campaign, one lock.
 
-`supervise PLAN` verifies the frozen fingerprints, takes the controller-wide launch lock, starts
-the unmodified engine (`run.py run`) in its own session with only the credentials the campaign
-routes need, samples memory/disk/resolver every 15 s and stops only its own runner on sustained
-pressure, storage reserve, resolver runaway, deadline or `cancel.request`. After the runner exits
-it verifies and round-trips every recorded archive. Never prints environment or credential values.
-The module-level helpers are also loaded by terminal-guard.py and archive-only.py.
+`supervise PLAN` verifies the frozen fingerprints, takes the controller-wide launch lock and starts
+every planned runner (`run.py queue` of its own deployed engine copy) in its own session with only
+Boat plus the four Go keys. It samples memory/disk/resolver every 15 s and stops only its own
+runners on sustained pressure, storage reserve, resolver runaway, deadline or `cancel.request`.
+After the runners exit it verifies and round-trips every recorded archive. Never prints
+environment or credential values. The module-level helpers are also loaded by terminal-guard.py
+and archive-only.py.
 """
 import fcntl
 import hashlib
@@ -20,10 +21,9 @@ import sys
 import tempfile
 import time
 
-# Paris add-on: Go routes only, served from pool members _1.._3. The base OPENCODE_GO_API_KEY hit
-# Go's 5-hour usage window (2026-10-01), so it is never loaded into this launch's environment.
-CREDENTIALS = ("BOAT_API_KEY", "BOAT_API_URL",
-               "OPENCODE_GO_API_KEY_1", "OPENCODE_GO_API_KEY_2", "OPENCODE_GO_API_KEY_3")
+# Go routes only: Boat plus the pool members the plan names. Each key is probed with one tiny
+# request by the engine's controller-wide key gate before any attempt uses it.
+CREDENTIALS = ("BOAT_API_KEY", "BOAT_API_URL")
 
 
 def load(path):
@@ -69,7 +69,7 @@ def environment(plan):
            'KEYGEN_FT2_ANALYSIS': str(Path(plan['analysis']) / 'ft2-analysis'),
            'LD_LIBRARY_PATH': str(Path(plan['analysis']) / 'lib'),
            'RCLONE_CONFIG': plan['rclone_config'], 'XDG_RUNTIME_DIR': '/run/user/%s' % os.getuid()}
-    for name in CREDENTIALS:
+    for name in CREDENTIALS + tuple(plan['go_keys']):
         value = credentials.get(name)
         if value is not None:
             if not isinstance(value, str) or not value:
@@ -86,10 +86,11 @@ def verify(plan):
     for path, expected in plan['runtime_sha256'].items():
         if digest(path) != expected:
             raise ValueError('Approved runtime fingerprint mismatch')
-    if digest(plan['campaign']) != plan['campaign_sha256']:
-        raise ValueError('Campaign manifest changed')
-    if load(plan['campaign'])['sha256'] != plan['manifest_sha256']:
-        raise ValueError('Campaign configuration digest changed')
+    for run in plan['runs']:
+        if digest(run['campaign']) != run['campaign_sha256']:
+            raise ValueError('Campaign manifest changed')
+        if load(run['campaign'])['sha256'] != run['manifest_sha256']:
+            raise ValueError('Campaign configuration digest changed')
 
 
 def processes():
@@ -107,14 +108,18 @@ def processes():
     return records
 
 
-def sample(plan, runner_pid, previous):
-    records = processes()
-    owned = {runner_pid}
+def descendants(records, pids):
+    owned = set(pids)
     while True:
         added = {pid for pid, row in records.items() if row['parent'] in owned} - owned
         if not added:
-            break
+            return owned
         owned.update(added)
+
+
+def sample(plan, runner_pids, previous):
+    records = processes()
+    owned = descendants(records, runner_pids)
     ticks = sum(records[pid]['ticks'] for pid in owned if pid in records)
     now = time.monotonic()
     elapsed = now - previous[0] if previous else 0
@@ -134,27 +139,28 @@ def sample(plan, runner_pid, previous):
     return values, (now, ticks)
 
 
-def stop_runner(state, grace=600):
-    if not alive(state, 'runner'):
+def stop_runner(record, grace=600):
+    """Stop one owned runner, identified by `runner_pid` plus `runner_start_ticks` in `record`."""
+    if not alive(record, 'runner'):
         return
-    os.kill(state['runner_pid'], signal.SIGTERM)
+    os.kill(record['runner_pid'], signal.SIGTERM)
     deadline = time.monotonic() + grace
-    while alive(state, 'runner') and time.monotonic() < deadline:
+    while alive(record, 'runner') and time.monotonic() < deadline:
         time.sleep(1)
-    if alive(state, 'runner'):
+    if alive(record, 'runner'):
         # Only this launch's process group, never host-wide processes or Boat listings.
-        os.killpg(state['runner_pid'], signal.SIGKILL)
-        state['runner_forced_kill'] = True
+        os.killpg(record['runner_pid'], signal.SIGKILL)
+        record['runner_forced_kill'] = True
         deadline = time.monotonic() + 15
-        while alive(state, 'runner') and time.monotonic() < deadline:
+        while alive(record, 'runner') and time.monotonic() < deadline:
             time.sleep(0.2)
-    if alive(state, 'runner'):
+    if alive(record, 'runner'):
         raise RuntimeError('Owned runner did not terminate')
 
 
-def sync_pacing(plan):
+def sync_pacing(plan, out):
     """Carry the newest controller Boat start forward so allocation pacing spans campaigns."""
-    out = Path(plan['out'])
+    out = Path(out)
     out.mkdir(mode=0o700, parents=True, exist_ok=True)
     latest = None
     for directory in plan['pacing_roots']:
@@ -168,14 +174,14 @@ def sync_pacing(plan):
     return latest
 
 
-def archive_summary(plan, control):
-    sys.path.insert(0, str(Path(plan['root']) / 'repo/benchmark'))
+def archive_summary(plan, run, control):
+    sys.path.insert(0, str(Path(plan['root']) / run['repo'] / 'benchmark'))
     from artifacts import ArtifactStore
     from run import attempt_succeeded
-    config = load(plan['campaign'])['campaign']
+    config = load(run['campaign'])['campaign']
     store = ArtifactStore(config['storage'])
     results = []
-    for path in sorted(Path(plan['out']).glob('*/status.json')):
+    for path in sorted(Path(run['out']).glob('*/status.json')):
         status = load(path)
         profile_path = path.parent / 'profile.json'
         profile = load(profile_path) if profile_path.exists() else None
@@ -204,9 +210,10 @@ def supervise(plan_path):
     control = Path(plan['control'])
     state_path = control / 'supervisor-state.json'
     state = {'status': 'STARTING', 'supervisor_pid': os.getpid(),
-             'supervisor_start_ticks': identity(os.getpid()), 'campaign_id': plan['campaign_id'],
-             'manifest_sha256': plan['manifest_sha256'], 'started_at': time.time(),
-             'minecraft_restoration': 'forbidden'}
+             'supervisor_start_ticks': identity(os.getpid()), 'launch_id': plan['launch_id'],
+             'campaigns': {run['name']: {'campaign_id': run['campaign_id'], 'manifest_sha256': run['manifest_sha256']}
+                           for run in plan['runs']},
+             'started_at': time.time(), 'runners': {}, 'minecraft_restoration': 'forbidden'}
     save(state_path, state)
     stop = False
 
@@ -216,8 +223,13 @@ def supervise(plan_path):
     signal.signal(signal.SIGHUP, signal.SIG_IGN)
     signal.signal(signal.SIGTERM, request_stop)
     signal.signal(signal.SIGINT, request_stop)
-    runner = None
+    runners = {}
+    logs = []
     lock = None
+
+    def stop_all():
+        for name in runners:
+            stop_runner(state['runners'][name], grace=600)
     try:
         verify(plan)
         lock = Path(plan['controller_lock']).open('a')
@@ -228,62 +240,73 @@ def supervise(plan_path):
         env = environment(plan)
         os.environ.clear()
         os.environ.update(env)
-        state['boat_pacing_seed'] = sync_pacing(plan)
-        command = [plan['python'], '-I', str(Path(plan['root']) / 'repo/benchmark/run.py'), 'run',
-                   '--campaign', plan['campaign'], '--out', plan['out'],
-                   '--workers', str(plan['workers'])]
-        with (control / 'runner.private.log').open('xb') as log:
+        state['boat_pacing_seed'] = {run['name']: sync_pacing(plan, run['out']) for run in plan['runs']}
+        for run in plan['runs']:
+            repo = Path(plan['root']) / run['repo']
+            command = [plan['python'], '-I', str(repo / 'benchmark/run.py'), *run['command_args']]
+            log = (control / f"runner-{run['name']}.private.log").open('xb')
+            logs.append(log)
             os.chmod(log.name, 0o600)
-            runner = subprocess.Popen(command, env=env, cwd=str(Path(plan['root']) / 'repo'),
-                                      stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
-                                      start_new_session=True)
-            state.update(status='RUNNING', runner_pid=runner.pid, runner_start_ticks=identity(runner.pid),
-                         runner_started_at=time.time())
+            runners[run['name']] = subprocess.Popen(command, env=env, cwd=str(repo), stdin=subprocess.DEVNULL,
+                                                    stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+            process = runners[run['name']]
+            state['runners'][run['name']] = {'runner_pid': process.pid, 'runner_start_ticks': identity(process.pid),
+                                             'runner_started_at': time.time(), 'out': run['out']}
+        state['status'] = 'RUNNING'
+        save(state_path, state)
+        guards = plan['guards']
+        previous = None
+        pressure = 0
+        deadline = time.monotonic() + plan['deadline_seconds']
+        while any(process.poll() is None for process in runners.values()):
+            live = [process.pid for process in runners.values() if process.poll() is None]
+            metrics, previous = sample(plan, live, previous)
+            pressure = pressure + 1 if metrics['mem_available_bytes'] < guards['mem_available_bytes_min'] else 0
+            reasons = []
+            if pressure >= guards['pressure_samples']:
+                reasons.append('sustained_memory_pressure')
+            if metrics['disk_free_bytes'] < guards['disk_free_bytes_min']:
+                reasons.append('storage_reserve')
+            if (metrics['resolver_bytes'] > guards['resolver_bytes_max']
+                    or metrics['resolver_rss_bytes'] > guards['resolver_rss_bytes_max']):
+                reasons.append('resolver_runaway')
+            if time.monotonic() >= deadline:
+                reasons.append('deadline')
+            with (control / 'supervisor-metrics.jsonl').open('a') as stream:
+                stream.write(json.dumps(metrics) + '\n')
+            for name, process in runners.items():
+                if process.poll() is not None and 'runner_returncode' not in state['runners'][name]:
+                    state['runners'][name]['runner_returncode'] = process.returncode
+            state['latest_metrics'] = metrics
             save(state_path, state)
-            guards = plan['guards']
-            previous = None
-            pressure = 0
-            deadline = time.monotonic() + plan['deadline_seconds']
-            while runner.poll() is None:
-                metrics, previous = sample(plan, runner.pid, previous)
-                pressure = pressure + 1 if metrics['mem_available_bytes'] < guards['mem_available_bytes_min'] else 0
-                reasons = []
-                if pressure >= guards['pressure_samples']:
-                    reasons.append('sustained_memory_pressure')
-                if metrics['disk_free_bytes'] < guards['disk_free_bytes_min']:
-                    reasons.append('storage_reserve')
-                if (metrics['resolver_bytes'] > guards['resolver_bytes_max']
-                        or metrics['resolver_rss_bytes'] > guards['resolver_rss_bytes_max']):
-                    reasons.append('resolver_runaway')
-                if time.monotonic() >= deadline:
-                    reasons.append('deadline')
-                with (control / 'supervisor-metrics.jsonl').open('a') as stream:
-                    stream.write(json.dumps(metrics) + '\n')
-                state['latest_metrics'] = metrics
+            if stop or (control / 'cancel.request').exists() or reasons:
+                state.update(status='STOPPING', stop_reason=reasons or ['authorized_cancel'])
                 save(state_path, state)
-                if stop or (control / 'cancel.request').exists() or reasons:
-                    state.update(status='STOPPING', stop_reason=reasons or ['authorized_cancel'])
-                    save(state_path, state)
-                    stop_runner(state, grace=600)
+                stop_all()
+                break
+            for _ in range(guards['sample_seconds'] * 2):
+                if stop or (control / 'cancel.request').exists() or all(p.poll() is not None for p in runners.values()):
                     break
-                for _ in range(guards['sample_seconds'] * 2):
-                    if stop or runner.poll() is not None or (control / 'cancel.request').exists():
-                        break
-                    time.sleep(0.5)
-            state['runner_returncode'] = runner.wait()
+                time.sleep(0.5)
+        for name, process in runners.items():
+            state['runners'][name]['runner_returncode'] = process.wait()
+        failed = any(record['runner_returncode'] for record in state['runners'].values())
         state['status'] = ('CANCELLED' if state.get('stop_reason') == ['authorized_cancel'] else
                            'STOPPED_BY_GUARD' if state.get('stop_reason') else
-                           'COMPLETED' if not state['runner_returncode'] else 'FAILED')
+                           'FAILED' if failed else 'COMPLETED')
         save(state_path, state)
-        state['results'] = archive_summary(plan, control)
+        state['results'] = {run['name']: archive_summary(plan, run, control) for run in plan['runs']}
     except BaseException as exc:
         state.update(status='FAILED', error=type(exc).__name__)
-        if runner is not None:
-            stop_runner(state, grace=600)
-            runner.wait()
+        if runners:
+            stop_all()
+            for process in runners.values():
+                process.wait()
     finally:
         state['finished_at'] = time.time()
         save(state_path, state)
+        for log in logs:
+            log.close()
         if lock is not None:
             lock.close()
 

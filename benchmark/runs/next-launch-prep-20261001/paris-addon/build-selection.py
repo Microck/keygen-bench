@@ -15,9 +15,10 @@ import sys
 HERE = Path(__file__).resolve().parent
 PREP = HERE.parent
 CAMPAIGN_ID = "next-max-tier-prompt-v2-paris-addon-20261001"
-# The base OPENCODE_GO_API_KEY never serves this launch. _1/_2 hit Go's 5-hour usage window on
-# 2026-10-01 (~20:10-21:00 UTC); pilots and launch wait for the reset, then use _1.._3.
-GO_POOL = {"OPENCODE_GO_API_KEY_1": 1, "OPENCODE_GO_API_KEY_2": 1, "OPENCODE_GO_API_KEY_3": 1}
+CANDIDATES = ("go-glm-5.2-chat", "go-glm-5.3-chat", "go-minimax-m2.7-messages")
+# All four Go keys, one attempt each. Go-three runs this campaign beside the main-route Go campaign
+# on Paris; key leases are controller-wide, so each key still serves one attempt at a time overall.
+GO_POOL = {"OPENCODE_GO_API_KEY": 1, "OPENCODE_GO_API_KEY_1": 1, "OPENCODE_GO_API_KEY_2": 1, "OPENCODE_GO_API_KEY_3": 1}
 WORKERS = 3
 LIMITS = {"steps": 0, "wall_seconds": 7200, "request_seconds": 3600, "command_seconds": 120}
 
