@@ -20,10 +20,16 @@ from typing import Any
 from urllib.parse import urlsplit
 
 LITELLM_VERSION = "1.102.1"
-PROVIDERS = {"go", "vercel", "nim", "anthropic_oauth", "codex_oauth"}
+PROVIDERS = {"go", "vercel", "nim", "google", "anthropic_oauth", "codex_oauth"}
 # Each route runs only its provider's original native protocol(s).
 PROTOCOLS = {"go": {"chat", "responses", "messages"}, "vercel": {"chat", "responses"}, "nim": {"chat"},
-             "anthropic_oauth": {"messages"}, "codex_oauth": {"responses"}}
+             "google": {"chat"}, "anthropic_oauth": {"messages"}, "codex_oauth": {"responses"}}
+# LiteLLM provider prefix per route; Google AI Studio uses LiteLLM's native Gemini provider
+# (generateContent), never an OpenAI-compatible shim.
+SDK_PREFIX = {"google": "gemini"}
+GOOGLE_BASE = "https://generativelanguage.googleapis.com/v1beta"
+# Gemini 3.x thinkingLevel values (Google thinking docs); LiteLLM maps reasoning_effort onto them.
+GOOGLE_EFFORTS = {"minimal", "low", "medium", "high"}
 EFFORTS = {"none", "minimal", "low", "medium", "high", "xhigh", "max"}
 # A declared tier is the exact reasoning control a model runs at: an effort level,
 # "thinking-on" (boolean thinking switch), "thinking-budget" (budget-only thinking) or
@@ -67,6 +73,7 @@ HISTORY_KEY_REMOVAL_MODEL = "GoStrictHistoryLitellmModel"
 WIRE_GENERATION_FIELDS = (
     "max_tokens", "max_completion_tokens", "max_output_tokens", "temperature",
     "reasoning_effort", "reasoning", "thinking", "output_config", "chat_template_kwargs",
+    "thinkingConfig",
 )
 OBSERVATION = (
     "{% if output.get('exception_info') %}<exception>{{output.exception_info}}</exception>\n{% endif %}"
@@ -133,6 +140,9 @@ def validate_url(url: str, provider: str | None = None, api: str | None = None) 
     elif provider == "nim":
         if (u.scheme, u.hostname, port, path) != ("https", "integrate.api.nvidia.com", None, "/v1"):
             raise ValueError("NVIDIA NIM requires https://integrate.api.nvidia.com/v1")
+    elif provider == "google":
+        if (u.scheme, u.hostname, port, path) != ("https", "generativelanguage.googleapis.com", None, "/v1beta"):
+            raise ValueError(f"Google AI Studio requires {GOOGLE_BASE}")
     else:
         raise ValueError("Unsupported model provider")
     return url.rstrip("/")
@@ -150,9 +160,26 @@ def _native(config: dict) -> dict:
     return value
 
 
+def sdk_prefix(model: dict) -> str:
+    """LiteLLM provider prefix of the native constructor for this route."""
+    return SDK_PREFIX.get(model.get("provider"), "anthropic" if model.get("api") == "messages" else "openai")
+
+
+def credential_target(model: dict) -> str:
+    """The SDK's canonical credential variable for this route (e.g. GEMINI_API_KEY)."""
+    return f"{sdk_prefix(model).upper()}_API_KEY"
+
+
 def transmitted_reasoning(model: dict) -> dict:
-    """Reasoning wire fields as sent: SDK extra_body entries become top-level body fields."""
+    """Reasoning wire fields as sent: SDK extra_body entries become top-level body fields.
+
+    Google: LiteLLM's native Gemini provider sends reasoning_effort as
+    generationConfig.thinkingConfig {thinkingLevel, includeThoughts}.
+    """
     generation = model["generation"]
+    if model.get("provider") == "google":
+        effort = generation.get("reasoning_effort")
+        return {} if effort is None else {"thinkingConfig": {"thinkingLevel": effort, "includeThoughts": True}}
     wire = {key: generation[key] for key in REASONING_FIELDS[model["api"]]
             if key in generation and key != "extra_body"}
     extra = generation.get("extra_body")
@@ -265,12 +292,20 @@ def _generation(model: dict) -> dict:
         _check_extra_body(model, value["extra_body"])
     if "reasoning_effort" in value and "chat_template_kwargs" in value.get("extra_body", {}):
         raise ValueError("Declare one NIM reasoning control: top-level reasoning_effort or chat_template_kwargs")
+    if model.get("provider") == "google":
+        # Gemini: one output cap and one thinkingLevel effort; nothing else is declared.
+        if set(value) - {"max_tokens", "reasoning_effort"} or "max_tokens" not in value:
+            raise ValueError("Google routes declare exactly max_tokens and optionally reasoning_effort")
+        if "reasoning_effort" in value and value["reasoning_effort"] not in GOOGLE_EFFORTS:
+            raise ValueError("Gemini thinkingLevel supports only minimal, low, medium and high")
     check_tier(model)
     # The native converter must not silently cap, translate or drop declared settings.
     mapped = _map_generation(model, value)
     wire = mapped | mapped.get("extra_body", {})
     if any(wire.get(key) != declared for key, declared in transmitted_reasoning(model).items()):
         raise ValueError("Native SDK would alter or drop the declared reasoning control")
+    if model.get("provider") == "google" and wire.get("max_output_tokens") != value["max_tokens"]:
+        raise ValueError("Native Gemini SDK would not transmit the declared output cap")
     if api == "messages":
         thinking = wire.get("thinking")
         if isinstance(thinking, dict) and thinking.get("type") == "enabled":
@@ -368,9 +403,12 @@ def _map_generation(model: dict, value: dict) -> dict:
     if model["api"] == "messages":
         _register_capability_override(llm, model)
     mapped = llm.utils.get_optional_params(
-        model=name, custom_llm_provider="anthropic" if model["api"] == "messages" else "openai",
+        model=name, custom_llm_provider=("gemini" if model.get("provider") == "google" else
+                                         "anthropic" if model["api"] == "messages" else "openai"),
         drop_params=False, **value, **sdk_controls(model),
     )
+    if model.get("provider") == "google":
+        mapped = {key: item for key, item in mapped.items() if item is not None}
     if model["api"] == "messages" and "output_config" in mapped:
         # Run the SDK's own request-time output_config gate now, not mid-campaign.
         from litellm.llms.anthropic.chat.transformation import AnthropicConfig
@@ -394,7 +432,7 @@ def validate_model(config: dict, model: dict) -> dict:
     provider = model.get("provider")
     api = model.get("api")
     if provider not in PROVIDERS:
-        raise ValueError("Only Go, Vercel, NVIDIA NIM and user-authorized Anthropic/Codex OAuth routes are approved")
+        raise ValueError("Only Go, Vercel, NVIDIA NIM, Google AI Studio and user-authorized Anthropic/Codex OAuth routes are approved")
     if api not in {"chat", "responses", "messages"}:
         raise ValueError("Model api must be chat, responses or messages")
     if api not in PROTOCOLS[provider]:
@@ -407,7 +445,7 @@ def validate_model(config: dict, model: dict) -> dict:
         raise ValueError("api_key_env must name an environment variable, not contain a credential")
     base = validate_url(model.get("base_url"), provider, api)
     effective_generation = _generation(model)
-    if api == "chat":
+    if api == "chat" and provider != "google":
         # The pinned SDK silently reroutes some Chat requests (e.g. GPT-5.4+ with tools and
         # reasoning) to /responses. The declared protocol must be the transmitted one.
         from litellm.main import responses_api_bridge_check
@@ -417,7 +455,7 @@ def validate_model(config: dict, model: dict) -> dict:
             reasoning_effort=model["generation"].get("reasoning_effort"), api_base=base)
         if bridged.get("mode") == "responses":
             raise ValueError("Native SDK would reroute this Chat route to Responses; declare the Responses protocol")
-    prefix = "anthropic" if api == "messages" else "openai"
+    prefix = sdk_prefix(model)
     # retry_policy is LiteLLM's own per-exception retry configuration (a LiteLLM-only
     # parameter, never sent on the wire); the OpenAI client's max_retries stays 0.
     kwargs = {"api_base": base, "timeout": native["timeout_seconds"], "max_retries": 0,
@@ -431,6 +469,10 @@ def validate_model(config: dict, model: dict) -> dict:
         kwargs["store"] = False
         if provider == "codex_oauth":
             kwargs["include"] = ["reasoning.encrypted_content"]
+    if provider == "google":
+        # LiteLLM's Gemini provider builds the generateContent URL itself from GOOGLE_BASE;
+        # a custom api_base would change its URL construction, so none is passed.
+        kwargs.pop("api_base")
     if provider == "go":
         kwargs["extra_headers"] = {"User-Agent": "keygen-benchmark/mini-swe-agent-2.4.6"}
     # SDK optional params include transport defaults and an extra_body envelope.
@@ -478,7 +520,7 @@ def credential_env(config: dict, model: dict) -> dict[str, str]:
     value = os.environ.get(env_name)
     if not value:
         raise ValueError(f"Missing credential environment variable {env_name}")
-    target = "ANTHROPIC_API_KEY" if model.get("api") == "messages" else "OPENAI_API_KEY"
+    target = credential_target(model)
     return {target: value,
             "MSWEA_MODEL_RETRY_STOP_AFTER_ATTEMPT": "1",
             "LITELLM_MODE": "PRODUCTION", "LITELLM_LOCAL_MODEL_COST_MAP": "True"}
@@ -509,9 +551,23 @@ def _usage(value: Any) -> Any:
     return None
 
 
+def gemini_usage(meta: Any) -> dict | None:
+    """Gemini usageMetadata in the OpenAI usage shape the reports read (thinking counts as output)."""
+    if not isinstance(meta, dict):
+        return None
+    number = lambda key: meta.get(key) if type(meta.get(key)) is int else 0
+    thoughts = number("thoughtsTokenCount")
+    return {"prompt_tokens": number("promptTokenCount"),
+            "completion_tokens": number("candidatesTokenCount") + thoughts,
+            "total_tokens": number("totalTokenCount"),
+            "prompt_tokens_details": {"cached_tokens": number("cachedContentTokenCount")},
+            "completion_tokens_details": {"reasoning_tokens": thoughts}}
+
+
 def _response_audit(raw: dict, model: dict) -> dict:
     error = raw.get("error")
-    returned = raw.get("model")
+    # Gemini generateContent names the serving model in modelVersion.
+    returned = raw.get("model") if "model" in raw else raw.get("modelVersion")
     if not isinstance(returned, str):
         returned = None
     if error is not None or raw.get("type") == "error" or raw.get("status") == "failed":
@@ -522,9 +578,10 @@ def _response_audit(raw: dict, model: dict) -> dict:
         status = "identity_mismatch"
     else:
         status = "identity_match"
+    usage = raw.get("usage") if "usage" in raw else gemini_usage(raw.get("usageMetadata"))
     return {"requested_model": model["model"], "expected_response_model": model["response_model"],
             "response_model": returned, "identity_status": status,
-            "usage": _usage(raw.get("usage"))}
+            "usage": _usage(usage)}
 
 
 def audit_messages(messages: list[dict], model: dict) -> list[dict]:
@@ -604,7 +661,7 @@ def _construct_model(config: dict, model: dict, run_dir: Path, effective: dict):
             or (global_config / ".env").exists()
             or os.environ.get("MSWEA_SILENT_STARTUP") != "1"):
         raise RuntimeError("Native models require isolated HOME and empty mini global config")
-    target = "ANTHROPIC_API_KEY" if model["api"] == "messages" else "OPENAI_API_KEY"
+    target = credential_target(model)
     if not os.environ.get(target):
         raise RuntimeError("Native worker lacks its isolated provider credential")
     if os.environ.get("MSWEA_MODEL_RETRY_STOP_AFTER_ATTEMPT") != "1":
@@ -630,12 +687,15 @@ def _construct_model(config: dict, model: dict, run_dir: Path, effective: dict):
             if not isinstance(payload, dict):
                 return
             # The SDK expands an extra_body envelope into the HTTP body; record it as sent.
+            # Gemini nests generation settings in generationConfig; record them as sent too.
             extra = payload.get("extra_body")
             body = payload | extra if isinstance(extra, dict) else payload
+            config = payload.get("generationConfig")
+            body = body | config if isinstance(config, dict) else body
             settings = {k: body[k] for k in WIRE_GENERATION_FIELDS + ("store", "include")
                         if k in body}
-            self._write({"event": "request", "model": payload.get("model"), "settings": settings,
-                         "input_sha256": digest(payload.get("messages", payload.get("input"))),
+            self._write({"event": "request", "model": payload.get("model", model), "settings": settings,
+                         "input_sha256": digest(payload.get("messages", payload.get("input", payload.get("contents")))),
                          "tools_sha256": digest(payload.get("tools")),
                          "payload_scope": "controller_to_endpoint",
                          "provider_received_verified": False})
