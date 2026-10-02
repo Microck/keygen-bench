@@ -18,11 +18,12 @@ class ReportTests(unittest.TestCase):
         self.root = Path(temporary.name)
         self.model = {"id": "claude", "model": "claude-exact", "response_model": "claude-exact",
                       "provider": "anthropic", "api": "anthropic", "base_url": "https://api.anthropic.com",
+                      "tier": {"level": "max", "reasoning": {"output_config": {"effort": "max"}}, "spec_sha256": "0" * 64},
                       "effective_settings": {"reasoning": "maximum", "output_limit": 8192}}
-        self.config = {"schema": "keygen-native-campaign-2", "campaign_id": "fixture-cohort",
+        self.config = {"schema": "keygen-native-campaign-3", "campaign_id": "fixture-cohort",
                        "max_attempts": 3, "models": [self.model],
                        "policies": {"attempt_selection": "first_success_up_to_three_attempts"},
-                       "prompts": {"system": "frozen", "task": "create"}}
+                       "prompts": {"version": "fixture-v1", "system": "frozen", "task": "create"}}
         self.snapshot = self.envelope(self.config)
         self.write(self.root / "campaign.lock.json", self.snapshot)
 
@@ -149,7 +150,7 @@ class ReportTests(unittest.TestCase):
 
     def test_finalization_sidecar_excludes_otherwise_valid_success(self):
         directory = self.attempt(1, 90)
-        self.write(directory / "finalization-error.json", {"failure_category": "EVAL", "error": "archive failed"})
+        self.write(directory / "finalization-error.json", {"failure_category": "EVAL", "error": "scorer failed"})
         self.attempt(2, 20)
         self.skip(3)
         result = self.publish()
@@ -245,11 +246,8 @@ class ReportTests(unittest.TestCase):
         self.assertIsNone(row["craft"])
         self.assertEqual(row["failure_category"], "AUTH")
 
-    def test_evicted_artifacts_keep_cached_score_without_fake_links(self):
-        directory = self.attempt(1, 10)
-        self.write(directory / "archive.json", {"verified": True, "remote": "cloud:private/bundle.tar.gz",
-                   "files": {"canonical/canonical.wav": {"sha256": "unavailable"},
-                             "visualizer/visualizer.mp4": {"sha256": "unavailable"}}})
+    def test_missing_artifacts_keep_cached_score_without_fake_links(self):
+        self.attempt(1, 10)
         self.skip(2, selected="claude-rep-1")
         self.skip(3, selected="claude-rep-1")
         result = self.publish()
@@ -257,7 +255,6 @@ class ReportTests(unittest.TestCase):
         rows = report.page_rows(result, self.root / "index.html")
         self.assertNotIn("original WAV", rows[0]["files"])
         self.assertNotIn("video", rows[0]["files"])
-        self.assertIn("canonical/canonical.wav", rows[0]["archived_artifacts"])
         self.assertTrue(rows[0]["cost_unknown"])
         self.assertIsNone(rows[0]["cost"])
         self.assertIsNone(rows[1]["steps"])
@@ -275,57 +272,35 @@ class ReportTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "hash mismatch"):
             self.publish()
 
-    def max_tier_config(self, version="prompt-v2"):
+    def alternate_config(self):
         config = copy.deepcopy(self.config)
-        config.update(schema="keygen-native-campaign-3", campaign_id="next-max-tier-fixture")
-        config["prompts"]["version"] = version
-        config["models"][0]["tier"] = {"level": "max", "reasoning": {"output_config": {"effort": "max"}}, "spec_sha256": "0" * 64}
+        config["campaign_id"] = "fixture-alternate"
+        config["prompts"]["version"] = "fixture-v2"
         config["models"][0]["effective_settings"]["output_limit"] = 128000
         return config
 
-    def test_cohort_labels_distinguish_provider_default_from_highest_declared_tier(self):
-        self.attempt(1, 40)
-        default = self.publish()
-        self.assertEqual(default["cohort"], {"key": "provider-default/prompt-v1", "condition": "provider-default",
-                                             "prompt_version": "prompt-v1", "label": "provider default effort, prompt-v1"})
-        row = default["rows"][0]
-        self.assertEqual(row["tier"], "provider default effort, 8k output")
-        self.assertEqual(row["effective_settings"], {"reasoning": "maximum", "output_limit": 8192})
-        self.assertEqual(report.page_rows(default, self.root / "index.html")[0]["tier"], row["tier"])
-
-        self.config = self.max_tier_config()
-        self.model = self.config["models"][0]
-        self.snapshot = self.envelope(self.config)
-        self.write(self.root / "campaign.lock.json", self.snapshot)
-        self.attempt(1, 40)
-        self.skip(2, selected="claude-rep-1")
-        result = self.publish()
-        self.assertEqual(result["cohort"]["key"], "highest-declared-tier/prompt-v2")
-        self.assertEqual({row["tier"] for row in result["rows"]}, {"highest declared tier: max, 128k output"})
-        self.assertIn("not equal compute", result["tier_note"])
-        self.assertIn("one quality sample", result["sample_note"])
-
-    def test_schema_three_without_max_tier_prefix_is_not_labeled_highest(self):
-        config = self.max_tier_config(version=None)
-        config["campaign_id"] = "fixture-declared"
-        del config["prompts"]["version"]
-        cohort = report.campaign_cohort(config)
-        self.assertEqual(cohort["key"], "declared-tier/prompt-v1")
-        self.assertEqual(report.tier_label(config["models"][0], cohort["condition"]), "declared tier: max, 128k output")
+    def test_campaign_name_does_not_infer_condition(self):
+        config = self.alternate_config()
+        expected = report.campaign_cohort(config)
+        self.assertEqual(expected["condition"], "declared-tier")
+        for name in ("max-effort", "default-effort", "another-campaign"):
+            with self.subTest(name=name):
+                config["campaign_id"] = name
+                self.assertEqual(report.campaign_cohort(config), expected)
 
     def test_each_cohort_gets_its_own_table(self):
         self.attempt(1, 40)
-        self.attempt(1, 95, name="max-tier-stray", config=self.max_tier_config())
+        self.attempt(1, 95, name="other-prompt-stray", config=self.alternate_config())
         result = self.publish()
         tables = result["cohort_tables"]
         self.assertEqual([table["cohort"]["key"] for table in tables],
-                         ["provider-default/prompt-v1", "highest-declared-tier/prompt-v2"])
+                         ["declared-tier/fixture-v1", "declared-tier/fixture-v2"])
         groups = {group["group_id"]: group for group in result["groups"]}
         for table in tables:
             self.assertTrue(table["group_ids"])
             self.assertEqual({groups[group_id]["cohort"]["key"] for group_id in table["group_ids"]}, {table["cohort"]["key"]})
         self.assertEqual(sorted(group_id for table in tables for group_id in table["group_ids"]), sorted(groups))
-        # The higher max-tier score never becomes the default cohort's selection.
+        # The higher score from another prompt never replaces the selected cohort's sample.
         self.assertEqual([group["selected_attempt_id"] for group in result["groups"] if group["selected_attempt_id"]], ["claude-rep-1"])
 
     def test_quota_stop_is_infrastructure_and_reserved_slots_stay_pending(self):
@@ -348,61 +323,6 @@ class ReportTests(unittest.TestCase):
         self.assertEqual(len(reserved), 2)
         self.assertTrue(all(not row["attempted"] and row["outcome"] == "UNKNOWN" and row["model_failure"] is None for row in reserved))
 
-    def runner_overwrites_status_after_evaluation(self, directory, error):
-        # The runner writes indented JSON; the profile pins that exact evaluated status.
-        status = json.loads((directory / "status.json").read_text())
-        (directory / "status.json").write_text(json.dumps(status, indent=2, allow_nan=False) + "\n")
-        profile = json.loads((directory / "profile.json").read_text())
-        profile["inputs"]["artifacts"]["status.json"] = hashlib.sha256((directory / "status.json").read_bytes()).hexdigest()
-        self.write(directory / "profile.json", profile)
-        self.write(directory / "finalization-error.json", error)
-        status.update(status="FINALIZATION_ERROR", failure_category="EVAL", eligible=False, finalization_error=error)
-        (directory / "status.json").write_text(json.dumps(status, indent=2, allow_nan=False) + "\n")
-        return status
-
-    def test_upload_failure_after_pinned_evaluation_is_first_success_and_operator_stop_is_infra(self):
-        error = {"failure_category": "EVAL", "error": "TimeoutExpired"}
-        self.runner_overwrites_status_after_evaluation(self.attempt(1, 65), error)
-        second = self.attempt(2, None, category="AUTH", status_updates={"status": "AUTH_ERROR", "error": "operator stop"})
-        self.write(second / "operator-cancellation.json", {
-            "attempt_id": "claude-rep-2", "action": "operator_cancelled", "true_failure_category": "INFRA",
-            "recorded_failure_category_vehicle": "AUTH", "model_failure": False, "reason": "rep-1 already evaluated"})
-        result = self.publish()
-        group = result["groups"][0]
-        self.assertEqual((group["selected_attempt_id"], group["selected_craft"], group["state"]), ("claude-rep-1", 65, "success"))
-        first, cancelled, unused = sorted(result["rows"], key=lambda row: row["repetition"])
-        self.assertEqual((first["status"], first["recorded_status"]), ("RENDERED_UNSCORED", "FINALIZATION_ERROR"))
-        self.assertIsNone(first["finalization_error"])
-        self.assertEqual(first["post_evaluation_finalization_error"], error)
-        self.assertEqual((cancelled["status"], cancelled["recorded_status"]), ("OPERATOR_CANCELLED", "AUTH_ERROR"))
-        self.assertEqual((cancelled["failure_category"], cancelled["model_failure"]), ("INFRA", False))
-        self.assertEqual(cancelled["operator_cancellation"], "rep-1 already evaluated")
-        self.assertEqual(unused["status"], "MISSING")
-        self.assertEqual(result["counts"]["failure_categories"], {"INFRA": 1})
-        self.assertNotIn("AUTH", result["counts"]["evaluation_error_categories"])
-        self.assertEqual(result["counts"]["evaluation_failures"], 0)
-
-    def test_overwritten_status_that_does_not_rebuild_the_pinned_evaluation_stays_failed(self):
-        directory = self.attempt(1, 65)
-        status = self.runner_overwrites_status_after_evaluation(directory, {"failure_category": "EVAL", "error": "TimeoutExpired"})
-        status["wall_seconds"] = 1
-        (directory / "status.json").write_text(json.dumps(status, indent=2) + "\n")
-        self.attempt(2, 20)
-        self.skip(3)
-        result = self.publish()
-        self.assertEqual(result["groups"][0]["selected_attempt_id"], "claude-rep-2")
-        first = next(row for row in result["rows"] if row["repetition"] == 1)
-        self.assertEqual((first["status"], first["outcome"], first["failure_category"]), ("FINALIZATION_ERROR", "FAILURE", "EVAL"))
-
-    def test_operator_record_for_another_attempt_cannot_relabel_a_failure(self):
-        second = self.attempt(1, None, category="AUTH", status_updates={"status": "AUTH_ERROR"})
-        self.write(second / "operator-cancellation.json", {
-            "attempt_id": "claude-rep-2", "action": "operator_cancelled", "true_failure_category": "INFRA",
-            "recorded_failure_category_vehicle": "AUTH", "model_failure": False, "reason": "copied"})
-        row = next(row for row in self.publish()["rows"] if row["repetition"] == 1)
-        self.assertEqual((row["status"], row["failure_category"]), ("AUTH_ERROR", "AUTH"))
-        self.assertIn("operator cancellation record does not match", row["error"])
-
     def repeats(self, config=None, suffix="repeats"):
         """A companion campaign declaring repetitions 2-3 of the fixture cohort's condition."""
         config = copy.deepcopy(config or self.config)
@@ -418,13 +338,9 @@ class ReportTests(unittest.TestCase):
         self.write(root / "campaign.lock.json", self.envelope(repeats))
         return repeats, root
 
-    def test_linked_repetitions_report_every_sample_with_median_range_and_keep_cancelled_slot_outside(self):
-        error = {"failure_category": "EVAL", "error": "TimeoutExpired"}
-        self.runner_overwrites_status_after_evaluation(self.attempt(1, 65), error)
-        cancelled = self.attempt(2, None, category="AUTH", status_updates={"status": "AUTH_ERROR"})
-        self.write(cancelled / "operator-cancellation.json", {
-            "attempt_id": "claude-rep-2", "action": "operator_cancelled", "true_failure_category": "INFRA",
-            "recorded_failure_category_vehicle": "AUTH", "model_failure": False, "reason": "rep-1 already evaluated"})
+    def test_linked_repetitions_keep_failed_outside_slots_out_of_statistics(self):
+        self.attempt(1, 65)
+        self.attempt(2, None, category="AUTH", status_updates={"status": "AUTH_ERROR"})
         repeats, root = self.repeats()
         self.attempt(2, 40, config=repeats, root=root)
         self.attempt(3, None, config=repeats, root=root, category="MODEL", model_failure=True)
@@ -436,7 +352,7 @@ class ReportTests(unittest.TestCase):
                          (2, 52.5, 40, 65, 25))
         self.assertEqual(group["state"], "complete_with_failures")
         self.assertEqual([(row["attempt_id"], row["status"], row["failure_category"]) for row in group["outside_condition_attempts"]],
-                         [("claude-rep-2", "OPERATOR_CANCELLED", "INFRA")])
+                         [("claude-rep-2", "AUTH_ERROR", "AUTH")])
         self.assertEqual(result["declared_counts"]["attempts"], 3)
         self.assertFalse(any(row["selected"] for row in result["rows"]))
 

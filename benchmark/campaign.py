@@ -58,7 +58,7 @@ def file_digest(path: Path) -> str:
 
 
 def source_provenance() -> dict:
-    names = ["run.py", "drive.py", "campaign.py", "native_models.py", "boat.py", "boat_pool.py", "boat_transport.py", "artifacts.py", "bridge.py", "visualize.sh", "Dockerfile", "requirements.txt"]
+    names = ["run.py", "campaign.py", "native_models.py", "artifacts.py", "bridge.py", "visualize.sh", "Dockerfile", "requirements.txt"]
     return {name: file_digest(HERE / name) for name in names if (HERE / name).is_file()}
 
 
@@ -338,7 +338,7 @@ def check_policies(config: dict) -> None:
 
 def validate(config: dict, *, check_provenance=True) -> dict:
     if not isinstance(config, dict) or set(config) != KEYS or config.get("schema") != SCHEMA:
-        raise ValueError("Only the frozen native campaign schema is executable; inventory and legacy configs are not campaigns")
+        raise ValueError("Only the frozen native campaign schema is executable; inventories are not campaigns")
     digest(config)
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,79}", config["campaign_id"]):
         raise ValueError("Invalid campaign ID")
@@ -383,13 +383,8 @@ def validate(config: dict, *, check_provenance=True) -> dict:
             positive(cap, member)
             members.add(member)
     storage = config["storage"]
-    required_storage = {"backend", "reserve_bytes", "peak_bytes_per_attempt", "evict_after_archive"}
-    if storage.get("backend") == "rclone":
-        required_storage.add("remote")
-    elif storage.get("backend") == "local":
-        required_storage.add("directory")
-    if set(storage) != required_storage or storage["backend"] not in {"local", "rclone"} or type(storage["evict_after_archive"]) is not bool:
-        raise ValueError("Invalid storage policy")
+    if set(storage) != {"reserve_bytes", "peak_bytes_per_attempt"}:
+        raise ValueError("Storage declares only the local reserve and per-attempt peak")
     for key in ("reserve_bytes", "peak_bytes_per_attempt"):
         positive(storage[key], key)
     if storage["peak_bytes_per_attempt"] < 3 * limits["artifact_bytes"]:
@@ -397,17 +392,8 @@ def validate(config: dict, *, check_provenance=True) -> dict:
     for key in ("image", "visualizer_image"):
         if not re.fullmatch(r"sha256:[a-f0-9]{64}", config[key]):
             raise ValueError("Freeze immutable Docker image IDs, not mutable tags")
-    transport = config["transport"]
-    if transport.get("backend") == "boat":
-        from boat import validate_config
-        validate_config(transport)
-        minimum_ttl = limits["wall_seconds"] + limits["render_seconds"] * 4 + limits["video_seconds"] + 600
-        if transport["boat"]["ttl_seconds"] < minimum_ttl:
-            raise ValueError("Boat TTL does not cover attempt, evaluation, export and cleanup budgets")
-        if transport["boat"]["images"] != {"agent": config["image"], "visualizer": config["visualizer_image"]}:
-            raise ValueError("Boat image identities differ from the frozen campaign")
-    elif transport != {"backend": "local"}:
-        raise ValueError("Only reviewed local Docker or Boat transports are allowed")
+    if config["transport"] != {"backend": "local"}:
+        raise ValueError("Campaigns require local Docker")
     inventory = config["inventory"]
     if set(inventory) != {"sha256", "entries"} or digest(inventory["entries"]) != inventory["sha256"]:
         raise ValueError("Frozen approved inventory digest mismatch")
@@ -651,7 +637,7 @@ def main():
         normalization_worker()
         return
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--inventory", type=Path, default=HERE.parent / "MODEL-TEST-PLAN.oauth-first.json")
+    parser.add_argument("--inventory", required=True, type=Path)
     parser.add_argument("--selection", required=True, type=Path)
     parser.add_argument("--tier-spec", required=True, type=Path, help="per-model tier spec every selected model must match")
     parser.add_argument("--out", required=True, type=Path)

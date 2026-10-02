@@ -46,38 +46,26 @@ EXTRA_BODY = {("nim", "chat"): {"chat_template_kwargs"}}
 # Boolean NIM chat-template switches documented on the model cards (force_nonempty_content
 # is required by Nemotron 3 for tool calls); only thinking/enable_thinking select a tier.
 TEMPLATE_SWITCHES = {"thinking", "enable_thinking", "clear_thinking", "force_nonempty_content"}
-# Explicit SDK capability declarations, keyed by exact (provider, protocol, model).
-# Go Messages' Qwen output_config xhigh declarations are user-approved. Devin Chat's
-# exact GPT aliases advertise xhigh in the frozen Devin catalog, but the pinned SDK
-# cannot find those aliases in its model map. register_model supplies only the missing
-# capability; no transmission is patched. Each tier spec mirrors capability_override.
-# Other routes and efforts stay behind the SDK gate (fail closed).
+# Route-specific declarations for capabilities missing from the pinned SDK's model map.
+# OpenCode Go serves these Qwen models on Messages with output_config effort xhigh. Devin
+# Chat's exact GPT aliases advertise xhigh in the Devin catalog
+# (router-for-me/models devin_models.json), which the pinned SDK's model map lacks.
+# Registration changes the capability map, not the transmitted request.
 CAPABILITY_OVERRIDES = {
-    ("go", "messages", "qwen3.8-flash"): {"effort": "xhigh", "approved_by": "user", "date": "2026-10-01"},
-    ("go", "messages", "qwen3.8-max"): {"effort": "xhigh", "approved_by": "user", "date": "2026-10-01"},
-    ("devin", "chat", "devin/gpt-5-4"): {
-        "effort": "xhigh", "date": "2026-10-03",
-        "source": "https://raw.githubusercontent.com/router-for-me/models/refs/heads/main/devin_models.json"},
-    ("devin", "chat", "devin/gpt-5-4-mini"): {
-        "effort": "xhigh", "date": "2026-10-03",
-        "source": "https://raw.githubusercontent.com/router-for-me/models/refs/heads/main/devin_models.json"},
-    ("devin", "chat", "devin/gpt-5-3-codex"): {
-        "effort": "xhigh", "date": "2026-10-03",
-        "source": "https://raw.githubusercontent.com/router-for-me/models/refs/heads/main/devin_models.json"},
+    ("go", "messages", "qwen3.8-flash"): {"effort": "xhigh"},
+    ("go", "messages", "qwen3.8-max"): {"effort": "xhigh"},
+    ("devin", "chat", "devin/gpt-5-4"): {"effort": "xhigh"},
+    ("devin", "chat", "devin/gpt-5-4-mini"): {"effort": "xhigh"},
+    ("devin", "chat", "devin/gpt-5-3-codex"): {"effort": "xhigh"},
 }
-# User-approved (2026-10-01) outgoing-history declarations, keyed by exact (provider, protocol, model).
-# The pinned OpenAI SDK's ChatCompletionMessage.model_dump() adds refusal=None to every Chat reply,
-# LiteLLM moves it into Message.provider_specific_fields, and LitellmModel sends that key back on
-# each assistant message. Go's upstream for these GLM models validates messages strictly and rejects
-# it with HTTP 400, so no second turn can succeed (runs/next-launch-prep-20261001/
-# go-blockers-investigation.md). The key never came from the endpoint: removing exactly that
-# SDK-synthesized value restores the assistant message as Go returned it. Native history is
-# unchanged; every other route keeps the original LitellmModel and its wire bytes (fail closed).
+# The OpenAI SDK adds refusal=None to Chat replies. LiteLLM serializes it into
+# provider_specific_fields, which these strict Go endpoints reject on the next turn.
+# Drop only that synthesized value from outgoing copies; retain native history.
 HISTORY_KEY_REMOVALS = {
     ("go", "chat", "glm-5.2"): {"role": "assistant", "key": "provider_specific_fields",
-                                "value": {"refusal": None}, "approved_by": "user", "date": "2026-10-01"},
+                                "value": {"refusal": None}},
     ("go", "chat", "glm-5.3"): {"role": "assistant", "key": "provider_specific_fields",
-                                "value": {"refusal": None}, "approved_by": "user", "date": "2026-10-01"},
+                                "value": {"refusal": None}},
 }
 HISTORY_KEY_REMOVAL_MODEL = "GoStrictHistoryLitellmModel"
 WIRE_GENERATION_FIELDS = (
@@ -102,8 +90,7 @@ MAX_TRANSPORT_RETRIES = 2
 RETRIED_ERRORS = ("TimeoutErrorRetries", "InternalServerErrorRetries", "ServiceUnavailableErrorRetries")
 NEVER_RETRIED_ERRORS = ("BadRequestErrorRetries", "AuthenticationErrorRetries", "RateLimitErrorRetries",
                         "ContentPolicyViolationErrorRetries", "DefaultRetries")
-# Provider bodies seen when an account is out of funds or over its usage window
-# (benchmark/runs/full-launch-20260930/*-diagnostic.json, model-status-20261001-1156.json).
+# Provider response bodies indicating depleted funds or usage windows.
 QUOTA_MARKERS = ("insufficient account funds", "usage limit exceeded", "gousagelimiterror",
                  "positive credit balance")
 # mini renders this on a reply without a valid tool call; finish_reason "length" (Chat/Messages

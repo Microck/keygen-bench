@@ -1,6 +1,6 @@
 """Build Open Graph preview images and per-route meta for the classic site.
 
-    python3 web/classic/build_og.py --dist /home/ubuntu/keygen-local-preview/dist
+    python3 web/classic/build_og.py --dist /absolute/publication/dist
 
 Writes <dist>/og/home.png, <dist>/og/<model>.png and <dist>/og/meta.json. serve.py reads meta.json and
 puts the matching og:/twitter: tags into index.html for each route, so link previews change with the
@@ -8,10 +8,12 @@ rankings and the model being linked. Rerun after every new data.json.
 """
 import argparse
 import json
+from io import BytesIO
 import re
 from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
+from fontTools.ttLib import TTFont
 
 HERE = Path(__file__).resolve().parent
 W, H, K = 1200, 630, 3  # 400x210 FT2 pixels at 3x
@@ -21,7 +23,12 @@ SITE = "AI models writing keygen tunes in FastTracker II"
 
 
 def font(n, px):
-    return ImageFont.truetype(str(HERE / "core" / "fonts" / f"ft2-font{n}.woff2"), px)
+    with TTFont(HERE / "core" / "fonts" / f"ft2-font{n}.woff2") as source:
+        source.flavor = None
+        stream = BytesIO()
+        source.save(stream)
+    stream.seek(0)
+    return ImageFont.truetype(stream, px)
 
 
 SMALL, BIG, HUGE = font(1, 10 * K), font(2, 20 * K), font(2, 40 * K)
@@ -87,7 +94,7 @@ def canvas():
 
 
 def base_name(name):
-    return re.sub(r"\s*\([^)]*\btier\b[^)]*\)\s*$", "", name, flags=re.I)
+    return re.sub(r"\s*\(attempt \d+\)\s*$", "", name, flags=re.I)
 
 
 def models(data):

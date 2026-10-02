@@ -52,26 +52,6 @@ SYSTEM = (
     "reply runs in order. Work only inside the workspace directory. Follow the task's turns in order and "
     "wait for each turn's executed tool results before the next turn."
 )
-# M3: one long non-streaming generation on the production settings. It decides only
-# whether the route's transport survives a long request; it is never readiness evidence.
-PROBE_LONG_GENERATION = "long-generation"
-PROBE_SCHEMA = "keygen-long-generation-probe-1"
-PROBE_SYSTEM = (
-    "You are a native protocol probe agent. Use only the declared bash function tool inside "
-    "the offline workspace. A reply may contain several bash tool calls; every tool call in a "
-    "reply runs in order. Never access credentials, host paths, or network. Follow the task exactly."
-)
-PROBE_LIMITS = {"steps": 3, "wall_seconds": 3600, "command_seconds": 60}
-PROBE_THRESHOLDS = {"output_tokens_gt": 32768, "latency_seconds_gt": 600}
-PROBE_POLICY = ("routes failing this probe get run_output_cap reduced to 64000 (Anthropic long-request "
-                "guidance) before launch; streaming is not available because mini-swe-agent 2.4.6 "
-                "LitellmModel/LitellmResponseModel call the SDK without stream")
-# A connection that dropped (and was resent by a transport retry), a gateway error body,
-# an SDK timeout/connection error, or a request still open at the outer deadline.
-PROBE_FAIL_CATEGORIES = {"transport_error", "gateway_error", "transport_retry", "request_timeout"}
-PROBE_INFRASTRUCTURE_CATEGORIES = {"quota_or_rate_limit", "authentication_error", "content_filter"}
-PROBE_CHUNK_LINES = 2000  # Keeps each heredoc argument below Linux's 128 KiB MAX_ARG_STRLEN.
-PROBE_LINES = 12000
 
 
 def timestamp() -> str:
@@ -311,24 +291,8 @@ def readiness_task(marker: str) -> str:
     )
 
 
-def long_generation_task() -> str:
-    calls = PROBE_LINES // PROBE_CHUNK_LINES
-    return (
-        f"In one single reply, write submission/long.txt containing the integers 1 through {PROBE_LINES} "
-        "spelled out in English words, one per line, in increasing order (one, two, three, ..., "
-        "twenty-one, ..., twelve thousand). Type every line literally; never generate the text with a "
-        f"program, loop, seq, or other tool. Use {calls} bash tool calls in that same reply, in order; "
-        f"each appends the next {PROBE_CHUNK_LINES} lines with its own quoted heredoc "
-        "(cat >> submission/long.txt <<'EOF' ... EOF), and the first also starts with mkdir -p submission. "
-        f"As tool call {calls + 1} of the same reply, run {run.FINISH}."
-    )
-
-
-def execute_pilot(spec_path: Path, root: Path, bridge_executable: Path | None, probe: str | None):
-    """Run one isolated worker against one sandbox; return (spec, failure, secrets, marker).
-
-    Readiness and probes share credentials, sandbox, worker, deadline, recovery and cleanup.
-    """
+def execute_pilot(spec_path: Path, root: Path, bridge_executable: Path | None):
+    """Run one isolated worker and return its spec, failure, secrets and marker."""
     root = root.resolve()
     root.mkdir(mode=0o700, parents=True, exist_ok=False)
     docker = None
@@ -342,8 +306,6 @@ def execute_pilot(spec_path: Path, root: Path, bridge_executable: Path | None, p
     stage = "configuration"
     try:
         spec = normalize_spec(load_json(spec_path), bridge_executable)
-        if probe is not None and (probe != PROBE_LONG_GENERATION or spec["limits"] != PROBE_LIMITS):
-            raise ValueError("Long-generation probe requires its exact step, wall and command bounds")
         stage = "credentials"
         credentials = run.worker_credentials(spec["config"], spec["model"])
         secrets = [value for key, value in credentials.items() if "KEY" in key or "TOKEN" in key]
@@ -354,10 +316,7 @@ def execute_pilot(spec_path: Path, root: Path, bridge_executable: Path | None, p
         start_pilot_container(docker, spec["image"], name)
         run.write_json(root / "sandbox-preflight.json", sandbox_preflight(docker, name, spec["image"]))
         (home / "mini-config").mkdir(parents=True, mode=0o700)
-        if probe is None:
-            spec.update(docker=docker, container=name, system=SYSTEM, task=readiness_task(marker))
-        else:
-            spec.update(docker=docker, container=name, system=PROBE_SYSTEM, task=long_generation_task())
+        spec.update(docker=docker, container=name, system=SYSTEM, task=readiness_task(marker))
         stage = "native_worker"
         run.write_json(root / "pilot-spec.json", spec)
         with (home / "worker.private.log").open("wb") as log:
@@ -374,10 +333,9 @@ def execute_pilot(spec_path: Path, root: Path, bridge_executable: Path | None, p
                     proc.wait()
             if code:
                 raise RuntimeError("Readiness worker exited unsuccessfully")
-        if probe is None:
-            stage = "artifact_export"
-            run.shell(docker + ["pause", name])
-            run.collect(docker, name, "/workspace/submission/.", root / "submission", 1024 * 1024)
+        stage = "artifact_export"
+        run.shell(docker + ["pause", name])
+        run.collect(docker, name, "/workspace/submission/.", root / "submission", 1024 * 1024)
     except BaseException as exc:
         # Error bodies can echo credentials or private controller paths. Category and
         # exception type are sufficient here; sanitized native traces retain evidence.
@@ -428,7 +386,7 @@ def execute_pilot(spec_path: Path, root: Path, bridge_executable: Path | None, p
 def qualify(spec_path: Path, root: Path, bridge_executable: Path | None = None) -> dict:
     """Run one real pilot. Never overwrite an earlier outcome or use another route."""
     root = root.resolve()
-    spec, failure, secrets, marker = execute_pilot(spec_path, root, bridge_executable, None)
+    spec, failure, secrets, marker = execute_pilot(spec_path, root, bridge_executable)
     try:
         if failure is not None or spec is None:
             raise ValueError("Readiness pilot failed")
@@ -472,138 +430,11 @@ def qualify(spec_path: Path, root: Path, bridge_executable: Path | None = None) 
     return readiness
 
 
-def _output_tokens(usage) -> int | None:
-    # OpenAI completion/output tokens and Anthropic output tokens include reasoning/thinking.
-    if isinstance(usage, dict):
-        for key in ("output_tokens", "completion_tokens"):
-            if type(usage.get(key)) is int:
-                return usage[key]
-    return None
-
-
-def _reasoning_tokens(usage) -> int | None:
-    if isinstance(usage, dict):
-        for key in ("output_tokens_details", "completion_tokens_details"):
-            details = usage.get(key)
-            if isinstance(details, dict) and type(details.get("reasoning_tokens")) is int:
-                return details["reasoning_tokens"]
-    return None
-
-
-def classify_long_generation(records: list, worker_category: str | None = None,
-                             controller_category: str | None = None,
-                             expected_settings: dict | None = None) -> dict:
-    """Decide the probe only from recorded wire exchanges and error categories, never file content.
-
-    Every LiteLLM transport retry records a new request, so a request resent before any
-    response means the earlier connection dropped even when the retry later succeeded. A
-    content-filter block answers its send; the bounded re-send is not a transport retry.
-    """
-    exchanges, requests, anomaly, pending = [], [], None, False
-    for record in records:
-        if record.get("event") == "request":
-            if pending:
-                anomaly = anomaly or "transport_retry"
-            pending = True
-            requests.append(record)
-        elif record.get("event") == "content_filter_block":
-            pending = False
-        elif record.get("event") == "response":
-            pending = False
-            if record.get("identity_status") == "gateway_error":
-                anomaly = anomaly or "gateway_error"
-                continue
-            latency = record.get("latency_seconds")
-            exchanges.append({
-                "output_tokens": _output_tokens(record.get("usage")),
-                "reasoning_tokens": _reasoning_tokens(record.get("usage")),
-                "latency_seconds": latency if type(latency) in {int, float} else None,
-                "identity_status": record.get("identity_status"),
-            })
-    if anomaly:
-        category = anomaly
-    elif pending:
-        # The last request never answered: the worker's SDK error, or the outer deadline.
-        category = worker_category or ("request_timeout" if controller_category == "wall_time_exceeded"
-                                       else controller_category or "unanswered_request")
-    else:
-        category = worker_category or controller_category
-    tokens = [exchange["output_tokens"] for exchange in exchanges if exchange["output_tokens"] is not None]
-    latencies = [exchange["latency_seconds"] for exchange in exchanges if exchange["latency_seconds"] is not None]
-    settings_match = bool(requests) and isinstance(expected_settings, dict) and all(
-        all((record.get("settings") or {}).get(key) == value for key, value in expected_settings.items())
-        for record in requests)
-    long = any((exchange["output_tokens"] or 0) > PROBE_THRESHOLDS["output_tokens_gt"]
-               or (exchange["latency_seconds"] or 0) > PROBE_THRESHOLDS["latency_seconds_gt"]
-               for exchange in exchanges)
-    if category in PROBE_FAIL_CATEGORIES:
-        outcome = "fail"
-    elif category in PROBE_INFRASTRUCTURE_CATEGORIES:
-        outcome = "inconclusive"
-    elif long and settings_match:
-        outcome = "pass"
-    else:
-        outcome = "inconclusive"
-        if long and category is None:
-            category = "settings_mismatch"
-    return {"outcome": outcome, "failure_category": category,
-            "max_output_tokens_observed": max(tokens, default=None),
-            "max_latency_seconds": max(latencies, default=None),
-            "settings_match": settings_match, "exchanges": exchanges}
-
-
-def long_generation_probe(spec_path: Path, root: Path, bridge_executable: Path | None = None) -> dict:
-    """Run one long non-streaming generation probe. Writes probe.json, never readiness evidence."""
-    root = root.resolve()
-    spec, failure, secrets, _ = execute_pilot(spec_path, root, bridge_executable, PROBE_LONG_GENERATION)
-    worker_result, records, provenance = None, [], None
-    try:
-        if (root / "worker-result.json").exists():
-            worker_result = redact_credentials(load_json(root / "worker-result.json"), secrets)
-        records = transport_records(root)
-        if (root / "runtime-provenance.json").exists():
-            provenance = load_json(root / "runtime-provenance.json")
-        if (failure is None and bridge_executable is not None and campaign.file_digest(bridge_executable)
-                != spec["model"]["backend_provenance"]["bridge"]["executable_sha256"]):
-            failure = {"category": "bridge_provenance_changed"}
-    except (OSError, ValueError) as exc:
-        failure = failure or {"category": "probe_record_error", "exception_type": type(exc).__name__}
-    model = spec["model"] if spec is not None else None
-    worker_category = worker_result.get("failure_category") if isinstance(worker_result, dict) else None
-    result = classify_long_generation(
-        records, worker_category, failure["category"] if failure else None,
-        model["effective_settings"]["expected_transmitted_generation"] if model else None)
-    trajectory = root / "trajectory.json"
-    payload = {
-        "schema": PROBE_SCHEMA, "probe": PROBE_LONG_GENERATION, "recorded_at": timestamp(),
-        "route": {key: model[key] for key in ("provider", "api", "base_url", "model", "response_model",
-                                              "backend_provenance")} if model else None,
-        "effective_settings": model["effective_settings"] if model else None,
-        "limits": spec["limits"] if spec is not None else None,
-        "outcome": result["outcome"],
-        "max_output_tokens_observed": result["max_output_tokens_observed"],
-        "max_latency_seconds": result["max_latency_seconds"],
-        "failure_category": result["failure_category"],
-        "thresholds": PROBE_THRESHOLDS, "policy": PROBE_POLICY,
-        "settings_match": result["settings_match"], "exchanges": result["exchanges"],
-        "readiness_evidence": False, "blocker": failure, "worker_result": worker_result,
-        "transport": records, "runtime_provenance": provenance,
-        "trajectory_sha256": campaign.file_digest(trajectory) if trajectory.exists() else None,
-        "cleanup": load_json(root / "cleanup.json"),
-        "payload_scope": "controller_to_endpoint",
-    }
-    run.write_json(root / "probe.json", redact_credentials(payload, secrets))
-    return payload
-
-
-
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--spec", type=Path, help="Sanitized model/config/image pilot JSON")
     parser.add_argument("--out", type=Path, help="New proof output directory; never overwritten")
     parser.add_argument("--bridge-executable", type=Path, help="Actual credential bridge executable to hash")
-    parser.add_argument("--probe", choices=[PROBE_LONG_GENERATION],
-                        help="Run a transport probe instead of readiness; writes probe.json, never readiness.json")
     parser.add_argument("--worker", type=Path, help=argparse.SUPPRESS)
     args = parser.parse_args()
     if args.worker is not None:
@@ -611,10 +442,6 @@ def main() -> int:
         return 0
     if args.spec is None or args.out is None:
         parser.error("--spec and --out are required")
-    if args.probe is not None:
-        probe = long_generation_probe(args.spec.resolve(), args.out, args.bridge_executable)
-        print(json.dumps({"outcome": probe["outcome"], "probe": str(args.out.resolve() / "probe.json")}))
-        return 0 if probe["outcome"] == "pass" else 1
     readiness = qualify(args.spec.resolve(), args.out, args.bridge_executable)
     print(json.dumps({"status": readiness["status"], "proof": str(args.out.resolve() / "proof.json")}))
     return 0 if readiness["status"] == "verified" else 1

@@ -19,25 +19,39 @@ provider request has an empty trajectory with `evidence_unavailable: true` and
 an empty transport log. Other attempts must retain their available evidence.
 Invalid modules from failed attempts stay in the bundle for review.
 Status includes attempt ordinal, final outcome, usage totals with unknown-usage
-counts, and start/finish/wall times. Environment includes model ID, provider,
+counts, and start/finish/wall times. It omits controller paths, container names,
+and raw controller errors. Environment includes model ID, public provider
 API/base URL, generation settings, reasoning tier/documentation, prompt hashes
-and exact text, frozen limits, base image digest, final image IDs, FT2 commit,
-harness/package/source versions, and coarse host information.
+and exact text, frozen limits, base image digest, final image IDs/layers, FT2
+commit, harness/source hashes, benchmark package versions, OS family,
+architecture, Python version, and Docker version. It excludes kernel releases,
+registry names, unrelated packages, hostnames, and usernames. Trajectories
+contain the original messages, not serialized controller configuration.
+OAuth bridge models replace the private base URL with a `bridge` object holding
+`transport: loopback-http` and `binary_sha256`. The executable path and local
+address/port stay private. This is contributor-declared provenance, not proof
+that the binary handled the requests or that upstream received the settings.
 
 The bundle limit is 512 MiB and 4096 files. Each XM is at most 128 MiB; each
-metadata/log file is at most 16 MiB. A larger log must be reviewed with Microck,
-not truncated. Optional sandbox extras and submitted scores are not packaged.
+metadata/log file is at most 16 MiB. Ask the maintainers to review a larger log;
+do not truncate it. Optional sandbox extras and submitted scores are not packaged.
 
 ## Maintainer verification
 
 Validate with the current trusted repository code, not code supplied in the PR.
 Review all three outcomes, route identity, transmitted settings, highest-tier
-source, usage gaps, host/build provenance, and suspicious logs. Hashes detect
+source, usage gaps, runtime/build provenance, and suspicious logs. Hashes detect
 changes; contributor-written evidence does not prove no undisclosed attempts
 occurred. Final image IDs identify builds but are not the Debian base digest.
 The validator checks the declared base digest against the pinned Dockerfile;
 review/rebuild image provenance separately. Different architectures are different
 experimental conditions. Keep failures visible.
+
+Validation rejects common credential patterns, environment dumps, absolute
+home paths, and private host metadata fields. Public route and metadata
+allowlists reduce accidental disclosure; they do not detect all personal data,
+private URLs, or credentials. Review every file before publication. Keep a
+rejected bundle private rather than deleting evidence to make it pass.
 
 Build the trusted images and FT2 analysis binary as described in the run guide.
 Re-render and score without provider credentials, on an isolated machine:

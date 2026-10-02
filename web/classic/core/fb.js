@@ -1,4 +1,4 @@
-// PROTOTYPE: 1-bit glyph atlases + a tiny software framebuffer that draws FT2 primitives with crisp pixels.
+// 1-bit glyph atlases + a tiny software framebuffer that draws FT2 primitives with crisp pixels.
 // Geometry and palette follow ft2-clone (drawFramework, drawPushButton, palTable[10] "Why colors", the classic FT2 preset).
 
 export const PAL = {

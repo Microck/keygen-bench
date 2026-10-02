@@ -1,6 +1,6 @@
 # Submit a community run
 
-Run one exact model three times and submit every outcome to Microck at
+Run one exact model three times and submit every outcome to
 [Microck/keygen-bench](https://github.com/Microck/keygen-bench).
 Community results stay separate from ranked results.
 
@@ -43,7 +43,7 @@ Community results stay separate from ranked results.
    the documentation URL. No alias, checkpoint substitution, or provider
    fallback is allowed. Supported providers are `go`, `nim`, `vercel`,
    `codex_oauth`, and `anthropic_oauth`. See `benchmark/README.md` for route
-   restrictions. OAuth routes need your own authorized loopback bridge.
+   restrictions. OAuth routes require your own authorized loopback bridge.
 6. Set your credential privately. Do not put it in a command, config, PR, or
    committed file. Bash can read it without showing it or saving it in history:
 
@@ -56,7 +56,7 @@ Community results stay separate from ranked results.
 
 This is one run command. Replace the model, tier, documentation URL, generation
 JSON, and handle with your values. This example shows the Go Messages route;
-confirm its current model documentation before spending money.
+confirm model availability, reasoning support, and pricing before spending money.
 
 ```sh
 python benchmark/contrib/run_contrib.py \
@@ -65,10 +65,17 @@ python benchmark/contrib/run_contrib.py \
   --reasoning-tier xhigh --tier-source https://opencode.ai/docs/go/ \
   --generation '{"max_tokens":32768,"thinking":{"type":"adaptive"},"output_config":{"effort":"xhigh"}}' \
   --attempts 3 --handle YOUR-HANDLE \
-  --work /tmp/keygen-private-run \
+  --work .private-runs/community-run \
   --out submissions/qwen3.8-flash/$(date -u +%F)-YOUR-HANDLE
 unset KEYGEN_CONTRIB_API_KEY
 ```
+
+For an OAuth route, pass its private loopback `--base-url` and
+`--bridge-binary PATH` pointing to the executable that runs your bridge. The
+bundle records the provider, API protocol, exact model, loopback transport
+class, and executable SHA-256. It does not publish the bridge address, port,
+or executable path. The hash identifies the supplied binary; it does not prove
+which server handled requests or what that server sent upstream.
 
 Use new work and output directories. The command reuses `run.py` and native
 campaign settings. It freezes mini-swe-agent 2.4.6, one bash tool, prompt-v2,
@@ -79,8 +86,9 @@ keep the private work and report the interruption in an issue before spending
 more. An incomplete bundle fails validation.
 
 The output directory is the package. Do not copy the private work directory.
-It contains controller files that are not for publication. Inspect the package
-for credentials and personal data, then validate it:
+It contains controller files that are not for publication. The output starts
+with owner-only directory permissions too. Inspect every packaged file for
+credentials and personal data, then validate it:
 
 ```sh
 python benchmark/contrib/validate_bundle.py submissions/qwen3.8-flash/DATE-YOUR-HANDLE
@@ -103,27 +111,41 @@ gh pr create --repo Microck/keygen-bench --base main \
 ```
 
 Fill in the PR body before requesting review. If a file exceeds GitHub's regular
-Git size limit, ask Microck for an agreed artifact transfer before opening the
-PR. Do not silently omit it or replace it with a Git LFS pointer.
+Git size limit, ask the maintainers for an agreed artifact transfer before opening
+the PR. Do not silently omit it or replace it with a Git LFS pointer.
 
-## Public data and company runs
+## What becomes public
 
 The API provider receives the benchmark prompt, model replies, and tool output.
-The offline sandbox receives no controller credentials. Run on a dedicated
-controller with no company files mounted. Obtain your company's approval for
-provider use and public disclosure under its SOC 2 / ISO 27001 controls.
-This workflow is not a certification.
+The offline sandbox receives no controller credentials. Use a dedicated
+controller with no personal or company files mounted. Obtain any required
+approval for provider use and public disclosure. These checks are not a
+compliance assessment or certification.
 
 GitHub publishes the XM, model conversations, tool output, token/timing totals,
-model route/tier, image IDs, source/package hashes, and coarse host details.
+model provider/tier and public route or bridge digest, image IDs and layers,
+source hashes, benchmark package
+versions, operating system family, architecture, Python version, and Docker
+version. The exporter excludes controller configuration, container names, raw
+controller error details, kernel releases, image registry names, and unrelated
+installed packages. Attempt states, failure categories, timings, and usage
+remain available for all three attempts. Model conversations and transport
+evidence are not silently rewritten to remove sensitive text.
+
 Never submit credentials, names, emails, internal URLs, customer data, or other
 personal/company data. Use only your public GitHub handle. The validator scans
-all files, including binary samples, for key patterns, credential headers, and
-environment dumps. Pattern scanning cannot detect every secret or personal
-record. Review the contents yourself. If a log contains sensitive material,
-do not publish it or silently edit its evidence. Report the problem privately
-and rotate any exposed credential.
+all files, including binary samples, for common key patterns, credential headers,
+environment dumps, private host metadata fields, and absolute home paths.
+It checks direct provider routes and requires nonidentifying OAuth bridge
+provenance instead of a private endpoint. Tier documentation must use a
+public HTTPS URL without credentials, query parameters, or a custom port.
+Pattern scanning cannot detect every secret, identifying detail, or private URL.
+Review the contents yourself. If a log contains sensitive material, do not
+publish it or silently edit its evidence. Contact the maintainers privately
+and rotate any exposed credential. A rejected output directory is still private
+data; passing validation does not mean it is safe to publish without review.
 
-The PR workflow uses read-only permissions and no provider credentials. Microck
-checks provenance and re-renders `tune.xm` with the trusted pipeline. Submitted
-scores never establish a trusted result. See `submissions/README.md`.
+The PR workflow uses read-only permissions, no provider credentials, and
+validator code from the trusted base commit. Maintainers check provenance and
+re-render `tune.xm` with a separately selected trusted image. Submitted scores
+never establish a trusted result. See `submissions/README.md`.
