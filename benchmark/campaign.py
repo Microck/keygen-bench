@@ -16,7 +16,7 @@ import tempfile
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 from native_models import MAX_TRANSPORT_RETRIES, REASONING_FIELDS, TIERS, check_tier, declared_reasoning
-from report import condition_fingerprint
+from report import NON_MODEL_FAILURES, QUEUE_SELECTION, condition_fingerprint, origin_reruns, queue_chain_id
 
 SCHEMA = "keygen-native-campaign-3"
 # Cohort label of the frozen prompts/system.txt + prompts/task.txt pair. Campaigns compiled
@@ -29,9 +29,18 @@ FIRST_SUCCESS = "first_success_up_to_three_attempts"
 # a model's sequence and leave its later slots reserved. Repetitions may be split across campaigns
 # that freeze one identical condition per model (report.condition_fingerprint).
 INDEPENDENT = "independent_repetitions"
+# Independent repetitions whose infrastructure (non-model) failures and unstarted slots are rerun.
+# Every model declares each ordinal's origin: a slot of a linked campaign (kept when it holds a
+# scored outcome; rerun when it failed for a non-model reason or never started) or none (run here
+# first). Reruns are separate attempts `<model>-rep-<n>-retry-<k>` linked to the previous attempt
+# of the same ordinal; no existing outcome is ever rewritten.
+QUEUE = QUEUE_SELECTION
 POLICIES = {"attempt_selection": FIRST_SUCCESS, "retry": "explicit_separate_attempt_id", "failure": "separate_infrastructure_from_model", "auth": "controller_only_no_mid_cohort_refresh", "objective": "declared_native_configurations_fixed_resources"}
 REPETITION_POLICY_KEYS = set(POLICIES) | {"repetitions", "linked_condition"}
+QUEUE_POLICY_KEYS = set(POLICIES) | {"repetitions", "linked_campaigns", "plan", "max_queue_attempts"}
 LINK_KEYS = {"campaign_id", "config_sha256", "repetitions", "condition_fingerprints"}
+QUEUE_LINK_KEYS = {"campaign_id", "config_sha256", "condition_fingerprints"}
+ORIGIN_KEYS = {"campaign_id", "attempt_id", "status", "status_sha256", "outcome", "failure_category"}
 KEYS = {"schema", "campaign_id", "max_attempts", "inventory", "models", "limits", "concurrency", "storage", "transport", "image", "visualizer_image", "native", "policies", "prompts", "provenance"}
 MODEL_KEYS = {"id", "inventory_id", "model", "response_model", "provider", "api", "base_url", "api_key_env", "generation", "tier", "readiness", "effective_settings", "backend_provenance"}
 CONCURRENCY_KEYS = {"workers", "providers", "key_pools", "render", "video"}
@@ -226,17 +235,71 @@ def ordinal_list(values, ordinals: list[int]) -> bool:
             and values == sorted(set(values)) and set(values) <= set(ordinals))
 
 
+def check_queue_policies(config: dict) -> None:
+    policies = config["policies"]
+    if (set(policies) != QUEUE_POLICY_KEYS
+            or {key: policies[key] for key in POLICIES} != {**POLICIES, "attempt_selection": QUEUE}):
+        raise ValueError("Campaign failure, selection and authentication policies must be explicit")
+    ordinals = list(range(1, config["max_attempts"] + 1))
+    if policies["repetitions"] != ordinals:
+        raise ValueError("A rerun queue declares every repetition through its plan")
+    if type(policies["max_queue_attempts"]) is not int or not 1 <= policies["max_queue_attempts"] <= 10:
+        raise ValueError("A rerun queue bounds its attempts per repetition to 1..10")
+    links = policies["linked_campaigns"]
+    if (not isinstance(links, list) or any(not isinstance(link, dict) or set(link) != QUEUE_LINK_KEYS for link in links)
+            or len({link["campaign_id"] for link in links}) != len(links)
+            or any(not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,79}", str(link["campaign_id"]))
+                   or link["campaign_id"] == config["campaign_id"]
+                   or not re.fullmatch(r"[a-f0-9]{64}", str(link["config_sha256"])) for link in links)):
+        raise ValueError("Linked campaigns name other frozen campaigns by ID and configuration hash")
+    linked = {link["campaign_id"]: link for link in links}
+    plan = policies["plan"]
+    models = {model.get("id"): model for model in config["models"]}
+    if not isinstance(plan, dict) or set(plan) != set(models):
+        raise ValueError("A rerun queue plans every model and only its models")
+    referenced = {campaign_id: set() for campaign_id in linked}
+    runs = 0
+    for model_id, entries in plan.items():
+        if not isinstance(entries, list) or [entry.get("repetition") if isinstance(entry, dict) else None
+                                              for entry in entries] != ordinals:
+            raise ValueError(f"{model_id}: plan every repetition once, in order")
+        for entry in entries:
+            origin = entry.get("origin")
+            if set(entry) != {"repetition", "origin"}:
+                raise ValueError(f"{model_id}: a plan entry declares only its repetition and origin")
+            if origin is not None:
+                if (not isinstance(origin, dict) or set(origin) != ORIGIN_KEYS or origin["campaign_id"] not in linked
+                        or origin["attempt_id"] != queue_chain_id(model_id, entry["repetition"], 0)
+                        or origin["outcome"] not in {"SUCCESS", "FAILURE", "UNATTEMPTED"}
+                        or (origin["outcome"] == "UNATTEMPTED") != (origin["status"] == "RESERVED")
+                        or (origin["outcome"] == "FAILURE") != bool(origin["failure_category"])
+                        or not re.fullmatch(r"[a-f0-9]{64}", str(origin["status_sha256"]))):
+                    raise ValueError(f"{model_id}: an origin names its linked slot and its recorded outcome")
+                referenced[origin["campaign_id"]].add(model_id)
+            runs += origin_reruns(origin)
+    if not runs:
+        raise ValueError("A rerun queue must run at least one repetition")
+    for campaign_id, link in linked.items():
+        fingerprints = link["condition_fingerprints"]
+        if (not referenced[campaign_id] or not isinstance(fingerprints, dict) or set(fingerprints) != referenced[campaign_id]
+                or any(fingerprints[model_id] != condition_fingerprint(config, models[model_id]) for model_id in fingerprints)):
+            raise ValueError("Every model must freeze each linked campaign's condition fingerprint it draws on")
+
+
 def check_policies(config: dict) -> None:
     """First success over all ordinals (POLICIES), or declared ordinals with an optional linked campaign.
 
     Independent repetitions may run every ordinal unlinked, or some of them linked to a campaign
     holding the others. A first-success continuation runs the remaining ordinals of a linked
     first-success campaign whose other ordinals were consumed without an eligible success.
+    A rerun queue (QUEUE) plans each model's ordinals across linked campaigns.
     """
     policies = config["policies"]
     if policies == POLICIES:
         return
     selection = policies.get("attempt_selection") if isinstance(policies, dict) else None
+    if selection == QUEUE:
+        return check_queue_policies(config)
     if (selection not in (FIRST_SUCCESS, INDEPENDENT) or set(policies) != REPETITION_POLICY_KEYS
             or {key: policies[key] for key in POLICIES} != {**POLICIES, "attempt_selection": selection}):
         raise ValueError("Campaign failure, selection and authentication policies must be explicit")
@@ -476,9 +539,30 @@ def repetition_policies(ordinals: list[int] | None, linked_path: Path | None,
     return policies, linked
 
 
+def queue_policies(plan_path: Path, linked_paths: list[Path]) -> tuple[dict, dict]:
+    """Policies of a rerun queue from its plan ({"max_queue_attempts", "models": {id: entries}})."""
+    plan = json.loads(plan_path.read_text())
+    if not isinstance(plan, dict) or set(plan) != {"max_queue_attempts", "models"}:
+        raise ValueError("A queue plan declares max_queue_attempts and every model's ordinal origins")
+    linked = {}
+    for path in linked_paths:
+        manifest = read_manifest(path)
+        linked[manifest["campaign_id"]] = manifest
+    used = {entry["origin"]["campaign_id"] for entries in plan["models"].values() for entry in entries
+            if isinstance(entry, dict) and entry.get("origin")}
+    if set(linked) != used:
+        raise ValueError("Pass exactly the linked campaigns the queue plan's origins name")
+    policies = {**POLICIES, "attempt_selection": QUEUE, "repetitions": [1, 2, 3], "plan": plan["models"],
+                "max_queue_attempts": plan["max_queue_attempts"],
+                "linked_campaigns": [{"campaign_id": campaign_id, "config_sha256": digest(manifest),
+                                      "condition_fingerprints": {}} for campaign_id, manifest in sorted(linked.items())]}
+    return policies, linked
+
+
 def compile_campaign(inventory_path: Path, selection_path: Path, output: Path, tier_spec_path: Path,
                      ordinals: list[int] | None = None, linked_path: Path | None = None,
-                     attempt_selection: str = INDEPENDENT) -> dict:
+                     attempt_selection: str = INDEPENDENT, queue_plan: Path | None = None,
+                     queue_links: list[Path] = ()) -> dict:
     inventory = json.loads(inventory_path.read_text())
     selection = json.loads(selection_path.read_text())
     required = KEYS - {"schema", "max_attempts", "inventory", "policies", "prompts", "provenance"}
@@ -486,7 +570,13 @@ def compile_campaign(inventory_path: Path, selection_path: Path, output: Path, t
         raise ValueError(f"Selection keys must be exactly {sorted(required)}")
     check_tier_spec(selection["models"], tier_spec_path)
     rows = [{key: row.get(key) for key in ("model", "provider", "status", "upstream_model", "proxy_request_model")} for row in inventory["models"]]
-    policies, linked = repetition_policies(ordinals, linked_path, attempt_selection)
+    if queue_plan is not None:
+        if ordinals is not None or linked_path is not None:
+            raise ValueError("A rerun queue takes its ordinals and links from its plan")
+        policies, queue_linked = queue_policies(queue_plan, list(queue_links))
+        linked = None
+    else:
+        policies, linked = repetition_policies(ordinals, linked_path, attempt_selection)
     config = {**selection, "schema": SCHEMA, "max_attempts": 3, "inventory": {"sha256": digest(rows), "entries": rows}, "policies": policies, "prompts": prompt_manifest(selection["limits"]), "provenance": {"sources": source_provenance(), "packages": package_provenance(), "python": sys.version}}
     for model in config["models"]:
         model["effective_settings"] = None
@@ -512,6 +602,19 @@ def compile_campaign(inventory_path: Path, selection_path: Path, output: Path, t
             if model["id"] not in frozen or condition_fingerprint(linked, frozen[model["id"]]) != fingerprint:
                 raise ValueError(f"{model['id']}: condition differs from the linked campaign's frozen model")
             policies["linked_condition"]["condition_fingerprints"][model["id"]] = fingerprint
+    if queue_plan is not None:
+        links = {link["campaign_id"]: link for link in policies["linked_campaigns"]}
+        for model in config["models"]:
+            fingerprint = condition_fingerprint(config, model)
+            for entry in policies["plan"].get(model["id"], []):
+                origin = entry.get("origin") if isinstance(entry, dict) else None
+                if not origin:
+                    continue
+                frozen = {item.get("id"): item for item in queue_linked[origin["campaign_id"]].get("models", [])}
+                if (model["id"] not in frozen
+                        or condition_fingerprint(queue_linked[origin["campaign_id"]], frozen[model["id"]]) != fingerprint):
+                    raise ValueError(f"{model['id']}: condition differs from the linked campaign's frozen model")
+                links[origin["campaign_id"]]["condition_fingerprints"][model["id"]] = fingerprint
     validate(config)
     publish(output, {"sha256": digest(config), "campaign": config})
     return config
@@ -542,12 +645,22 @@ def main():
     parser.add_argument("--repetitions", help="ordinals this campaign runs, e.g. 2,3; omit for first success over every ordinal")
     parser.add_argument("--attempt-selection", choices=[INDEPENDENT, FIRST_SUCCESS], default=INDEPENDENT,
                         help=f"policy for declared --repetitions: {INDEPENDENT}, or {FIRST_SUCCESS} to continue a linked first-success campaign's remaining ordinals")
-    parser.add_argument("--linked-campaign", type=Path, help="frozen campaign holding the other ordinals of the same condition")
+    parser.add_argument("--linked-campaign", type=Path, action="append", default=[],
+                        help="frozen campaign holding the other ordinals of the same condition; repeat for a --queue-plan")
+    parser.add_argument("--queue-plan", type=Path, help=f"{QUEUE}: per-model ordinal origins across the linked campaigns")
     args = parser.parse_args()
     ordinals = [int(value) for value in args.repetitions.split(",")] if args.repetitions else None
+    if args.queue_plan is None and len(args.linked_campaign) > 1:
+        raise SystemExit("Only a --queue-plan links more than one campaign")
     config = compile_campaign(args.inventory.resolve(), args.selection.resolve(), args.out.resolve(), args.tier_spec.resolve(),
-                              ordinals, args.linked_campaign.resolve() if args.linked_campaign else None, args.attempt_selection)
-    print(json.dumps({"campaign_id": config["campaign_id"], "models": len(config["models"]), "reserved_slots": len(config["models"]) * len(repetitions(config)), "repetitions": repetitions(config), "max_attempts_per_model": config["max_attempts"], "attempt_selection": config["policies"]["attempt_selection"], "sha256": digest(config)}))
+                              ordinals, args.linked_campaign[0].resolve() if args.linked_campaign and args.queue_plan is None else None,
+                              args.attempt_selection, args.queue_plan.resolve() if args.queue_plan else None,
+                              [path.resolve() for path in args.linked_campaign] if args.queue_plan else [])
+    summary = {"campaign_id": config["campaign_id"], "models": len(config["models"]), "reserved_slots": len(config["models"]) * len(repetitions(config)), "repetitions": repetitions(config), "max_attempts_per_model": config["max_attempts"], "attempt_selection": config["policies"]["attempt_selection"], "sha256": digest(config)}
+    if config["policies"]["attempt_selection"] == QUEUE:
+        summary["reserved_slots"] = None
+        summary["queued_repetitions"] = sum(origin_reruns(entry["origin"]) for entries in config["policies"]["plan"].values() for entry in entries)
+    print(json.dumps(summary))
 
 
 if __name__ == "__main__":

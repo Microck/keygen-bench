@@ -452,6 +452,94 @@ class ReportTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "condition differs"):
             report.build_report(other, other / "campaign.lock.json", [(self.root, self.root / "campaign.lock.json")])
 
+    def queue(self, repeats, plan_rows, cap=3):
+        """A rerun queue over the fixture cohort (rep 1) and its repeats campaign (reps 2-3)."""
+        origins = {"fixture-cohort": self.root, "fixture-repeats": None}
+        plan = []
+        for repetition, campaign_id, outcome, category, root in plan_rows:
+            origin = None
+            if campaign_id:
+                attempt_id = f"claude-rep-{repetition}"
+                status = (root / attempt_id / "status.json").read_bytes()
+                origin = {"campaign_id": campaign_id, "attempt_id": attempt_id, "status": json.loads(status)["status"],
+                          "status_sha256": hashlib.sha256(status).hexdigest(), "outcome": outcome, "failure_category": category}
+            plan.append({"repetition": repetition, "origin": origin})
+        model = self.config["models"][0]
+        fingerprint = report.condition_fingerprint(self.config, model)
+        queue = {**self.config, "campaign_id": "fixture-queue",
+                 "policies": {"attempt_selection": report.QUEUE_SELECTION, "repetitions": [1, 2, 3],
+                              "max_queue_attempts": cap, "plan": {"claude": plan},
+                              "linked_campaigns": [
+                                  {"campaign_id": "fixture-cohort", "config_sha256": report.digest(self.config),
+                                   "condition_fingerprints": {"claude": fingerprint}},
+                                  {"campaign_id": "fixture-repeats", "config_sha256": report.digest(repeats),
+                                   "condition_fingerprints": {"claude": fingerprint}}]}}
+        temporary = tempfile.TemporaryDirectory(suffix="queue")
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        self.write(root / "campaign.lock.json", self.envelope(queue))
+        return queue, root
+
+    def rerun(self, queue, root, repetition, index, score, previous, previous_campaign, **kwargs):
+        name = f"claude-rep-{repetition}-retry-{index}"
+        self.write(root / f"retry-{name}.json", {"campaign_sha256": report.digest(queue), "attempt_id": name,
+                                                 "retry_of": previous, "retry_of_campaign_id": previous_campaign})
+        return self.attempt(repetition, score, name=name, config=queue, root=root, retry_of=previous, **kwargs)
+
+    def test_queue_reruns_only_infrastructure_failures_and_unstarted_slots(self):
+        self.attempt(1, 65)
+        repeats, repeats_root = self.repeats()
+        self.attempt(2, None, config=repeats, root=repeats_root, category="QUOTA", status_updates={"status": "QUOTA_ERROR"})
+        self.write(repeats_root / "claude-rep-3" / "status.json", {"attempt_id": "claude-rep-3", "repetition": 3,
+                   "model": self.model, "status": "RESERVED", "retry_of": None, "eligible": False})
+        queue, root = self.queue(repeats, [(1, "fixture-cohort", "SUCCESS", None, self.root),
+                                           (2, "fixture-repeats", "FAILURE", "QUOTA", repeats_root),
+                                           (3, "fixture-repeats", "UNATTEMPTED", None, repeats_root)])
+        self.rerun(queue, root, 2, 1, None, "claude-rep-2", "fixture-repeats", category="TRANSPORT",
+                   status_updates={"status": "TRANSPORT_ERROR"})
+        self.rerun(queue, root, 2, 2, 40, "claude-rep-2-retry-1", "fixture-queue")
+        self.rerun(queue, root, 3, 1, None, "claude-rep-3", "fixture-repeats", category="MODEL", model_failure=True)
+        linked = [(self.root, self.root / "campaign.lock.json"), (repeats_root, repeats_root / "campaign.lock.json")]
+        result = report.build_report(root, root / "campaign.lock.json", linked)
+        group, = result["groups"]
+        self.assertEqual([(rep["repetition"], rep["attempt_id"], rep["source_campaign_id"], rep["craft"], rep["outcome"])
+                          for rep in group["repetitions"]],
+                         [(1, "claude-rep-1", "fixture-cohort", 65, "SUCCESS"),
+                          (2, "claude-rep-2-retry-2", "fixture-queue", 40, "SUCCESS"),
+                          (3, "claude-rep-3-retry-1", "fixture-queue", None, "FAILURE")])
+        self.assertEqual([[row["attempt_id"] for row in rep["superseded_attempts"]] for rep in group["repetitions"]],
+                         [[], ["claude-rep-2", "claude-rep-2-retry-1"], ["claude-rep-3"]])
+        self.assertEqual((group["state"], group["eligible_repetitions"], group["median_craft"]), ("complete_with_failures", 2, 52.5))
+        self.assertEqual(result["declared_counts"]["attempts"], 3)
+        # A rerun that cannot prove its link to the attempt it reruns is not a sample.
+        (root / "retry-claude-rep-2-retry-2.json").unlink()
+        group, = report.build_report(root, root / "campaign.lock.json", linked)["groups"]
+        self.assertEqual((group["repetitions"][1]["eligible"], group["eligible_repetitions"]), (False, 1))
+
+    def test_queue_never_reruns_a_scored_outcome_and_pins_the_origin_record(self):
+        self.attempt(1, 65)
+        repeats, repeats_root = self.repeats()
+        self.attempt(2, 40, config=repeats, root=repeats_root)
+        self.attempt(3, None, config=repeats, root=repeats_root, category="INFRA")
+        # The plan claims the scored rep 2 failed; its rerun must not replace the score.
+        queue, root = self.queue(repeats, [(1, "fixture-cohort", "SUCCESS", None, self.root),
+                                           (2, "fixture-repeats", "FAILURE", "INFRA", repeats_root),
+                                           (3, "fixture-repeats", "FAILURE", "INFRA", repeats_root)])
+        linked = [(self.root, self.root / "campaign.lock.json"), (repeats_root, repeats_root / "campaign.lock.json")]
+        group, = report.build_report(root, root / "campaign.lock.json", linked)["groups"]
+        # Only the truly unscored rep 3 awaits a rerun; the report trusts the slot, not the plan's claim.
+        self.assertEqual(group["pending_repetitions"], ["claude-rep-3"])
+        self.rerun(queue, root, 2, 1, 90, "claude-rep-2", "fixture-repeats")
+        with self.assertRaisesRegex(ValueError, "neither unstarted nor a non-model failure"):
+            report.build_report(root, root / "campaign.lock.json", linked)
+        (root / "claude-rep-2-retry-1" / "status.json").unlink()
+        (root / "claude-rep-2-retry-1" / "profile.json").unlink()
+        (root / "claude-rep-2-retry-1" / "campaign.json").unlink()
+        (root / "claude-rep-2-retry-1").rmdir()
+        self.attempt(3, 70, config=repeats, root=repeats_root)  # origin rewritten after the queue froze it
+        with self.assertRaisesRegex(ValueError, "frozen record"):
+            report.build_report(root, root / "campaign.lock.json", linked)
+
 
 if __name__ == "__main__":
     unittest.main()

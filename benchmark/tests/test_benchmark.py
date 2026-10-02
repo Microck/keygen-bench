@@ -189,6 +189,45 @@ class BenchmarkTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "condition fingerprint"):
             campaign.validate(forged)
 
+    def test_rerun_queue_freezes_origins_and_runs_only_unscored_ordinals(self):
+        primary = self.compile()
+        self.selection["campaign_id"] = "fixture-queue"
+        self.selection_path.write_text(json.dumps(self.selection))
+        origin = lambda n, outcome, category, status: {"campaign_id": primary["campaign_id"], "attempt_id": f"verified-rep-{n}",
+                                                       "status": status, "status_sha256": "a" * 64,
+                                                       "outcome": outcome, "failure_category": category}
+        plan = {"max_queue_attempts": 4, "models": {"verified": [
+            {"repetition": 1, "origin": origin(1, "SUCCESS", None, "RENDERED_UNSCORED")},
+            {"repetition": 2, "origin": origin(2, "FAILURE", "QUOTA", "QUOTA_ERROR")},
+            {"repetition": 3, "origin": origin(3, "UNATTEMPTED", None, "RESERVED")}]}}
+        plan_path = self.root / "queue-plan.json"
+        compile_queue = lambda out: campaign.compile_campaign(self.inventory_path, self.selection_path, self.root / out,
+                                                              self.tier_spec_path, queue_plan=plan_path,
+                                                              queue_links=[self.root / "campaign.json"])
+        plan_path.write_text(json.dumps(plan))
+        queue = compile_queue("queue.json")
+        self.assertEqual(queue["policies"]["linked_campaigns"],
+                         [{"campaign_id": primary["campaign_id"], "config_sha256": campaign.digest(primary),
+                           "condition_fingerprints": {"verified": campaign.condition_fingerprint(queue, queue["models"][0])}}])
+        self.assertEqual([campaign.origin_reruns(entry["origin"]) for entry in queue["policies"]["plan"]["verified"]],
+                         [False, True, True])
+        # An origin must be the ordinal's own slot, and a scored plan has nothing to run.
+        plan["models"]["verified"][1]["origin"]["attempt_id"] = "verified-rep-3"
+        plan_path.write_text(json.dumps(plan))
+        with self.assertRaisesRegex(ValueError, "names its linked slot"):
+            compile_queue("wrong-slot.json")
+        plan["models"]["verified"][1]["origin"] = origin(2, "FAILURE", "MODEL", "MODEL_FAILED")
+        plan["models"]["verified"][2]["origin"] = origin(3, "SUCCESS", None, "RENDERED_UNSCORED")
+        plan_path.write_text(json.dumps(plan))
+        with self.assertRaisesRegex(ValueError, "at least one"):
+            compile_queue("nothing.json")
+        self.selection["limits"]["command_seconds"] += 60
+        self.selection_path.write_text(json.dumps(self.selection))
+        plan["models"]["verified"][2]["origin"] = origin(3, "UNATTEMPTED", None, "RESERVED")
+        plan_path.write_text(json.dumps(plan))
+        with self.assertRaisesRegex(ValueError, "condition differs"):
+            compile_queue("changed.json")
+
     def test_model_mapping_and_effective_settings_cannot_be_faked(self):
         self.model["response_model"] = "substitute"
         with self.assertRaisesRegex(ValueError, "identity differs"):
@@ -546,6 +585,77 @@ class ModelSequenceTests(unittest.TestCase):
         self.assertEqual(self.invoked, [1, 2])
         self.assertIsNone(result["stopped_after"])
         self.assertEqual(result["selected_attempt_id"], "model-rep-2")
+
+    def queue_root(self, transport=None):
+        model = {"id": "model", "model": "exact", "response_model": "exact", "provider": "go", "api": "chat",
+                 "base_url": "https://fixture.invalid/v1", "api_key_env": "TEST_KEY", "effective_settings": {}}
+        linked = {"campaign_id": "fixture-linked", "attempt_id": "model-rep-2", "status": "QUOTA_ERROR",
+                  "status_sha256": "0" * 64, "outcome": "FAILURE", "failure_category": "QUOTA"}
+        scored = {**linked, "attempt_id": "model-rep-3", "status": "RENDERED_UNSCORED", "outcome": "SUCCESS",
+                  "failure_category": None}
+        config = {"schema": "keygen-native-campaign-3", "campaign_id": "fixture-queue", "max_attempts": 3,
+                  "models": [model], "transport": transport or {"backend": "local"},
+                  "concurrency": {"workers": 2, "providers": {"go": 1}},
+                  "policies": {**campaign.POLICIES, "attempt_selection": campaign.QUEUE, "repetitions": [1, 2, 3],
+                               "max_queue_attempts": 3, "linked_campaigns": [],
+                               "plan": {"model": [{"repetition": 1, "origin": None}, {"repetition": 2, "origin": linked},
+                                                  {"repetition": 3, "origin": scored}]}}}
+        root = self.root / "queue"
+        root.mkdir()
+        snapshot = {"config_sha256": campaign.digest(config), "campaign": config, "image_id": "image", "visualizer_image_id": "video"}
+        run.lock_campaign(root / "campaign.lock.json", snapshot)
+        return root, config, snapshot
+
+    def queue_attempt(self, outcomes):
+        def attempt(root, config, model, docker, image, visualizer, repetition, attempt_id, store, retry_of):
+            self.invoked.append(attempt_id)
+            directory = root / attempt_id
+            status = json.loads((directory / "status.json").read_text())
+            if outcomes[attempt_id] == "success":
+                status.update(status="RENDERED_UNSCORED", render="ok", eligible=True, failure_category=None, model_failure=False)
+            else:
+                status.update(status=outcomes[attempt_id] + "_ERROR", eligible=False,
+                              failure_category=outcomes[attempt_id], model_failure=False)
+            run.write_json(directory / "status.json", status)
+            if outcomes[attempt_id] == "success":
+                run.write_json(directory / "profile.json", {
+                    "eligible": True, "evaluation_status": "evaluated", "cacheable": True, "evaluation_schema": 2,
+                    "score_version": "fixture", "status": status["status"], "model": model["model"],
+                    "inputs": {"artifacts": {"status.json": campaign.file_digest(directory / "status.json")}},
+                    "craft": {"craft_score": 50}})
+        return attempt
+
+    def test_rerun_queue_waits_on_probes_and_reruns_only_infrastructure_failures(self):
+        root, config, snapshot = self.queue_root()
+        probes = iter(["quota", "ok", "ok", "ok"])
+        probed = []
+        def probe(model, credential):
+            probed.append(next(probes))
+            return {"category": probed[-1], "http_status": 200 if probed[-1] == "ok" else 429}
+        outcomes = {"model-rep-1": "QUOTA", "model-rep-1-retry-1": "success", "model-rep-2-retry-1": "success"}
+        with patch.object(run, "run_one", side_effect=self.queue_attempt(outcomes)), patch.object(run.STOP, "wait"):
+            result = run.RerunQueue(root, config, None, snapshot, None, probe_interval=0, retry_interval=0,
+                                    boat_reserve=0, probe=probe).run()
+        # No attempt starts while the probe reports a usage limit; the quota failure re-closes the gate.
+        self.assertEqual(probed, ["quota", "ok", "ok"])
+        self.assertEqual(self.invoked, ["model-rep-1", "model-rep-1-retry-1", "model-rep-2-retry-1"])
+        self.assertEqual(json.loads((root / "model-rep-1/status.json").read_text())["status"], "QUOTA_ERROR")
+        records = {name: json.loads((root / f"retry-{name}.json").read_text()) for name in ("model-rep-1-retry-1", "model-rep-2-retry-1")}
+        self.assertEqual([(record["retry_of"], record["retry_of_campaign_id"], record["kind"]) for record in records.values()],
+                         [("model-rep-1", "fixture-queue", "retry"), ("model-rep-2", "fixture-linked", "retry")])
+        self.assertEqual([json.loads((root / name / "status.json").read_text())["retry_of"] for name in records],
+                         ["model-rep-1", "model-rep-2"])
+        self.assertEqual([(item["repetition"], item["state"], item["attempt_id"]) for item in result["ordinals"]],
+                         [(1, "done", "model-rep-1-retry-1"), (2, "done", "model-rep-2-retry-1")])
+        self.assertEqual(result["status"], "COMPLETED")
+
+    def test_rerun_queue_starts_nothing_that_would_breach_the_boat_reserve(self):
+        root, config, snapshot = self.queue_root({"backend": "boat", "boat": {"ttl_seconds": 10800}})
+        with patch.object(run, "run_one", side_effect=self.queue_attempt({})), patch.object(run.STOP, "wait"):
+            result = run.RerunQueue(root, config, None, snapshot, None, probe_interval=0, retry_interval=0,
+                                    boat_reserve=36000, probe=lambda model, key: {"category": "ok"},
+                                    balance=lambda: 46799).run()
+        self.assertEqual((self.invoked, result["status"], result["stopped"]["reason"]), ([], "STOPPED_BOAT_RESERVE", "boat_reserve"))
 
     def test_funds_usage_limit_and_rate_limit_errors_are_quota_not_protocol(self):
         import litellm
