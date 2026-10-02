@@ -22,7 +22,7 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
 sys.path.insert(0, str(ROOT))
 from benchmark.artifacts import ArtifactStore
-from benchmark.report import build_report, finite_json
+from benchmark.report import INDEPENDENT_SELECTION, QUEUE_SELECTION, build_report, finite_json
 from build import FLAG_RULES, compact_trace, estimate_cost, price_id, public_maker, public_price, slug, worst_transition
 
 
@@ -125,14 +125,17 @@ def verified_media(directory: Path, profile: dict, output: Path) -> dict:
 
 
 def public_run(row: dict, group: dict, directory: Path, output: Path, campaign: dict,
-               scope: str, prices: dict) -> dict:
+               scope: str, prices: dict, roster_addition: bool = False) -> dict:
     profile = row["profile"]
     name = price_id(row["model"])
     # Cohorts are separate experiments; a max-tier result never shares a slug or name with an earlier cohort's row.
     max_tier = row["cohort"]["condition"] == "highest-declared-tier"
     repetition = scope == "repetitions"
+    queue = campaign.get("attempt_selection") == QUEUE_SELECTION
     ordinal = row["repetition"]
-    run_slug = slug(name) + ("-max-tier" if max_tier else "") + (f"-a{ordinal}" if repetition else {"pilot": "-pilot", "recovery": "-recovered", "continuation": "-continued"}.get(scope, ""))
+    # A model added to the roster in the rerun queue is ranked by its attempt 1, named like every other ranked row.
+    ranked_addition = roster_addition and ordinal == 1
+    run_slug = slug(name) + ("-max-tier" if max_tier else "") + (("" if ranked_addition else f"-a{ordinal}") if repetition else {"pilot": "-pilot", "recovery": "-recovered", "continuation": "-continued"}.get(scope, ""))
     stage = output / ".verified" / run_slug
     verification = verified_media(directory, profile, stage)
     media = output / "media"
@@ -160,7 +163,8 @@ def public_run(row: dict, group: dict, directory: Path, output: Path, campaign: 
     totals = row["totals"] or {}
     run = {
         "slug": run_slug, "model_key": name,
-        "name": name + ((f" (max-tier, attempt {ordinal})" if max_tier else f" (attempt {ordinal})") if repetition else
+        "name": name + ((" (max-tier)" if max_tier else "") if ranked_addition else
+                        (f" (max-tier, attempt {ordinal})" if max_tier else f" (attempt {ordinal})") if repetition else
                         (" (max-tier)" if max_tier else "") + {"pilot": " (musical pilot)", "recovery": " (archive-only recovery)", "continuation": " (native continuation)"}.get(scope, "")),
         "maker": maker, "exhibition": scope == "pilot", "tier": row["tier"], "cohort": row["cohort"],
         "status": row["recorded_status"] if row["post_evaluation_finalization_error"] else row["status"], "error": "", "score": row["craft"],
@@ -186,7 +190,9 @@ def public_run(row: dict, group: dict, directory: Path, output: Path, campaign: 
                        "campaign_sha256": row["source_campaign_sha256"] if repetition else campaign["campaign_sha256"],
                        "cohort_fingerprint": row["cohort_fingerprint"],
                        "attempt_ordinal": row["repetition"],
-                       "selected_by": ("independent predetermined repetition; every repetition is reported, none is selected" if repetition else
+                       "selected_by": ("attempt 1 of a model added to the roster in the rerun queue; ranked like every model's attempt 1" if ranked_addition else
+                                       "independent predetermined repetition; the last attempt of its infrastructure rerun chain, none is selected" if queue else
+                                       "independent predetermined repetition; every repetition is reported, none is selected" if repetition else
                                        "first eligible success among up to three sequential predetermined attempts"),
                        "score_version": row["score_version"], "evaluation_fingerprint": row["evaluation_fingerprint"],
                        "profile_sha256": sha256(directory / "profile.json"), **verification,
@@ -199,6 +205,12 @@ def public_run(row: dict, group: dict, directory: Path, output: Path, campaign: 
     if repetition:
         run["provenance"].update(source_campaign_id=row["source_campaign_id"], repetition_campaign_sha256=campaign["campaign_sha256"],
                                  condition_fingerprint=row["condition_fingerprint"])
+    if roster_addition:
+        started = status.get("started_at")
+        day = f" on {datetime.fromtimestamp(started, timezone.utc).date().isoformat()}" if isinstance(started, (int, float)) else ""
+        run["provenance"].update(roster_addition=True, queue_note=(
+            f"Added to the roster after requalification at its highest declared tier. This attempt ran{day} in the "
+            "infrastructure rerun queue, under the same frozen condition as every other model."))
     if row["post_evaluation_finalization_error"]:
         failure = row["post_evaluation_finalization_error"]
         cause = failure.get("error") if isinstance(failure, dict) else None
@@ -242,9 +254,35 @@ def pending_reason(group: dict, rows: dict) -> str:
     return "; ".join(parts) or "no attempt recorded"
 
 
-def repetition_group(group: dict, rows: dict, slugs: dict, prices: dict) -> dict:
-    """One model's predetermined repetitions; only eligible ones carry a playable slug. No aggregate is exported."""
+def addition_reason(attempt: dict) -> str:
+    """Why a model added in the rerun queue has no ranked attempt 1, from its rerun chain."""
+    failed = attempt if attempt["attempted"] and attempt["status"] != "RUNNING" else next(
+        (link for link in reversed(attempt["superseded"]) if link["attempted"]), None)
+    cause = f"{failed['status']} ({CATEGORY_TEXT.get(failed['failure_category'], failed['failure_category'] or 'no eligible evaluation')})" if failed else None
+    if attempt["status"] == "RUNNING":
+        state = "attempt 1 is running in the rerun queue" + (f" after {cause}" if cause else "")
+    elif attempt["queue_pending"]:
+        state = f"attempt 1 awaits a rerun after {cause}" if cause else "attempt 1 has not started in the rerun queue yet"
+    elif failed is attempt:
+        reruns = len(attempt["superseded"])
+        state = f"attempt 1 {cause}" + (f" after {reruns} rerun{'s' if reruns > 1 else ''}" if reruns else "")
+    else:
+        state = "attempt 1 never started"
+    return f"added to the roster after requalification; {state}"
+
+
+def repetition_group(group: dict, rows: dict, slugs: dict, prices: dict, roster_addition: bool = False) -> dict:
+    """One model's predetermined repetitions; only eligible ones carry a playable slug. No aggregate is exported.
+
+    In a rerun queue each ordinal's sample is the end of its chain; the attempts it superseded stay listed without media.
+    """
     name = price_id(group["model"])
+
+    def link(row: dict) -> dict:
+        return {"status": public_status(row), "outcome": row["outcome"], "failure_category": row["failure_category"],
+                "attempted": row["attempted"], "source_campaign_id": row["source_campaign_id"],
+                "source_campaign_sha256": row["source_campaign_sha256"]}
+
     attempts = []
     for repetition in group["repetitions"]:
         row = rows[(repetition["source_campaign_id"], repetition["attempt_id"])]
@@ -253,12 +291,19 @@ def repetition_group(group: dict, rows: dict, slugs: dict, prices: dict) -> dict
                          "model_failure": repetition["model_failure"], "score": repetition["craft"],
                          "slug": slugs.get((repetition["source_campaign_id"], repetition["attempt_id"])),
                          "source_campaign_id": repetition["source_campaign_id"],
-                         "source_campaign_sha256": row["source_campaign_sha256"]})
+                         "source_campaign_sha256": row["source_campaign_sha256"],
+                         "queue_pending": bool(repetition.get("queue_pending")),
+                         "superseded": [link(rows[(item["source_campaign_id"], item["attempt_id"])])
+                                        for item in repetition.get("superseded_attempts") or []]})
     # A slot the frozen runner never started after a stopping failure in its own campaign names that category.
+    # Each ordinal's origin (the first link of its chain) is the slot its campaign's runner scheduled.
+    origins = [(attempt["superseded"] or [attempt])[0] for attempt in attempts]
     for attempt in attempts:
-        stops = [earlier["failure_category"] for earlier in attempts if earlier["ordinal"] < attempt["ordinal"] and earlier["attempted"]
-                 and earlier["source_campaign_id"] == attempt["source_campaign_id"] and earlier["failure_category"] in STOPPING_CATEGORIES]
-        attempt["stopped_by"] = stops[-1] if not attempt["attempted"] and stops else None
+        for item in attempt["superseded"] + [attempt]:
+            stops = [origin["failure_category"] for earlier, origin in zip(attempts, origins) if earlier["ordinal"] < attempt["ordinal"]
+                     and origin["attempted"] and origin["source_campaign_id"] == item["source_campaign_id"]
+                     and origin["failure_category"] in STOPPING_CATEGORIES]
+            item["stopped_by"] = stops[-1] if not item["attempted"] and stops else None
     outside = []
     for attempt in group["outside_condition_attempts"]:
         row = rows[(attempt["source_campaign_id"], attempt["attempt_id"])]
@@ -270,16 +315,17 @@ def repetition_group(group: dict, rows: dict, slugs: dict, prices: dict) -> dict
             "maker": public_maker(name, prices.get(name, {})), "tier": group["tier"], "cohort": group["cohort"],
             "condition_fingerprint": group["condition_fingerprint"], "declared": group["declared_repetitions"],
             "eligible": group["eligible_repetitions"], "pending": len(group["pending_repetitions"]),
-            "state": group["state"], "attempts": attempts, "outside_condition": outside}
+            "state": group["state"], "roster_addition": roster_addition, "attempts": attempts, "outside_condition": outside}
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--campaign-root", type=Path, required=True)
     parser.add_argument("--cohort", type=Path, help="Explicit original frozen lock for a separate archive-recovery staging root, "
-                        "or the companion campaign's lock for --scope repetitions (default: <campaign-root>/campaign.lock.json)")
+                        "or the companion or rerun-queue campaign's lock for --scope repetitions (default: <campaign-root>/campaign.lock.json)")
     parser.add_argument("--linked", nargs=2, action="append", type=Path, default=[], metavar=("ROOT", "COHORT"),
-                        help="Repetitions only: root and frozen lock of a campaign the companion declares repetitions in")
+                        help="Repetitions only: root and frozen lock of a campaign the companion declares repetitions in, "
+                             "or the rerun queue takes origins from")
     parser.add_argument("--output", type=Path, required=True, help="New dedicated public-only staging directory")
     parser.add_argument("--scope", choices=("main", "pilot", "recovery", "continuation", "repetitions"), default="main")
     args = parser.parse_args()
@@ -293,8 +339,8 @@ def main() -> None:
             raise ValueError("Public staging must be separate from the original campaign")
     output.mkdir(parents=True, exist_ok=True)
     report = build_report(source, args.cohort or source / "campaign.lock.json", [tuple(pair) for pair in args.linked])
-    if (report["attempt_selection"] == "independent_repetitions") != (args.scope == "repetitions"):
-        raise ValueError("--scope repetitions is required for, and only for, an independent-repetitions campaign")
+    if (report["attempt_selection"] in (INDEPENDENT_SELECTION, QUEUE_SELECTION)) != (args.scope == "repetitions"):
+        raise ValueError("--scope repetitions is required for, and only for, an independent-repetitions or rerun-queue campaign")
     metadata_captured = datetime.now(timezone.utc).isoformat()
     prices = {p["id"]: p for p in json.loads((HERE / "data-src/prices.json").read_text())["models"]}
     runs, roster = [], []
@@ -305,22 +351,28 @@ def main() -> None:
             raise ValueError("Repetition rows need unique campaign and attempt identities")
         slugs, groups = {}, []
         for group in report["groups"]:
-            roster.append({"name": price_id(group["model"]), "scope": args.scope, "state": group["state"],
-                           "attempts": group["attempted_count"], "selected_attempt": None, "policy_errors": len(group["policy_errors"])})
+            # A rerun-queue model with no origin in any linked campaign is new to the cohort's roster; its attempt 1 is ranked.
+            addition = report["attempt_selection"] == QUEUE_SELECTION and all(
+                (repetition["superseded_attempts"] or [repetition])[0]["source_campaign_id"] == report["campaign_id"]
+                for repetition in group["repetitions"])
             for repetition in group["repetitions"]:
                 key = (repetition["source_campaign_id"], repetition["attempt_id"])
                 row = rows[key]
                 if row["role"] != "repetition":
                     raise ValueError(f"{repetition['attempt_id']}: reported repetition is outside its condition")
                 if row["eligible"]:
-                    runs.append(public_run(row, group, Path(row["source_root"]) / row["run_dir"], output, report, args.scope, prices))
+                    runs.append(public_run(row, group, Path(row["source_root"]) / row["run_dir"], output, report, args.scope, prices, addition))
                     slugs[key] = runs[-1]["slug"]
                     print(f"Verified {len(runs)}: {runs[-1]['name']}", flush=True)
-            groups.append(repetition_group(group, rows, slugs, prices))
+            groups.append(repetition_group(group, rows, slugs, prices, addition))
+            first = groups[-1]["attempts"][0]
+            roster.append({"name": price_id(group["model"]), "scope": args.scope, "state": group["state"],
+                           "attempts": group["attempted_count"], "selected_attempt": None, "policy_errors": len(group["policy_errors"]),
+                           **({"roster_addition": True, **({} if first["eligible"] else {"reason": addition_reason(first)})} if addition else {})})
         extra = {"attempt_selection": report["attempt_selection"], "sample_note": report["sample_note"],
                  "declared_counts": report["declared_counts"],
                  "linked_campaigns": [{"campaign_id": item["campaign_id"], "campaign_sha256": item["config_sha256"],
-                                       "repetitions": item["repetitions"]} for item in report["linked_campaigns"]],
+                                       "repetitions": item.get("repetitions")} for item in report["linked_campaigns"]],
                  "repetition_groups": groups}
     else:
         rows = {row["attempt_id"]: row for row in report["rows"]}

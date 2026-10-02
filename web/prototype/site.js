@@ -160,16 +160,33 @@ export async function mount(root, ctx) {
   const groupOf = Object.fromEntries(groups.flatMap((g) => g.attempts.filter((a) => a.slug).map((a) => [a.slug, g])));
   const sc = (v) => (v == null ? "--" : v.toFixed(1));
   const reason = (cat) => cat.toLowerCase().replaceAll("_", " ");
-  const attemptState = (a) => a.eligible ? (a.ranked ? "ranked" : "not ranked")
-    : !a.attempted ? `${a.status === "RUNNING" ? "running" : "not run"}${a.stopped_by ? ` (${reason(a.stopped_by)})` : ""}`
-    : `failed (${reason(a.failure_category ?? a.status)})`;
+  const why = (x) => reason(x.failure_category ?? x.status);
+  // A rerun-queue attempt is the last run of its chain; the runs it superseded are labels without media.
+  const supersededCause = (s) => s.attempted ? why(s) : s.stopped_by ? reason(s.stopped_by) : "not run";
+  const rerunNote = (a) => a.superseded?.length ? `rerun after ${[...new Set(a.superseded.map(supersededCause))].join(", ")}` : null;
+  const supersededLabel = (s, i) => `${i ? `rerun ${i}` : "first run"} ${s.attempted ? `failed (${why(s)})` : `not run${s.stopped_by ? ` (${reason(s.stopped_by)})` : ""}`}, rerun`;
+  const attemptState = (a) => {
+    const rerun = rerunNote(a);
+    if (a.eligible) return [rerun, a.ranked ? "ranked" : "not ranked"].filter(Boolean).join(", ");
+    if (a.status === "RUNNING") return rerun ? `running (${rerun})` : "running";
+    if (a.queue_pending) {
+      const last = a.attempted ? a : a.superseded.at(-1) ?? (a.stopped_by ? a : null);
+      return last ? `pending rerun (${supersededCause(last)})` : "queued, not started";
+    }
+    const state = a.attempted ? `failed (${why(a)})` : `not run${a.stopped_by ? ` (${reason(a.stopped_by)})` : ""}`;
+    return rerun ? `${state}, ${rerun}` : state;
+  };
   const attemptLabel = (a) => a.eligible ? `Attempt ${a.ordinal} (${attemptState(a)})` : `Attempt ${a.ordinal}: ${attemptState(a)}`;
-  const attemptTitle = (a) => `${attemptLabel(a)} | ${a.status}${a.failure_category ? " / " + a.failure_category : ""} | ${a.source_campaign_id?.startsWith("main-") ? "main campaign" : "independent repeats campaign"}${a.slug ? "" : " | no media"}`;
-  const outsideNote = (o) => `${o.source_campaign_id?.startsWith("main-") ? "Main-campaign" : "Repetition-campaign"} attempt ${o.ordinal ?? "?"} (${[o.status, o.failure_category].filter(Boolean).join(" / ")})${o.operator_cancelled ? " was cancelled by the operator. It" : ""} is outside the frozen condition: not a repetition, never counted or replaced.`;
+  const attemptTitle = (a) => `${attemptLabel(a)} | ${a.status}${a.failure_category && a.status !== "RUNNING" ? " / " + a.failure_category : ""} | ${a.source}${a.slug ? "" : " | no media"}${a.superseded?.length ? " | " + a.superseded.map(supersededLabel).join("; ") : ""}`;
+  const SOURCE_NOTE = { "main campaign": "Main-campaign", "independent repeats campaign": "Repetition-campaign", "rerun queue": "Rerun-queue" };
+  const outsideNote = (o) => `${SOURCE_NOTE[o.source] ?? "Unpublished-campaign"} attempt ${o.ordinal ?? "?"} (${[o.status, o.failure_category].filter(Boolean).join(" / ")})${o.operator_cancelled ? " was cancelled by the operator. It" : ""} is outside the frozen condition: not a repetition, never counted or replaced.`;
   const attemptedOutside = (g) => g.outside_condition.filter((o) => o.attempted);
+  const attemptOf = (r) => groupOf[r.slug]?.attempts.find((a) => a.slug === r.slug);
   const selection = (r) => {
     if (!native) return r.rank ? `${r.rank} of ${data.runs.filter((x) => x.rank && x.cohort?.key === r.cohort?.key).length}` : r.failed ? "failed" : "exhibition";
-    if (r.attempt_of) return `attempt ${r.provenance.attempt_ordinal} of ${groupOf[r.slug].declared}: independent repetition, not ranked`;
+    const rerun = attemptOf(r) ? rerunNote(attemptOf(r)) : null;
+    if (r.attempt_of) return `attempt ${r.provenance.attempt_ordinal} of ${groupOf[r.slug].declared}: independent repetition${rerun ? ` (${rerun})` : ""}, not ranked`;
+    if (r.provenance.roster_addition) return `rerun queue: attempt 1${rerun ? ` (${rerun})` : ""}; added to the roster after requalification`;
     return `${r.provenance.scope}: first valid at attempt ${r.provenance.attempt_ordinal}; ${r.usage.attempts}/3 slots attempted`;
   };
   const unrankedNote = (r) => `Not ranked. Independent predetermined repetition ${r.provenance.attempt_ordinal} under the same frozen condition; the ranked score is attempt 1's (${sc(data.bySlug[r.attempt_of].score)}).`;
@@ -375,8 +392,10 @@ export async function mount(root, ctx) {
       a.slug ? h("button", { class: "btn", "aria-pressed": String(a.slug === current), title: attemptTitle(a), onclick: () => onShow(a.slug) }, `Attempt ${a.ordinal}`)
         : h("span", { class: "off", title: attemptTitle(a) }, `Attempt ${a.ordinal}`),
       h("span", { class: a.slug ? (a.ranked ? null : "unranked") : "off", title: attemptTitle(a) }, attemptState(a)),
-      h("span", { style: { textAlign: "right", color: "#fff" } }, a.slug ? sc(a.score) : "")])),
+      h("span", { style: { textAlign: "right", color: "#fff" } }, a.slug ? sc(a.score) : ""),
+      ...(a.superseded ?? []).flatMap((s, i) => [h("span", {}), h("span", { class: "off", style: { gridColumn: "2 / -1", whiteSpace: "normal" } }, supersededLabel(s, i))])])),
     ...attemptedOutside(g).map((o) => h("p", { class: "note" }, outsideNote(o))),
+    g.rerun_queue ? h("p", { class: "note" }, "Provider-limit, infrastructure and unstarted attempts were rerun in a later rerun queue. Each attempt shows its last run; superseded runs have no media.") : null,
     h("p", { class: "note" }, "Ranked by attempt 1 only. Later attempts are independent predetermined repetitions under the same frozen condition, never ranked or combined with attempt 1. Pick an attempt to show it; Open in tracker plays it."));
   function ranking() {
     main.style.gridTemplateColumns = "minmax(0,1fr) clamp(160px, 27%, 200px)";
@@ -395,7 +414,7 @@ export async function mount(root, ctx) {
       renderTable(); renderDetail();
     } }) : null;
     const tbody = h("tbody"), thead = h("thead"), colgroup = h("colgroup");
-    const counts = (c) => native ? `${[`${c.main_first_successes} original`, c.native_continuation_successes ? `${c.native_continuation_successes} new` : null, c.archive_only_recoveries ? `${c.archive_only_recoveries} recovery` : null].filter(Boolean).join(" + ")} | 1 quality sample each | diagnostics, not ranks` : `${data.runs.filter((r) => r.rank).length} ranked | 1 attempt per model`;
+    const counts = (c) => native ? `${[`${c.main_first_successes} original`, c.native_continuation_successes ? `${c.native_continuation_successes} new` : null, c.archive_only_recoveries ? `${c.archive_only_recoveries} recovery` : null, c.rerun_queue_additions ? `${c.rerun_queue_additions} added in rerun queue` : null].filter(Boolean).join(" + ")} | 1 quality sample each | diagnostics, not ranks` : `${data.runs.filter((r) => r.rank).length} ranked | 1 attempt per model`;
     const countsText = h("span", { class: "shadow-text", style: { whiteSpace: "nowrap" }, title: data.limitations?.join("\n") });
     const detail = h("div", { class: "ft2-scroll detail", style: { gridColumn: "2", gridRow: "1 / span 3", display: "flex", flexDirection: "column", gap: "1px", minHeight: "0", overflowY: "auto" } });
     const top3 = h("section", { style: { gridColumn: "1", display: "grid", gridTemplateColumns: "repeat(3, minmax(0,1fr))", gap: "1px" } });
@@ -411,7 +430,7 @@ export async function mount(root, ctx) {
     function renderTable() {
       const cohort = cohortOf(S.cohort);
       const col = COLS.find((c) => c.k === S.sort) ?? COLS[1];
-      cohortHead.textContent = cohort ? `${cohort.label}${cohort.main_model_roster ? ` | ${cohort.results}/${cohort.main_model_roster} with a valid result` : ""}` : "";
+      cohortHead.textContent = cohort ? `${cohort.label}${cohort.main_model_roster ? ` | ${cohort.results}/${cohort.main_model_roster + (cohort.roster_additions ?? 0)} with a valid result` : ""}` : "";
       countsText.textContent = counts(cohort?.selection_counts ?? data.selection_counts);
       const runs = data.listed.filter((r) => (S.maker === "All" || r.maker === S.maker) && (S.exh || !r.exhibition) && (!cohort || r.cohort?.key === cohort.key));
       const list = runs.slice().sort((a, b) => { const x = col.v(a), y = col.v(b); const d = x < y ? -1 : x > y ? 1 : 0; return (S.asc ? d : -d) || b.score - a.score; });
@@ -454,7 +473,8 @@ export async function mount(root, ctx) {
           r.exhibition ? h("p", { class: "note" }, native ? "Separate musical pilot. Excluded from main-campaign counts. Its number is an auxiliary diagnostic, not a rank." : "Run by hand in the chat app: it reports no token counts and has no per-token price. Not ranked.") : null,
           r.provenance?.recovery_note ? h("p", { class: "note" }, r.provenance.recovery_note) : null,
           r.provenance?.continuation_note ? h("p", { class: "note" }, r.provenance.continuation_note) : null,
-          r.provenance?.status_note ? h("p", { class: "note" }, r.provenance.status_note) : null),
+          r.provenance?.status_note ? h("p", { class: "note" }, r.provenance.status_note) : null,
+          r.provenance?.queue_note ? h("p", { class: "note" }, r.provenance.queue_note) : null),
         h("section", { class: "panel raised" }, h("h2", {}, "Price & loop"),
           kv([
             ["$/M in", nf(r.price.input_usd_per_m)], ["$/M cached", nf(r.price.cached_input_usd_per_m)], ["$/M out", nf(r.price.output_usd_per_m)],
@@ -542,7 +562,8 @@ export async function mount(root, ctx) {
     const inCohort = (key, cohortKey) => cohortKey === undefined || key === cohortKey;
     const pilots = data.runs.filter((run) => run.provenance.scope === "pilot");
     const states = cohorts.map((cohort) => {
-      const roster = data.campaigns.filter((campaign) => campaign.scope === "main").flatMap((campaign) => campaign.roster).filter((model) => inCohort(model.cohort_key, cohort.key));
+      // Models a rerun queue added after requalification join the main roster's pending and available counts.
+      const roster = data.campaigns.flatMap((campaign) => campaign.roster.filter((model) => campaign.scope === "main" || model.roster_addition)).filter((model) => inCohort(model.cohort_key, cohort.key));
       const members = data.runs.filter((run) => inCohort(run.cohort?.key, cohort.key));
       const available = new Set(members.filter((run) => run.provenance.scope !== "pilot").map((run) => run.model_key));
       const retainedPilot = new Set(members.filter((run) => run.provenance.scope === "pilot").map((run) => run.model_key));
@@ -557,16 +578,18 @@ export async function mount(root, ctx) {
           ...states.map(({ cohort, roster, pending, excluded }) => {
             const c = cohort.selection_counts ?? data.selection_counts;
             const items = [`${c.main_first_successes} original first successes`, c.native_continuation_successes ? `${c.native_continuation_successes} native continuation results` : null,
-              c.archive_only_recoveries ? `${c.archive_only_recoveries} archive-only ${c.archive_only_recoveries === 1 ? "recovery" : "recoveries"}` : null].filter(Boolean);
+              c.archive_only_recoveries ? `${c.archive_only_recoveries} archive-only ${c.archive_only_recoveries === 1 ? "recovery" : "recoveries"}` : null,
+              c.rerun_queue_additions ? `${c.rerun_queue_additions} rerun-queue ${c.rerun_queue_additions === 1 ? "addition" : "additions"}` : null].filter(Boolean);
             const list = items.length > 1 ? `${items.slice(0, -1).join(", ")} and ${items.at(-1)}` : items[0];
             const withheld = excluded.length ? `; ${excluded.length} more ${excluded.length === 1 ? "model was" : "models were"} excluded before launch` : "";
-            return h("p", {}, `${named ? cohort.label + ": " : ""}${list} are available from the ${roster.length}-model main roster. ${pending.length} models have no eligible published output${withheld}.`); }),
-          ...cohorts.filter((cohort) => cohort.repetitions).map((cohort) => { const n = cohort.repetitions; return h("p", {}, `${named ? cohort.label + ": " : ""}Ranked by attempt 1 only. ${n.models} models also ran later predetermined independent repetitions under the same frozen condition; ${n.unranked_playable_attempts} of those later attempts are eligible and playable from the attempt switcher, labeled not ranked.`); }),
+            const added = cohort.roster_additions ? ` plus ${cohort.roster_additions} ${cohort.roster_additions === 1 ? "model" : "models"} added in the rerun queue after requalification` : "";
+            return h("p", {}, `${named ? cohort.label + ": " : ""}${list} are available from the ${roster.length - (cohort.roster_additions ?? 0)}-model main roster${added}. ${pending.length} models have no eligible published output${withheld}.`); }),
+          ...cohorts.filter((cohort) => cohort.repetitions).map((cohort) => { const n = cohort.repetitions, q = n.rerun_queue; return h("p", {}, `${named ? cohort.label + ": " : ""}Ranked by attempt 1 only. ${n.models} models also ran later predetermined independent repetitions under the same frozen condition; ${n.unranked_playable_attempts} of those later attempts are eligible and playable from the attempt switcher, labeled not ranked.${q ? ` A later rerun queue reran provider-limit, infrastructure and unstarted attempts of ${q.models} models: ${q.rerun_attempts} ${q.rerun_attempts === 1 ? "attempt shows its" : "attempts show their"} rerun; ${q.pending_reruns} ${q.pending_reruns === 1 ? "is" : "are"} still running or awaiting a run.` : ""}`); }),
           ...pilots.map((run) => h("p", {}, `${run.name} is retained as a pilot-only result, outside main counts. This preview does not request another attempt for it.`)),
           h("p", {}, "No donation totals or confirmed payment links are published in this preview. Funding and availability can block unfinished work; no missing model receives a fabricated zero score."))),
       ...(groups.length ? [h("section", { class: "panel raised", style: { gridColumn: "1 / -1" } }, h("h2", {}, "Every attempt (only attempt 1 is ranked)"),
         h("div", { class: "well sunken ft2-scroll" }, ...groups.flatMap((g) => [
-          h("p", { style: { margin: attemptedOutside(g).length ? "0" : null } }, h("span", { style: { color: "#fff" } }, `${g.name}: `), g.attempts.map((a) => `${attemptLabel(a)}${a.slug ? " " + sc(a.score) : ""}`).join(" | ")),
+          h("p", { style: { margin: attemptedOutside(g).length ? "0" : null } }, h("span", { style: { color: "#fff" } }, `${g.name}: `), g.attempts.map((a) => `${attemptLabel(a)}${a.slug ? " " + sc(a.score) : ""}${a.superseded?.length ? ` [${a.superseded.map(supersededLabel).join("; ")}]` : ""}`).join(" | ")),
           ...attemptedOutside(g).map((o, i, all) => h("p", { class: "muted", style: { margin: i === all.length - 1 ? null : "0" } }, outsideNote(o)))])))] : []),
       h("section", { class: "panel raised" }, h("h2", {}, "Pending: no eligible result"),
         h("div", { class: "well sunken ft2-scroll" }, ...states.flatMap(({ cohort, pending, excluded }) => [

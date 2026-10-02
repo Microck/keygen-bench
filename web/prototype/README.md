@@ -57,6 +57,25 @@ python3 web/prototype/build.py \
 
 Every eligible repetition is verified from its own attempt directory (local media or the checksum-verified archive). Its provenance records the attempt ordinal, the source campaign hash, the condition fingerprint and "independent predetermined repetition" instead of a first-success selection. The snapshot's `repetition_groups` list every declared attempt per model, including failed and unstarted ones, which have no playable run, plus attempts outside the condition, such as an operator-cancelled main slot. An unstarted slot names the stopping failure category of an earlier attempt in its campaign (`stopped_by`). The build needs the linked main snapshot in the same invocation. A group attaches to its model's ranked main row only if that row is the group's repetition 1, matching campaign, ordinal 1, profile, inputs and evaluation; otherwise the build fails. Repetition 1 is then published once, under the main slug; each later eligible repetition becomes an unranked run `<model>-max-tier-a<ordinal>` with `ranked: false` and `attempt_of: <main slug>`. Roster, ranking and availability counts stay those of the main snapshot; no median, range or other aggregate is exported.
 
+A rerun-queue campaign (policy `independent_repetitions_infrastructure_reruns`) uses the same `--scope repetitions`. Pass the queue's root and lock, and `--linked` for every campaign it takes origins from (main and repeats):
+
+```sh
+python3 web/prototype/collect_public.py \
+  --campaign-root /absolute/queue-root \
+  --cohort /absolute/queue-root/campaign.lock.json \
+  --linked /absolute/main-campaign-root /absolute/main-campaign-root/campaign.lock.json \
+  --linked /absolute/companion-repeats-root /absolute/companion-repeats-root/campaign.lock.json \
+  --scope repetitions --output /tmp/public-queue-snapshot
+
+python3 web/prototype/build.py \
+  --snapshot /tmp/public-main-snapshot \
+  --snapshot /tmp/public-repetitions-snapshot \
+  --snapshot /tmp/public-queue-snapshot \
+  --publish-root /tmp/keygen-site-release
+```
+
+Each ordinal's sample is the last attempt of its rerun chain, wherever it ran; it is verified and exported from its own attempt directory, so an ordinal the queue did not rerun keeps its origin's result. Each attempt lists the attempts it superseded (`superseded`, status and failure category only, no media) and whether it still awaits a rerun (`queue_pending`). In the build, a queue group replaces the repeats group of the same model, together with that group's runs; models outside the queue keep their repeats groups. The replaced repeats campaign must be one the queue links to, and every linked campaign must be published as a main or repetitions snapshot in the same build. A queue model without an origin in any linked campaign is a roster addition (`roster_addition`): it joins its cohort's roster, its eligible attempt 1 is a ranked row named and slugged like a main row, with a note on when it ran, and its later attempts attach to that row. A roster addition without an eligible attempt 1 is listed as pending with its chain's state; if it has eligible later attempts but no eligible attempt 1, the build fails, because those attempts have no ranked row to attach to. Superseded attempts show as labels such as `first run failed (quota), rerun`; reruns label their attempt, for example `Attempt 2 (rerun after quota, not ranked)` or `Attempt 3: pending rerun (quota)`.
+
 Keep frozen controller source unchanged. When copying the publication tools outside that repository, copy `collect_public.py`, `build.py` and `data-src/prices.json` together, and set `PYTHONPATH` to the original controller repository. Set `RCLONE_CONFIG` to its private configuration when archive downloads are needed; never copy that configuration into public output.
 
 Each publication root must be a new, empty directory. The server requires an explicit root, binds to loopback by default, denies directory listings and hidden or symlink paths, and supports byte ranges for audio seeking. Never serve the repository, a controller root or an archive staging root. The supplied service unit records this deployment's actual paths; point it at a successfully built new release before restarting only the preview service.
@@ -86,7 +105,7 @@ The five scopes remain separate:
 - `continuation` identifies actual new results from separately frozen native cohorts.
 - `recovery` identifies archive-only recovered historical attempts, including their reconstructed-status provenance.
 - `pilot` retains the separately labeled musical pilot outside main counts.
-- `repetitions` adds the later predetermined independent repetitions of one frozen condition, across the companion and linked campaigns. Ranking stays on attempt 1: the Results table lists only the main rows, unchanged. A repeated model's attempt switcher, in the Tracker and in the Results detail, lists `Attempt 1 (ranked)` and each later attempt; eligible ones play with their own media and score breakdown and are marked `not ranked`, the others are labels such as `Attempt 3: not run (quota)`. The Support page lists every attempt with its status. Attempts are never aggregated.
+- `repetitions` adds the later predetermined independent repetitions of one frozen condition, across the companion and linked campaigns, and the reruns of a later infrastructure rerun queue. Ranking stays on attempt 1: the Results table lists the main rows, unchanged, plus the attempt-1 row of any model the queue added after requalification. A repeated model's attempt switcher, in the Tracker and in the Results detail, lists `Attempt 1 (ranked)` and each later attempt; eligible ones play with their own media and score breakdown and are marked `not ranked`, the others are labels such as `Attempt 3: not run (quota)`. A rerun attempt says so (`rerun after quota`) and its superseded runs are labels without media. The Support page lists every attempt with its status. Attempts are never aggregated.
 
 Scopes apply within a cohort. Each frozen campaign's experimental condition (provider default effort, declared tier or max-tier, plus prompt version) is its own cohort with its own table, roster and counts. Max-tier rows carry a `-max-tier` slug and a `(max-tier)` name suffix so they never collide with an earlier cohort's row for the same model. A selected attempt whose finalization failed only after its evaluation completed keeps its recorded status, such as `FINALIZATION_ERROR`, with an explanatory note.
 
