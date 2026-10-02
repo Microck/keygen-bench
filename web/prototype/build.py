@@ -188,6 +188,7 @@ def queue_precedence(snapshots: list[dict]) -> None:
     """A rerun queue's group replaces the independent-repeats group of the same model, with that group's runs.
 
     The queue re-exports every chain's sample, including repeats attempts it did not rerun, so nothing is lost.
+    It reports only its own attempts outside the condition, so the replaced group's outside attempts carry over.
     A superseded repeats campaign must be one the queue takes origins from.
     """
     covered = {}
@@ -195,16 +196,17 @@ def queue_precedence(snapshots: list[dict]) -> None:
         if snapshot["scope"] == "repetitions" and snapshot.get("attempt_selection") == QUEUE_SELECTION:
             linked = {item["campaign_sha256"] for item in snapshot["linked_campaigns"]}
             for group in snapshot["repetition_groups"]:
-                covered.setdefault((snapshot["cohort"]["key"], price_id(group["name"]).rsplit("/", 1)[-1]), []).append(linked)
+                covered.setdefault((snapshot["cohort"]["key"], price_id(group["name"]).rsplit("/", 1)[-1]), []).append((linked, group))
     for snapshot in snapshots:
         if snapshot["scope"] != "repetitions" or snapshot.get("attempt_selection") != INDEPENDENT_SELECTION:
             continue
         replaced = set()
         for group in snapshot["repetition_groups"]:
             model = (snapshot["cohort"]["key"], price_id(group["name"]).rsplit("/", 1)[-1])
-            if model in covered:
-                if any(snapshot["campaign_sha256"] not in linked for linked in covered[model]):
+            for linked, queue_group in covered.get(model, []):
+                if snapshot["campaign_sha256"] not in linked:
                     raise ValueError(f"{group['name']}: a rerun queue may replace only the repeats campaign it takes origins from")
+                queue_group["outside_condition"] += [item for item in group["outside_condition"] if item not in queue_group["outside_condition"]]
                 replaced.add(model[1])
         snapshot["repetition_groups"] = [group for group in snapshot["repetition_groups"] if price_id(group["name"]).rsplit("/", 1)[-1] not in replaced]
         snapshot["runs"] = [run for run in snapshot["runs"] if run["model_key"] not in replaced]
