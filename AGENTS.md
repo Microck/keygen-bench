@@ -11,6 +11,7 @@
 ## Working boundaries
 
 - Use the local Docker runner and explicit local inputs. The canonical website is `web/classic/`; maintain one implementation rather than a parallel frontend or host-specific workflow.
+- Preserve the hosted FT2 design when updating results. Legacy versus current results are datasets, not competing frontend designs. Keep obsolete design revisions in a separate private archive or retained history; do not restore them as active website implementations.
 - Keep credentials, account inventories, private configuration and raw runs outside the checkout. Commit source, synthetic tests and reviewed public bundles, not deployment records or generated publications.
 - Model requests, readiness pilots and retries require explicit spending authorization. Offline tests are the default verification path; provider access is not established by passing them.
 - Preserve frozen prompts, limits, model identity and attempt selection within an experimental condition. Changes to those inputs or evaluation code must retain accurate provenance; never rewrite historical evidence or select better attempts to make a bundle pass.
