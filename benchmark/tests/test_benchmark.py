@@ -15,10 +15,10 @@ import tempfile
 import threading
 import time
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import patch
 import wave
 
-from benchmark import campaign, drive, run
+from benchmark import campaign, run
 
 
 class BenchmarkTests(unittest.TestCase):
@@ -41,8 +41,7 @@ class BenchmarkTests(unittest.TestCase):
         self.selection["models"] = [self.model]
         self.selection["image"] = "sha256:" + "a" * 64
         self.selection["visualizer_image"] = "sha256:" + "b" * 64
-        self.selection["storage"] = {"backend": "local", "directory": str(self.root / "archive"), "reserve_bytes": 1,
-                                     "peak_bytes_per_attempt": 1073741824, "evict_after_archive": False}
+        self.selection["storage"] = {"reserve_bytes": 1, "peak_bytes_per_attempt": 1073741824}
         effective = campaign.normalize_native(self.selection, [self.model])[0]
         route = {key: self.model[key] for key in ("provider", "api", "base_url", "model", "response_model", "backend_provenance")}
         # A synthetic native trace exercises proof validation, not provider readiness.
@@ -338,9 +337,9 @@ class BenchmarkTests(unittest.TestCase):
         with ThreadPoolExecutor(max_workers=12) as pool:
             results = list(pool.map(reserve, [1, 2, 3] * 4))
         self.assertEqual(sum(results), 3)
-        rows = drive.summary(self.root)
+        rows = [json.loads(path.read_text()) for path in self.root.glob("*/status.json")]
         self.assertEqual({row["repetition"] for row in rows}, {1, 2, 3})
-        self.assertEqual({row["model"] for row in rows}, {"exact-model"})
+        self.assertEqual({row["model"]["model"] for row in rows}, {"exact-model"})
         self.assertTrue(all(row["status"] == "RESERVED" and row["eligible"] is False for row in rows))
 
     def test_recovery_finalizes_without_rerun_and_keeps_unknown_usage(self):
@@ -356,15 +355,6 @@ class BenchmarkTests(unittest.TestCase):
         retry = run.reserve(self.root, self.model, 1, "retry-explicit", retry_of="verified-rep-1")
         self.assertEqual(json.loads((retry / "status.json").read_text())["retry_of"], "verified-rep-1")
         self.assertEqual(json.loads((directory / "status.json").read_text())["status"], "INTERRUPTED")
-
-    def test_summary_handles_old_unidentified_interruption(self):
-        directory = self.root / "old-reserved"
-        directory.mkdir()
-        (directory / "status.json").write_text('{"status":"RESERVED"}')
-        rows = drive.summary(self.root)
-        self.assertIsNone(rows[0]["model"])
-        self.assertFalse(rows[0]["eligible"])
-        self.assertIsNone(rows[0]["requests"])
 
     def test_identity_mismatch_and_native_usage_remain_separate(self):
         trajectory = {"info": {"model_stats": {"api_calls": 2}}, "messages": [
@@ -467,13 +457,9 @@ class BenchmarkTests(unittest.TestCase):
             list(pool.map(work, range(8)))
         self.assertEqual(peak, 2)
 
-    def test_local_artifact_root_rejects_relative_and_preserved_alias(self):
+    def test_local_artifact_root_rejects_relative_paths(self):
         with self.assertRaises(ValueError):
             run.artifact_root(Path("relative"))
-        alias = self.root / "legacy-alias"
-        alias.symlink_to(run.HERE.parent / "legacy")
-        with self.assertRaisesRegex(ValueError, "Preserved legacy"):
-            run.artifact_root(alias)
 
     def test_binary_export_bound_removes_partial_file(self):
         import sys
@@ -559,8 +545,8 @@ class ModelSequenceTests(unittest.TestCase):
                 "eligible": True, "evaluation_status": "evaluated", "cacheable": True,
                 "status": status["status"], "model": model["model"], "craft": {"craft_score": 0}})
             if outcomes[ordinal - 1] == "finalization":
-                run.write_json(directory / "finalization-error.json", {"error": "ArchiveFailed"})
-                raise RuntimeError("archive failed")
+                run.write_json(directory / "finalization-error.json", {"error": "EvaluationFailed"})
+                raise RuntimeError("evaluation failed")
         with patch.object(run, "run_one", side_effect=attempt):
             return run.run_model_sequence(self.root, self.config, self.model, None, "image", "video", None)
 
@@ -575,9 +561,6 @@ class ModelSequenceTests(unittest.TestCase):
             self.assertEqual(status["selected_attempt_id"], "model-rep-1")
             self.assertIsNone(status["totals"])
             self.assertIsNone(status["quality_score"])
-        rows = drive.summary(self.root)
-        self.assertEqual([row["requests"] for row in rows], [1, None, None])
-        self.assertEqual([row["usage_unknown"] for row in rows], [False, None, None])
         self.assertEqual(json.loads((self.root / "model-attempts.json").read_text()), result)
 
     def test_failure_advances_once_and_retains_original_outcome(self):
@@ -697,7 +680,7 @@ class ModelSequenceTests(unittest.TestCase):
         outcomes = {"model-rep-1": "QUOTA", "model-rep-1-retry-1": "success", "model-rep-2-retry-1": "success"}
         with patch.object(run, "run_one", side_effect=self.queue_attempt(outcomes)), patch.object(run.STOP, "wait"):
             result = run.RerunQueue(root, config, None, snapshot, None, probe_interval=0, retry_interval=0,
-                                    boat_reserve=0, probe=probe).run()
+                                    probe=probe).run()
         # No attempt starts while the probe reports a usage limit; the quota failure re-closes the gate.
         self.assertEqual(probed, ["quota", "ok", "ok"])
         self.assertEqual(self.invoked, ["model-rep-1", "model-rep-1-retry-1", "model-rep-2-retry-1"])
@@ -710,30 +693,6 @@ class ModelSequenceTests(unittest.TestCase):
         self.assertEqual([(item["repetition"], item["state"], item["attempt_id"]) for item in result["ordinals"]],
                          [(1, "done", "model-rep-1-retry-1"), (2, "done", "model-rep-2-retry-1")])
         self.assertEqual(result["status"], "COMPLETED")
-
-    def test_rerun_queue_starts_nothing_that_would_breach_the_boat_reserve(self):
-        boat = {"type": "default", "ttl_seconds": 10800}
-        root, config, snapshot = self.queue_root({"backend": "boat", "boat": boat})
-        with patch.object(run, "run_one", side_effect=self.queue_attempt({})), patch.object(run.STOP, "wait"):
-            result = run.RerunQueue(root, config, None, snapshot, None, probe_interval=0, retry_interval=0,
-                                    boat_reserve=36000, probe=lambda model, key: {"category": "ok"},
-                                    balance=lambda: 46799).run()
-        self.assertEqual((self.invoked, result["status"], result["stopped"]["reason"]), ([], "STOPPED_BOAT_RESERVE", "boat_reserve"))
-
-    def admits_one_start(self, tenants):
-        boat = {"type": "default", "ttl_seconds": 10800, "attempts_per_vm": tenants}
-        root, config, snapshot = self.queue_root({"backend": "boat", "boat": boat})
-        return run.RerunQueue(root, config, None, snapshot, None, probe_interval=60, retry_interval=60,
-                              boat_reserve=100, probe=lambda model, key: {"category": "ok"},
-                              balance=lambda: 2000).reserve_allows_start()
-
-    def test_boat_reserve_counts_a_shared_vm_once_not_per_tenant(self):
-        # 6 tenants on one default VM: one attempt's worst case is a sixth of the VM's TTL (1800 s),
-        # so 2000 s of credit admits a start.
-        self.assertTrue(self.admits_one_start(6))
-
-    def test_boat_reserve_charges_an_unshared_vm_its_whole_ttl(self):
-        self.assertFalse(self.admits_one_start(1))
 
     def test_rerun_queue_gates_each_model_holds_deferred_ones_and_continues_earlier_reruns(self):
         root, config, snapshot = self.queue_root()
@@ -768,7 +727,7 @@ class ModelSequenceTests(unittest.TestCase):
         with patch.object(run, "run_one", side_effect=self.queue_attempt({"model-rep-2-retry-2": "success"})), \
                 patch.object(run.STOP, "wait", side_effect=wait), self.assertRaises(KeyboardInterrupt):
             run.RerunQueue(root, config, None, snapshot, None, probe_interval=10 ** 6, retry_interval=10 ** 6,
-                           boat_reserve=0, probe=probe, holds=["held"]).run()
+                           probe=probe, holds=["held"]).run()
         # Fable's usage limit closes only Fable; the held model is never probed or started.
         self.assertEqual((probed, self.invoked), (["fable", "model"], ["model-rep-2-retry-2"]))
         record = json.loads((root / "retry-model-rep-2-retry-2.json").read_text())
@@ -808,7 +767,7 @@ class ModelSequenceTests(unittest.TestCase):
                 patch.object(tempfile, "tempdir", str(controller)), \
                 patch.dict("os.environ", {"TEST_KEY_A": "synthetic-a", "TEST_KEY_B": "synthetic-b"}):
             result = run.RerunQueue(root, config, None, snapshot, None, probe_interval=3600, retry_interval=60,
-                                    boat_reserve=0, probe=probe).run()
+                                    probe=probe).run()
         # One probe per key before its first use, each on its own credential; the QUOTA attempt
         # closes only its key (6 h for a weekly window), so the rerun goes to the other, already
         # verified key without a probe.
@@ -840,7 +799,7 @@ class ModelSequenceTests(unittest.TestCase):
         with patch.object(run, "run_one", side_effect=pooled_attempt), patch.object(run.STOP, "wait"), \
                 patch.object(tempfile, "tempdir", str(controller)), patch.dict("os.environ", {"TEST_KEY_A": "synthetic-a"}):
             result = run.RerunQueue(root, config, None, snapshot, None, probe_interval=3600, retry_interval=60,
-                                    boat_reserve=0, probe=probe, key_gate_fresh=0).run()
+                                    probe=probe, key_gate_fresh=0).run()
         # The finished attempt verified the key, but the second start still sends its own probe first.
         self.assertEqual(events, ["probe", "model-rep-1", "probe", "model-rep-2-retry-1"])
         self.assertEqual(result["status"], "COMPLETED")
@@ -871,67 +830,19 @@ class ModelSequenceTests(unittest.TestCase):
             with patch.object(run, "run_one") as execute, self.assertRaises(ValueError):
                 run.run_model_sequence(self.root, self.config, self.model, None, "image", "video", None)
             execute.assert_not_called()
-            rows = drive.summary(self.root)
-            self.assertEqual(rows[1]["status"], outcome)
-            self.assertTrue(rows[1]["usage_unknown"])
+            self.assertEqual(self.status(2)["status"], outcome)
 
-    def test_evaluation_failure_invalidates_run_and_skips_export(self):
+    def test_evaluation_failure_invalidates_run(self):
         directory = self.root / "model-rep-1"
         status = self.status(1)
         status.update(status="RENDERED_UNSCORED", render="ok", eligible=True)
         run.write_json(directory / "status.json", status)
-        store = Mock()
         with patch("score.profile_attempt", side_effect=RuntimeError("scorer failed")), self.assertRaises(RuntimeError):
-            run.finalize_attempt(directory, store)
+            run.finalize_attempt(directory)
         failed = self.status(1)
         self.assertEqual(failed["status"], "FINALIZATION_ERROR")
         self.assertFalse(failed["eligible"])
         self.assertEqual(failed["finalization_error"]["failure_category"], "EVAL")
-        store.archive_attempt.assert_not_called()
-
-    def test_export_failure_after_evaluation_keeps_outcome_and_is_retried(self):
-        directory = self.root / "model-rep-1"
-        status = self.status(1)
-        status.update(status="RENDERED_UNSCORED", render="ok", eligible=True)
-        run.write_json(directory / "status.json", status)
-        evaluated = (directory / "status.json").read_bytes()
-        class Store:
-            evict_after_archive = True
-            failures = 1
-            evicted = []
-            def archive_attempt(self, run_dir):
-                if self.failures:
-                    self.failures -= 1
-                    raise subprocess.TimeoutExpired(["rclone", "copyto"], 600)
-                return {"generation": "g"}
-            def evict(self, run_dir, metadata):
-                self.evicted.append(run_dir)
-        store = Store()
-        with patch("score.profile_attempt", return_value={"eligible": True}):
-            run.finalize_attempt(directory, store)
-        self.assertEqual((directory / "status.json").read_bytes(), evaluated)
-        self.assertFalse((directory / "finalization-error.json").exists())
-        self.assertFalse((directory / "archive.json").exists())
-        self.assertEqual(json.loads((directory / "archive-error.json").read_text())["error"], "TimeoutExpired")
-        self.assertEqual(store.evicted, [])
-        self.assertEqual(run.export_deferred(self.root, store), [])
-        self.assertEqual(json.loads((directory / "archive.json").read_text()), {"generation": "g"})
-        self.assertEqual(store.evicted, [directory])
-        self.assertEqual(run.export_deferred(self.root, store), [])
-
-    def test_interrupted_export_keeps_evaluated_outcome_and_propagates(self):
-        directory = self.root / "model-rep-1"
-        status = self.status(1)
-        status.update(status="RENDERED_UNSCORED", render="ok", eligible=True)
-        run.write_json(directory / "status.json", status)
-        class Store:
-            def archive_attempt(self, run_dir):
-                raise KeyboardInterrupt()
-        with patch("score.profile_attempt", return_value={"eligible": True}), self.assertRaises(KeyboardInterrupt):
-            run.finalize_attempt(directory, Store())
-        self.assertEqual(self.status(1)["status"], "RENDERED_UNSCORED")
-        self.assertTrue(self.status(1)["eligible"])
-        self.assertEqual(run.export_deferred(self.root, Mock(archive_attempt=Mock(side_effect=OSError()))), ["model-rep-1"])
 
     def test_success_requires_actual_eligible_profile_not_render_or_craft_score_alone(self):
         status = {"status": "RENDERED_UNSCORED", "render": "ok", "eligible": True,
@@ -958,9 +869,11 @@ class SubmissionCollectionTests(unittest.TestCase):
         (self.workspace / "submission").mkdir(parents=True)
         self.run_dir = self.root / "attempt"
         self.run_dir.mkdir()
-        import boat
-        export = patch.object(boat, "workspace_export_command",
-                              lambda docker, name, source: boat.workspace_tar_command(source, mount_root=str(self.workspace)))
+        export_command = run.workspace_export_command
+        export = patch.object(run, "workspace_export_command",
+                              lambda docker, name, source: [
+                                  part.replace("/export", str(self.workspace))
+                                  for part in export_command([], name, source)[2:]])
         export.start()
         self.addCleanup(export.stop)
 

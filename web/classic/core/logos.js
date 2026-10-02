@@ -1,4 +1,4 @@
-// PROTOTYPE: 16x16 pixel-art maker logos, redrawn by hand from the marks Artificial Analysis shows
+// 16x16 pixel-art maker logos, redrawn by hand from the marks Artificial Analysis shows
 // (artificialanalysis.ai/img/logos/*). '.' = transparent; other chars index into `pal`. `tile` fills behind.
 // Trademarks of their owners; used to identify the maker only.
 

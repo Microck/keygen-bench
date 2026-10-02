@@ -1,4 +1,4 @@
-// PROTOTYPE: DOM widgets in FT2 dress (dropdown, badge, nav buttons).
+// DOM widgets in FT2 dress (dropdown, badge, nav buttons).
 import { logoURL } from "./logos.js";
 
 export function h(tag, attrs = {}, ...kids) {

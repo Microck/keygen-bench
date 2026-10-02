@@ -613,35 +613,14 @@ def _ineligible(out: dict, category: str, reason: str) -> None:
 
 def profile_attempt(run_dir: Path, *, force: bool = False) -> dict | None:
     run_dir = Path(run_dir).resolve()
-    if (HERE.parent / "legacy") in run_dir.parents:
-        raise ValueError("Legacy results must never be re-evaluated in place")
     if not (run_dir / "status.json").exists():
         return None
     from score_playback import analysis_budget
     with scoring_claim(run_dir / ".scoring.lock"), analysis_budget(3600):
-        archive_path = run_dir / "archive.json"
-        store = None
-        restored = False
-        restore_error = None
-        if archive_path.exists():
-            try:
-                metadata = json.loads(archive_path.read_text())
-                if any(not (run_dir / name).exists() for name in metadata["files"]):
-                    from artifacts import ArtifactStore
-                    store = ArtifactStore(metadata["storage"])
-                    store.restore_attempt(metadata, run_dir)
-                    restored = True
-            except Exception as exc:
-                restore_error = f"{type(exc).__name__}: {exc}"
-        profile = _profile_attempt(run_dir, force=force, restore_error=restore_error)
-        if restored and profile is not None:
-            metadata = store.archive_attempt(run_dir)
-            _write_json(archive_path, metadata)
-            store.evict(run_dir, metadata)
-        return profile
+        return _profile_attempt(run_dir, force=force)
 
 
-def _profile_attempt(run_dir: Path, *, force: bool, restore_error: str | None = None) -> dict | None:
+def _profile_attempt(run_dir: Path, *, force: bool) -> dict | None:
     try:
         status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
@@ -650,7 +629,7 @@ def _profile_attempt(run_dir: Path, *, force: bool, restore_error: str | None = 
     if "model" not in status or status.get("status") in {"RESERVED", "RUNNING"}:
         return None
     latest = run_dir / "profile.json"
-    if not force and restore_error is None and latest.exists():
+    if not force and latest.exists():
         try:
             cached = json.loads(latest.read_text())
             if profile_is_current(run_dir, cached):
@@ -678,8 +657,6 @@ def _profile_attempt(run_dir: Path, *, force: bool, restore_error: str | None = 
     out["artifacts"] = {"xm": str(xm_path.relative_to(run_dir)) if xm_path.exists() else None,
                         "canonical_wav": str(wav_path.relative_to(run_dir)) if wav_path.exists() else None}
     try:
-        if restore_error is not None:
-            raise RuntimeError(f"archived artifacts could not be restored: {restore_error}")
         if (traj_path.exists() and category not in NON_MODEL_ERRORS
                 and xm_path.exists() and wav_path.exists()):
             if traj_path.stat().st_size > 64 * 1024 ** 2:
@@ -854,10 +831,8 @@ def _report(out: Path, profiles: list[dict]) -> list[dict]:
 
 
 def aggregate_profiles(out: Path) -> list[dict]:
-    """Report retained profiles only. Never restore archives or start renderers."""
+    """Report retained profiles only, without starting renderers."""
     out = out.resolve()
-    if (HERE.parent / "legacy") == out or (HERE.parent / "legacy") in out.parents:
-        raise ValueError("Legacy results must never be re-evaluated in place")
     with scoring_claim(out / ".scoring-aggregate.lock", wait=False):
         profiles = [json.loads((d / "profile.json").read_text()) for d in _attempt_dirs(out)
                     if (d / "profile.json").exists()]
@@ -872,8 +847,6 @@ def _score_job(arguments):
 def profile_all(out: Path, *, force: bool = False, workers: int = 1) -> list[dict]:
     from score_playback import available_memory, MAX_WORKER_MEMORY, MAX_RENDERER_MEMORY, require_resources
     out = out.resolve()
-    if (HERE.parent / "legacy") == out or (HERE.parent / "legacy") in out.parents:
-        raise ValueError("Legacy results must never be re-evaluated in place")
     if isinstance(workers, bool) or not isinstance(workers, int) or not 1 <= workers <= 4:
         raise ValueError("scoring workers must be an integer in 1..4")
     # Each worker has bounded arrays and one live native WAV plus a bounded trace.
@@ -884,20 +857,7 @@ def profile_all(out: Path, *, force: bool = False, workers: int = 1) -> list[dic
     with scoring_claim(out / ".scoring-aggregate.lock", wait=False):
         jobs = [(directory, force) for directory in _attempt_dirs(out)]
         if workers > 1:
-            # Restores need a downloaded bundle and verified staging alongside
-            # any surviving local files. Admit all worker peaks on this disk.
-            peak = 512 * 1024 ** 2
-            for directory, _ in jobs:
-                archive = directory / "archive.json"
-                if not archive.exists():
-                    continue
-                try:
-                    metadata = json.loads(archive.read_text())
-                    expanded = sum(record["bytes"] for record in metadata["files"].values())
-                    peak = max(peak, 2 * expanded + metadata["bytes"] + 512 * 1024 ** 2)
-                except (OSError, ValueError, KeyError, TypeError):
-                    continue  # The individual restore reports invalid metadata.
-            require_resources(disk_bytes=workers * peak, directory=out)
+            require_resources(disk_bytes=workers * 512 * 1024 ** 2, directory=out)
         if workers == 1:
             profiles = [p for arguments in jobs if (p := _score_job(arguments))]
         else:
@@ -913,7 +873,7 @@ def profile_all(out: Path, *, force: bool = False, workers: int = 1) -> list[dic
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("command", choices=["profile", "aggregate"])
-    parser.add_argument("--out", type=Path, default=HERE / "runs/official")
+    parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--force", action="store_true", help="Recompute into a new immutable evaluation generation")
     parser.add_argument("--workers", type=int, default=1, help="Independent scoring workers, 1..4 with RAM/disk admission")
     args = parser.parse_args()

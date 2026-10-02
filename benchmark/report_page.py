@@ -42,7 +42,7 @@ audio{width:100%;display:block;margin:0 0 8px}
 Each model gets up to three sequential attempts, stopping after its first eligible success. All attempted outcomes and unused slots remain visible.
 Skipped slots have null scores and usage, not failure scores. This adaptive experiment has no independent-trial median, range or ranking claim.
 Exact routes, effective settings, evaluator identities and cohort fingerprints remain separate. Exhibitions are not comparative native runs.
-No archives are restored for publication. Artifact links exist only when a local file is present.</p>
+Artifact links exist only when a local file is present.</p>
 <p class="kv"><b>Cohorts</b> __TIER_NOTE__</p>
 <p class="kv"><b>One quality sample</b> __SAMPLE_NOTE__</p>
 <details><summary>Campaign counts and first-success selections</summary><pre class="evidence">__SUMMARY__</pre></details>
@@ -111,7 +111,7 @@ function detail(d){
   <p class="kv"><b>selection</b> ${esc(selection(d))}${d.status==="SKIPPED_AFTER_SUCCESS"?`; skipped after ${esc(d.selected_attempt_id??"unknown success")}; link ${d.skip_link_valid?"verified":"unverified"}`:""}</p>
   <p class="kv"><b>evaluation eligibility</b> ${d.eligible?"eligible":"ineligible / unevaluated"}; model failure ${esc(d.model_failure??"unknown")}; run failure ${esc(d.failure_category??"none recorded")}; evaluation failure ${esc(d.evaluation_error_category??"none recorded")}; evaluator fingerprint ${esc(d.evaluation_fingerprint??"unavailable")}</p>
   <p class="kv"><b>cost</b> ${!d.attempted?"not attempted / null":d.cost_unknown?"unknown or incomplete":esc(d.cost)}; usage ${!d.attempted?"not attempted / null":d.usage_unknown?"unknown or incomplete":"recorded"}</p>
-  <p class="kv"><b>artifact availability</b> ${esc(d.artifact_note)} ${d.archived_artifacts.length?`Archived-only files: ${esc(d.archived_artifacts.join(", "))}`:""}</p>
+  <p class="kv"><b>artifact availability</b> ${esc(d.artifact_note)}</p>
   <p class="kv"><b>dir</b> ${esc(d.run_dir)}</p></div></div>`;
 }
 let playbackRequest=null;

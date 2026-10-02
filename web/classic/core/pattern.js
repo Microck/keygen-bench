@@ -1,4 +1,4 @@
-// PROTOTYPE: port of ft2-clone's pattern editor drawing (ft2_pattern_draw.c) with the original
+// Port of ft2-clone's pattern editor drawing (ft2_pattern_draw.c) with the original
 // font3/font4/font5/font7 glyphs, chanWidths, column offsets and colours, plus FT2-style scopes.
 import { PAL, fonts, ft2 } from "./fb.js";
 import { cellAt } from "./xm.js";

@@ -1,4 +1,4 @@
-// PROTOTYPE results site: full screen and chunky. Built from FT2 parts (raised panels,
+// FT2 results site: full screen and chunky. Built from FT2 parts (raised panels,
 // sunken wells, pushbuttons, PATTEXT on black) in FT2 pixel units, laid out on a stage of
 // (viewport / k) and zoomed by an integer k, so text, buttons and logos render at FT2's size x k.
 // Every page fills the viewport; only inner wells scroll.
@@ -309,8 +309,8 @@ export async function mount(root, ctx) {
       h("span", { class: "shadow-text" }, "Model"),
       dropdown({ label: "Model", items: modelItems(data, r.maker, r.slug), value: r.slug, width: 170, onChange: (s2) => ctx.go({ run: s2 }) }),
       h("span", { class: "grow" }),
-      r.media.xm ? h("a", { class: "btn", href: data.base + r.media.xm, download: r.slug + ".xm", style: { height: "14px" } }, ".XM") : null,
-      r.media.audio ? h("a", { class: "btn", href: data.base + r.media.audio, download: r.slug + ".mp3", style: { height: "14px" } }, ".MP3") : null);
+      ...(r.media.xm ? [h("a", { class: "btn", href: data.base + r.media.xm, download: r.slug + ".xm", style: { height: "14px" } }, ".XM")] : []),
+      ...(r.media.audio ? [h("a", { class: "btn", href: data.base + r.media.audio, download: r.slug + ".mp3", style: { height: "14px" } }, ".MP3")] : []));
     V.infoHost.replaceChildren(
       h("div", { style: { color: "#fff", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, `"${m.name || "untitled"}"`),
       h("div", { class: "muted" }, `${m.channels ?? "-"} ch | ${m.bpm ?? "-"} bpm | spd ${m.speed ?? "-"}`),
@@ -318,7 +318,7 @@ export async function mount(root, ctx) {
       h("div", { class: "muted" }, `${r.maker} | effort ${effort(r)}`));
     V.cardHost.replaceChildren(...scoreCard(r));
   }
-  // "highest declared tier: max, 128k output" -> "max".
+  // "declared tier: max, 128k output" -> "max".
   const effort = (r) => String(r.tier ?? "-").replace(/^.*tier:\s*/i, "").split(",")[0].trim();
   // Switch the viewer to run `s`. Keeps the old tune on screen until the new module is parsed, then swaps
   // everything in the same frame. If the old tune was playing, the new one starts playing.
@@ -428,13 +428,13 @@ export async function mount(root, ctx) {
       detail.replaceChildren(
         h("section", { class: "panel raised" }, ...scoreCard(r, { compact: true }),
           h("button", { class: "btn", style: { height: "16px" }, onclick: () => ctx.go({ page: "viewer", run: r.slug }) }, "Open in tracker")),
-        m.declared > 1 ? h("section", { class: "panel raised" }, h("h2", {}, "Attempts"),
+        ...(m.declared > 1 ? [h("section", { class: "panel raised" }, h("h2", {}, "Attempts"),
           h("div", { class: "attempts sunken", title: consistencyTitle(m) },
             ...m.slots.flatMap((s) => [
               s.slug ? h("button", { class: "btn", "aria-pressed": String(s.slug === r.slug), onclick: () => { select(s.slug); if (S.view === "best" && !data.bySlug[s.slug].isBest) S.view = "all"; ranking(); } }, "#" + s.ordinal) : h("span", { class: "muted" }, "#" + s.ordinal),
               h("span", { class: s.state === "ok" ? "on" : "muted" }, s.state === "ok" ? (s.slug === m.best.slug ? "best" : "") : s.state === "failed" ? `failed (${s.status.toLowerCase().replaceAll("_", " ")})` : s.state),
               h("span", { class: "on", style: { textAlign: "right" } }, s.state === "ok" ? s.score.toFixed(1) : "")])),
-          h("div", { class: "row", style: { padding: "0 2px" } }, h("span", { class: "muted grow" }, "Consistency"), marker().render(m))) : null,
+          h("div", { class: "row", style: { padding: "0 2px" } }, h("span", { class: "muted grow" }, "Consistency"), marker().render(m)))] : []),
         h("section", { class: "panel raised" }, h("h2", {}, "Run"),
           kv([
             ["Rank", rankText(r)],
@@ -563,18 +563,15 @@ export async function mount(root, ctx) {
   // ---------------- Support ----------------
   // Hover note for the spend total: short lines instead of one paragraph.
   const spendTip = (l) => [
-    `Every run I've paid for: ${l.runs} in total.`,
-    "That includes failed, retried, unpublished and older runs, not just the ones on the board.",
-    "",
-    "Cost = tokens used x published API price.",
-    "Some runs went through subscriptions (OAuth) instead of the paid API, so they cost me less than this. A subscription still costs money, though.",
-    "",
+    `${l.runs} recorded attempts.`,
+    l.basis,
+    `${l.unpriced_runs} attempts have unknown usage or prices.`,
     "An estimate at list price, not an actual bill.",
   ].join("\n");
   function support() {
     main.style.gridTemplateColumns = "minmax(0,1fr) minmax(0,1fr)";
     main.style.gridTemplateRows = "auto auto minmax(0,1fr)";
-    // Ledger of every run ever executed (dist/spend.json, built by build_spend.py); without one, the published runs.
+    // An optional explicit ledger; otherwise estimate only the published attempts.
     const ledger = data.spend ?? (() => {
       const by = new Map();
       for (const r of data.runs) {
@@ -583,7 +580,9 @@ export async function mount(root, ctx) {
         by.set(r.model, m);
       }
       const models = [...by.values()].sort((a, b) => (b.usd ?? -1) - (a.usd ?? -1));
-      return { models, runs: data.runs.length, total_usd: models.reduce((s, m) => s + (m.usd ?? 0), 0), basis: "Published runs only." };
+      const priced = models.filter((m) => m.usd != null);
+      return { models, runs: data.runs.length, total_usd: priced.length ? priced.reduce((s, m) => s + m.usd, 0) : null,
+        unpriced_runs: models.reduce((s, m) => s + m.unpriced_runs, 0), basis: "Published attempts only. Token usage times the supplied maker list prices." };
     })();
     main.replaceChildren(
       h("section", { class: "panel raised", style: { gridColumn: "1 / -1" } },
@@ -619,7 +618,7 @@ export async function mount(root, ctx) {
               ...g.lines.map((l) => h("p", {}, l)),
             ])))),
       h("section", { class: "panel raised" }, h("h2", { style: { position: "relative", overflow: "visible" } },
-        h("span", { class: "hint goal", tabindex: "0", style: { color: "#fff" }, "data-tip": spendTip(ledger), "aria-label": spendTip(ledger) }, `Spent so far: ${money(ledger.total_usd)}`)),
+        h("span", { class: "hint goal", tabindex: "0", style: { color: "#fff" }, "data-tip": spendTip(ledger), "aria-label": spendTip(ledger) }, `Estimated spend: ${money(ledger.total_usd)}${ledger.unpriced_runs && ledger.total_usd != null ? "+" : ""}`)),
         h("div", { class: "sunken ft2-scroll", style: { flex: "1", overflow: "auto", padding: "2px" } },
           ...ledger.models.map((m) => h("div", { class: "row", style: { height: "18px" }, title: m.unpriced_runs ? `${m.unpriced_runs} of its runs have no published price` : null },
             badge(m.maker), h("span", { class: "grow muted" }, m.name), h("span", { class: "muted", style: { width: "48px", textAlign: "right" } }, `${m.runs} run${m.runs === 1 ? "" : "s"}`),

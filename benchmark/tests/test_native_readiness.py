@@ -45,17 +45,6 @@ def responses_result(call, returncode=0):
     return {"type": "function_call_output", "call_id": call, "output": "", "extra": {"returncode": returncode}}
 
 
-def request(settings=None):
-    return {"event": "request", "settings": {"reasoning_effort": "xhigh"} if settings is None else settings}
-
-
-def response(usage=None, latency=1.0, identity="identity_match"):
-    return {"event": "response", "identity_status": identity, "usage": usage or {}, "latency_seconds": latency}
-
-
-EXPECTED = {"reasoning_effort": "xhigh"}
-
-
 class QualificationBoundaryTests(unittest.TestCase):
     def test_outer_deadline_does_not_change_declared_native_timeout(self):
         spec = pilot_spec()
@@ -172,75 +161,6 @@ class ExecutedCallTests(unittest.TestCase):
                         chat_reply("b", "c"), chat_result("b"), chat_reply("d"), chat_result("c")]
             with self.assertRaisesRegex(ValueError, "three native tool calls"):
                 self.pilot(Path(temporary), messages, "marker\n")
-
-
-class LongGenerationProbeTests(unittest.TestCase):
-    def classify(self, records, worker=None, controller=None, expected=EXPECTED):
-        return readiness.classify_long_generation(records, worker, controller, expected)
-
-    def test_long_output_or_latency_passes(self):
-        tokens = self.classify([request(), response({"output_tokens": 40000}, latency=300)])
-        self.assertEqual((tokens["outcome"], tokens["max_output_tokens_observed"]), ("pass", 40000))
-        latency = self.classify([request(), response({"completion_tokens": 9000}, latency=700.5)])
-        self.assertEqual((latency["outcome"], latency["max_latency_seconds"]), ("pass", 700.5))
-
-    def test_thresholds_are_strict(self):
-        result = self.classify([request(), response({"output_tokens": 32768}, latency=600)])
-        self.assertEqual((result["outcome"], result["failure_category"]), ("inconclusive", None))
-
-    def test_short_model_shortcut_is_inconclusive(self):
-        result = self.classify([request(), response({"output_tokens": 900}, latency=12),
-                                request(), response({"output_tokens": 40}, latency=2)])
-        self.assertEqual((result["outcome"], result["failure_category"]), ("inconclusive", None))
-
-    def test_dropped_request_fails_even_when_retry_completed_long(self):
-        result = self.classify([request(), request(), response({"output_tokens": 50000}, latency=900)])
-        self.assertEqual((result["outcome"], result["failure_category"]), ("fail", "transport_retry"))
-
-    def test_transport_error_and_outer_deadline_fail(self):
-        error = self.classify([request(), response({"output_tokens": 10}), request()], worker="transport_error")
-        self.assertEqual((error["outcome"], error["failure_category"]), ("fail", "transport_error"))
-        deadline = self.classify([request()], controller="wall_time_exceeded")
-        self.assertEqual((deadline["outcome"], deadline["failure_category"]), ("fail", "request_timeout"))
-        gateway = self.classify([request(), response(identity="gateway_error")], worker="gateway_error")
-        self.assertEqual((gateway["outcome"], gateway["failure_category"]), ("fail", "gateway_error"))
-
-    def test_quota_after_long_response_is_inconclusive(self):
-        result = self.classify([request(), response({"output_tokens": 50000}), request()],
-                               worker="quota_or_rate_limit")
-        self.assertEqual((result["outcome"], result["failure_category"]), ("inconclusive", "quota_or_rate_limit"))
-
-    def test_content_filter_resend_is_not_a_transport_retry(self):
-        block = {"event": "content_filter_block", "send": 1, "form": "error"}
-        resent = self.classify([request(), block, request(), response({"output_tokens": 50000})])
-        self.assertEqual((resent["outcome"], resent["failure_category"]), ("pass", None))
-        exhausted = self.classify([request(), block, request(), block, request(), block], worker="content_filter")
-        self.assertEqual((exhausted["outcome"], exhausted["failure_category"]), ("inconclusive", "content_filter"))
-
-    def test_long_response_on_other_settings_is_not_a_pass(self):
-        result = self.classify([request({"reasoning_effort": "low"}), response({"output_tokens": 50000})])
-        self.assertEqual((result["outcome"], result["failure_category"]), ("inconclusive", "settings_mismatch"))
-
-    def test_probe_writes_probe_record_but_never_readiness_evidence(self):
-        with tempfile.TemporaryDirectory() as temporary, patch.dict(os.environ, {}, clear=True):
-            root = Path(temporary)
-            spec = pilot_spec()
-            spec["limits"] = dict(readiness.PROBE_LIMITS)
-            source = root / "input.json"
-            source.write_text(json.dumps(spec))
-            out = root / "probe"
-            result = readiness.long_generation_probe(source, out)
-            self.assertEqual((result["outcome"], result["failure_category"]), ("inconclusive", "credentials_error"))
-            self.assertEqual(json.loads((out / "probe.json").read_text())["schema"], readiness.PROBE_SCHEMA)
-            self.assertFalse((out / "readiness.json").exists() or (out / "proof.json").exists())
-
-    def test_probe_rejects_pilot_bounds(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            source = root / "input.json"
-            source.write_text(json.dumps(pilot_spec()))
-            result = readiness.long_generation_probe(source, root / "probe")
-            self.assertEqual((result["outcome"], result["failure_category"]), ("inconclusive", "configuration_error"))
 
 
 if __name__ == "__main__":
