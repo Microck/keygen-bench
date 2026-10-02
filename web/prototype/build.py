@@ -345,8 +345,11 @@ def build_legacy() -> None:
     print(f"{len(runs)} runs -> {DIST / 'data.json'} ({(DIST / 'data.json').stat().st_size // 1024} KB)")
 
 
-def build_snapshots(sources: list[Path], publish_root: Path) -> None:
-    """Assemble only explicitly allowlisted assets from sanitized public snapshots."""
+def build_snapshots(sources: list[Path], publish_root: Path, excluded: list[tuple[str, str, str]] = ()) -> None:
+    """Assemble only explicitly allowlisted assets from sanitized public snapshots.
+
+    `excluded` lists (cohort key, model, public reason) for models withheld from a cohort's frozen roster before launch.
+    """
     publish_root = publish_root.resolve()
     if publish_root == ROOT or ROOT.is_relative_to(publish_root) or publish_root == HERE:
         raise ValueError("Publication needs a dedicated directory, never the repository or prototype root")
@@ -391,6 +394,11 @@ def build_snapshots(sources: list[Path], publish_root: Path) -> None:
         raise ValueError("Current selections must belong to their cohort's original roster without duplicate model rows")
     # Repetition groups replace their models' main rows; roster and availability counts stay the main snapshot's.
     groups, aliases = repetition_groups(snapshots, runs, original_roster)
+    cohort_keys = {snapshot["cohort"]["key"] for snapshot in snapshots}
+    excluded_models = [{"cohort_key": key, "name": name, "model_key": price_id(name).rsplit("/", 1)[-1], "reason": reason} for key, name, reason in excluded]
+    for model in excluded_models:
+        if model["cohort_key"] not in cohort_keys or (model["cohort_key"], model["model_key"]) in original_roster or not model["reason"].strip():
+            raise ValueError("A launch exclusion needs a published cohort, a model outside its frozen roster and a reason")
     cohorts = sorted(({**snapshot["cohort"]} for snapshot in snapshots), key=cohort_order)
     cohorts = list({cohort["key"]: cohort for cohort in cohorts}.values())
     for cohort in cohorts:
@@ -455,9 +463,9 @@ def build_snapshots(sources: list[Path], publish_root: Path) -> None:
             "Scores are craft-v7 auxiliary tonal-development diagnostics, not musical-quality ranks.",
             SAMPLE_NOTE,
             TIER_NOTE,
-            "The musical pilot is labeled separately and is excluded from the main-campaign counts.",
-            "Archive-only recovered historical attempts are labeled separately. Original finalization-error histories and existing selections remain unchanged.",
-            f"{continuation_count} native continuation successes use separately frozen cohorts. Their own cohort and evaluator fingerprints apply; original histories are not rewritten.",
+            *(["The musical pilot is labeled separately and is excluded from the main-campaign counts."] if pilot_count else []),
+            *(["Archive-only recovered historical attempts are labeled separately. Original finalization-error histories and existing selections remain unchanged."] if recovery_count else []),
+            *([f"{continuation_count} native continuation successes use separately frozen cohorts. Their own cohort and evaluator fingerprints apply; original histories are not rewritten."] if continuation_count else []),
             "MP3 is a listening derivative. WAV is the original canonical evaluation audio; XM is the original module.",
             "List-price estimates use maker prices retrieved 2026-09-29, not actual provider bills.",
             "The historical 2026-09-29 prototype dataset is not mixed into this snapshot.",
@@ -468,6 +476,7 @@ def build_snapshots(sources: list[Path], publish_root: Path) -> None:
                                                  "campaign_sha256": item["campaign_sha256"], "repetitions": item["repetitions"]} for item in snapshot["linked_campaigns"]]}
                           if snapshot["scope"] == "repetitions" else {})} for snapshot in snapshots],
         "flag_rules": FLAG_RULES, "runs": [run for run in runs if run["slug"] not in aliases],
+        **({"excluded_models": excluded_models} if excluded_models else {}),
     }
     if groups:
         repeated_cohorts = [cohort for cohort in cohorts if "repetitions" in cohort]
@@ -501,13 +510,15 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Build the existing FT2 website from explicit sanitized snapshots.")
     parser.add_argument("--snapshot", type=Path, action="append", help="Public-only output of collect_public.py; repeat for controllers/pilot")
     parser.add_argument("--publish-root", type=Path, default=HERE / "dist-public")
+    parser.add_argument("--excluded-model", nargs=3, action="append", default=[], metavar=("COHORT_KEY", "MODEL", "REASON"),
+                        help="List a model withheld from a cohort's frozen roster before launch, with its public reason")
     parser.add_argument("--legacy", action="store_true", help="Explicitly build the historical prototype, not current campaign results")
     args = parser.parse_args()
     if args.legacy:
-        if args.snapshot:
+        if args.snapshot or args.excluded_model:
             parser.error("--legacy cannot be mixed with current snapshots")
         build_legacy()
     elif args.snapshot:
-        build_snapshots(args.snapshot, args.publish_root)
+        build_snapshots(args.snapshot, args.publish_root, [tuple(item) for item in args.excluded_model])
     else:
         parser.error("Specify --snapshot directories from collect_public.py, or --legacy for the historical prototype")

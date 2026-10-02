@@ -402,7 +402,8 @@ export async function mount(root, ctx) {
     main.style.gridTemplateColumns = "minmax(0,1fr) clamp(160px, 27%, 200px)";
     main.style.gridTemplateRows = "auto auto minmax(0,1fr)";
     const makerDD = dropdown({ label: "Maker", items: [{ value: "All", label: "All makers" }, ...makerItems(data)], value: S.maker, width: 130, onChange: (mk) => { S.maker = mk; renderTable(); } });
-    const exh = h("button", { class: "btn", "aria-pressed": String(S.exh), style: { height: "14px" }, onclick: (e) => { S.exh = !S.exh; e.currentTarget.setAttribute("aria-pressed", String(S.exh)); renderTable(); } }, native ? "Pilot" : "Exhibitions");
+    // The toggle only filters pilot/exhibition rows; without any it would advertise a cohort that is not published.
+    const exh = data.runs.some((r) => r.exhibition) ? h("button", { class: "btn", "aria-pressed": String(S.exh), style: { height: "14px" }, onclick: (e) => { S.exh = !S.exh; e.currentTarget.setAttribute("aria-pressed", String(S.exh)); renderTable(); } }, native ? "Pilot" : "Exhibitions") : null;
     // One table per cohort: max-tier and provider-default results are never listed or ranked together.
     const cohorts = data.cohorts ?? [];
     const cohortHead = h("h2", {});
@@ -413,7 +414,7 @@ export async function mount(root, ctx) {
       renderTable(); renderDetail();
     } }) : null;
     const tbody = h("tbody"), thead = h("thead"), colgroup = h("colgroup");
-    const counts = (c, cohort) => cohort && repeatedCohort(cohort.key) ? repCounts(cohort) : native ? `${c.main_first_successes} original + ${c.native_continuation_successes} new + ${c.archive_only_recoveries} recovery | 1 quality sample each | diagnostics, not ranks` : `${data.runs.filter((r) => r.rank).length} ranked | 1 attempt per model`;
+    const counts = (c, cohort) => cohort && repeatedCohort(cohort.key) ? repCounts(cohort) : native ? `${[`${c.main_first_successes} original`, c.native_continuation_successes ? `${c.native_continuation_successes} new` : null, c.archive_only_recoveries ? `${c.archive_only_recoveries} recovery` : null].filter(Boolean).join(" + ")} | 1 quality sample each | diagnostics, not ranks` : `${data.runs.filter((r) => r.rank).length} ranked | 1 attempt per model`;
     const legend = h("p", { class: "note", hidden: true });
     const countsText = h("span", { class: "shadow-text", style: { whiteSpace: "nowrap" }, title: data.limitations?.join("\n") });
     const detail = h("div", { class: "ft2-scroll detail", style: { gridColumn: "2", gridRow: "1 / span 3", display: "flex", flexDirection: "column", gap: "1px", minHeight: "0", overflowY: "auto" } });
@@ -574,14 +575,21 @@ export async function mount(root, ctx) {
       const members = data.runs.filter((run) => inCohort(run.cohort?.key, cohort.key));
       const available = new Set(members.filter((run) => run.provenance.scope !== "pilot").map((run) => run.model_key));
       const retainedPilot = new Set(members.filter((run) => run.provenance.scope === "pilot").map((run) => run.model_key));
-      return { cohort, roster, pending: roster.filter((model) => !available.has(model.model_key) && !retainedPilot.has(model.model_key)) };
+      const excluded = (data.excluded_models ?? []).filter((model) => inCohort(model.cohort_key, cohort.key));
+      return { cohort, roster, excluded, pending: roster.filter((model) => !available.has(model.model_key) && !retainedPilot.has(model.model_key)) };
     });
     const named = states.length > 1;
     main.replaceChildren(
       h("section", { class: "panel raised", style: { gridColumn: "1 / -1" } },
         h("h2", {}, "Current campaign snapshot"),
         h("div", { class: "well sunken" },
-          ...states.map(({ cohort, roster, pending }) => { const c = cohort.selection_counts ?? data.selection_counts; return h("p", {}, `${named ? cohort.label + ": " : ""}${c.main_first_successes} original first successes, ${c.native_continuation_successes} native continuation results and ${c.archive_only_recoveries} archive-only ${c.archive_only_recoveries === 1 ? "recovery" : "recoveries"} are available from the ${roster.length}-model main roster. ${pending.length} models have no eligible published output.`); }),
+          ...states.map(({ cohort, roster, pending, excluded }) => {
+            const c = cohort.selection_counts ?? data.selection_counts;
+            const items = [`${c.main_first_successes} original first successes`, c.native_continuation_successes ? `${c.native_continuation_successes} native continuation results` : null,
+              c.archive_only_recoveries ? `${c.archive_only_recoveries} archive-only ${c.archive_only_recoveries === 1 ? "recovery" : "recoveries"}` : null].filter(Boolean);
+            const list = items.length > 1 ? `${items.slice(0, -1).join(", ")} and ${items.at(-1)}` : items[0];
+            const withheld = excluded.length ? `; ${excluded.length} more ${excluded.length === 1 ? "model was" : "models were"} excluded before launch` : "";
+            return h("p", {}, `${named ? cohort.label + ": " : ""}${list} are available from the ${roster.length}-model main roster. ${pending.length} models have no eligible published output${withheld}.`); }),
           ...cohorts.filter((cohort) => cohort.repetitions).map((cohort) => { const n = cohort.repetitions; return h("p", {}, `${named ? cohort.label + ": " : ""}${n.models} models report every one of their predetermined independent repetitions (${n.eligible_attempts} of ${n.declared_attempts} eligible${n.pending_attempts ? `, ${n.pending_attempts} pending` : ""}); their row shows the median and range of the eligible repetitions. Repetition 1 is the original main-campaign attempt. The cohort's other models keep one first-success sample.`); }),
           ...pilots.map((run) => h("p", {}, `${run.name} is retained as a pilot-only result, outside main counts. This preview does not request another attempt for it.`)),
           h("p", {}, "No donation totals or confirmed payment links are published in this preview. Funding and availability can block unfinished work; no missing model receives a fabricated zero score."))),
@@ -590,10 +598,11 @@ export async function mount(root, ctx) {
           h("p", { style: { color: "#fff", margin: "0" } }, `${g.name}: ${repLine(g)}`),
           h("p", { style: { margin: attemptedOutside(g).length ? "0" : null } }, g.attempts.map((a) => `A${a.ordinal} ${sc(a.score)} ${attemptState(a)}${fromMain(a) ? " (main)" : ""}`).join(" | ")),
           ...attemptedOutside(g).map((o, i, all) => h("p", { class: "muted", style: { margin: i === all.length - 1 ? null : "0" } }, outsideNote(o)))])))] : []),
-      h("section", { class: "panel raised" }, h("h2", {}, "Original states without published output"),
-        h("div", { class: "well sunken ft2-scroll" }, ...states.flatMap(({ cohort, pending }) => [
-          named && pending.length ? h("p", { style: { color: "#fff" } }, `${cohort.label} (state at metadata capture)`) : null,
-          ...pending.map((model) => h("p", {}, `${model.name}: original ${model.state}, ${model.attempts} historical attempts`))]))),
+      h("section", { class: "panel raised" }, h("h2", {}, "Pending: no eligible result"),
+        h("div", { class: "well sunken ft2-scroll" }, ...states.flatMap(({ cohort, pending, excluded }) => [
+          named && (pending.length || excluded.length) ? h("p", { style: { color: "#fff" } }, `${cohort.label} (state at metadata capture)`) : null,
+          ...pending.map((model) => h("p", {}, `${model.name}: ${model.reason ?? `original ${model.state}, ${model.attempts} historical attempts`}`)),
+          ...excluded.map((model) => h("p", {}, `${model.name}: excluded before launch, ${model.reason}`))]))),
       h("section", { class: "panel raised" }, h("h2", {}, "Publication limits"),
         h("div", { class: "well sunken ft2-scroll" }, ...data.limitations.map((note) => h("p", {}, note)))));
   }

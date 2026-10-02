@@ -216,6 +216,32 @@ def public_status(row: dict) -> str:
     return row["recorded_status"] if row["post_evaluation_finalization_error"] else row["status"]
 
 
+# Public wording per failure category; error strings stay private because they can name access routes.
+CATEGORY_TEXT = {"QUOTA": "provider usage limit or account funds exhausted", "CONTENT_FILTER": "blocked by the provider content filter",
+                 "AUTH": "authentication failure", "INFRA": "infrastructure failure", "TRANSPORT": "transport failure",
+                 "PROTOCOL": "protocol failure", "EVAL": "evaluation failure"}
+# The frozen runner ends a model's sequence on these categories, leaving later slots reserved.
+STOPPING_CATEGORIES = {"QUOTA", "AUTH", "CONTENT_FILTER"}
+
+
+def pending_reason(group: dict, rows: dict) -> str:
+    """Why a model has no eligible first success: each attempted slot's outcome, then the unstarted slots."""
+    slots = sorted((rows[attempt_id] for attempt_id in group["attempt_ids"] if rows[attempt_id]["predeclared"]),
+                   key=lambda row: row["repetition"])
+    parts = []
+    for row in slots:
+        if row["attempted"]:
+            category = row["failure_category"]
+            detail = CATEGORY_TEXT.get(category, "no eligible evaluation" if not category else category)
+            parts.append(f"attempt {row['repetition']} {public_status(row)} ({detail})")
+    unstarted = [str(row["repetition"]) for row in slots if not row["attempted"]]
+    if unstarted:
+        stopped = any(row["attempted"] and row["failure_category"] in STOPPING_CATEGORIES for row in slots)
+        parts.append(f"attempt{'s' if len(unstarted) > 1 else ''} {', '.join(unstarted)} never started"
+                     + ("; the sequence stops on this failure category" if stopped else ""))
+    return "; ".join(parts) or "no attempt recorded"
+
+
 def repetition_group(group: dict, rows: dict, slugs: dict, prices: dict) -> dict:
     """One model's predetermined repetitions; only eligible ones carry a playable slug."""
     name = price_id(group["model"])
@@ -297,7 +323,8 @@ def main() -> None:
         for group in report["groups"]:
             roster.append({"name": price_id(group["model"]), "scope": args.scope, "state": group["state"],
                            "attempts": group["attempted_count"], "selected_attempt": group["selected_attempt_ordinal"],
-                           "policy_errors": len(group["policy_errors"])})
+                           "policy_errors": len(group["policy_errors"]),
+                           **({} if group["selected_attempt_id"] else {"reason": pending_reason(group, rows)})})
             if group["selected_attempt_id"]:
                 row = rows[group["selected_attempt_id"]]
                 runs.append(public_run(row, group, source / row["run_dir"], output, report, args.scope, prices))

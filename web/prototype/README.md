@@ -6,14 +6,16 @@ A FastTracker II-styled results site. The native preview has Tracker, Results, S
 
 [Inspect the results](https://ubuntu-paris.tailc896c6.ts.net/?page=ranking).
 
-The current snapshot, `keygen-public-20261001-v4`, publishes two cohorts in separate tables chosen with the Results page's **Cohort** selector. Results from different cohorts are never listed or ranked together.
+The current snapshot, `keygen-public-20261002-v5`, publishes one cohort: **Max-tier, prompt v2 (highest declared tier per exact route)** from the finished campaign `next-max-tier-prompt-v2-ashburn-20261001`. It has no Cohort selector, so every page opens this cohort.
 
-- **Max-tier, prompt v2 (highest declared tier per exact route)** has 19 of 34 models with an eligible result from `next-max-tier-prompt-v2-ashburn-20261001`, captured at 21:16:07 UTC while that campaign was still running. Each row shows its declared tier and output cap, for example `highest declared tier: xhigh, 128k output`. Claude Fable 5.1's attempt 1 keeps its recorded `FINALIZATION_ERROR` label: the artifact-archive upload timed out after its eligible evaluation (craft 65.0) completed. Media for 18 evicted attempts were restored from checksum-verified gdrive2 archives; Fable 5.1's media were hash-verified locally.
-- **Provider default effort, prompt-v1** keeps the earlier 38 playable rows unchanged: 30 original main first successes, six native continuation results, one archive-only recovered GPT-5.4 result and one retained Qwen3.8 Flash musical pilot. Its availability count is **37 of the original 57 models**; the pilot stays outside that numerator. The continuation metadata cutoffs are 11:08:25 UTC for Ashburn and 11:08:27 UTC for Paris.
+- 22 of the campaign's 34 models have an eligible result, each its first success at attempt 1. Each row shows its declared tier and output cap, for example `highest declared tier: xhigh, 128k output`, the score breakdown with its noise factor, wall minutes and the XM, WAV, MP3 and JSON downloads. Claude Fable 5.1's attempt 1 keeps its recorded `FINALIZATION_ERROR` label with a note: the artifact-archive upload timed out after its eligible evaluation (craft 65.0) completed. Media for evicted attempts were restored from checksum-verified gdrive2 archives.
+- The Support page's **Pending: no eligible result** list gives each missing model's reason: 12 routes stopped at attempt 1 by a provider usage limit or exhausted account funds, so attempts 2 and 3 never started, and `claude-opus-5` was excluded before launch because of its content filter.
 
-This is a fixed snapshot, not a live campaign monitor. Later completions need an explicit refresh. Scores are auxiliary craft-v7 diagnostics, not musical-quality ranks. Original outcomes and selections remain unchanged, including Astra's original second-attempt selection.
+Earlier cohorts (provider-default main, pilot, recovery and continuation) and the OAuth independent-repeats campaign are not published in v5. The v4 root stays on disk.
 
-Deployment paths, hashes and verification are in [`publication-20261001-v4.json`](publication-20261001-v4.json); the earlier single-cohort release is recorded in [`publication-20261001.json`](publication-20261001.json). HTTPS uses the controller's existing Tailscale Funnel capability and a dedicated persistent `keygen-preview.service`. Only HTTPS port 443 was added; the existing port-10000 forwarding and stopped Minecraft service were left alone. No Cloudflare service or purchase is involved.
+This is a fixed snapshot, not a live campaign monitor. Scores are auxiliary craft-v7 diagnostics, not musical-quality ranks.
+
+Deployment paths, hashes and verification are in [`publication-20261002-v5.json`](publication-20261002-v5.json); earlier releases are recorded in [`publication-20261001-v4.json`](publication-20261001-v4.json) and [`publication-20261001.json`](publication-20261001.json). HTTPS uses the controller's existing Tailscale Funnel capability and a dedicated persistent `keygen-preview.service`. Only HTTPS port 443 is used; the existing port-10000 forwarding and stopped Minecraft service were left alone. No Cloudflare service or purchase is involved.
 
 ## Build and serve a new snapshot
 
@@ -33,6 +35,8 @@ python3 web/prototype/serve.py \
 ```
 
 Repeat `--snapshot` to combine controller exports. Export separate cohorts with `--scope pilot`, `--scope continuation`, or `--scope recovery`. Recovery requires `--cohort /absolute/original/campaign.lock.json` and a separate recovery staging root. The builder rejects duplicate non-pilot model rows and a recovery that would replace an existing original selection.
+
+A model withheld from a cohort's frozen roster before launch has no attempt to export. List it on the Support page with `--excluded-model COHORT_KEY MODEL REASON`, for example `--excluded-model highest-declared-tier/prompt-v2 claude-opus-5 "provider content filter blocked its qualification pilots"`. The cohort must be published and the model must be outside its roster. Roster models without a first success carry a reason derived from their recorded attempt statuses and failure categories; provider error strings stay private.
 
 An independent-repetitions companion campaign (policy `independent_repetitions`, declaring repetitions 2-3 of a main campaign's condition) is exported with `--scope repetitions`. Pass the companion's root, its lock with `--cohort` (default `<campaign-root>/campaign.lock.json`), and each linked campaign's root and lock with `--linked ROOT COHORT`:
 
