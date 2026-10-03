@@ -8,6 +8,8 @@
 - FT2-style results site with per-model routes, attempt selection, loop playback, scoring explanations and generated Open Graph cards.
 - Public-launch checklist covering Git history, personal data, credentials, licenses and release verification.
 - Repository agent instructions linking the maintained guides and defining local execution, privacy, provenance and verification boundaries.
+- Guided contributor CLI for setup, private configuration, offline preflight, bounded model smoke runs and spending-authorized official submissions.
+- Direct OpenAI and Anthropic API-key routes and public HTTPS custom endpoints for supported native protocols.
 
 ### Changed
 

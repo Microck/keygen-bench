@@ -30,7 +30,8 @@ import wave
 # Explicit project import only; also works with `python -I benchmark/run.py`.
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
-from native_models import build_model, audit_messages, redact_credentials, classify_error, validate_url, _native, PROVIDERS, PROTOCOLS, sdk_prefix, credential_target
+from native_models import (build_model, audit_messages, redact_credentials, classify_error, validate_url,
+                           check_custom_destination, _native, PROVIDERS, PROTOCOLS, sdk_prefix, credential_target)
 import campaign
 
 MINI_VERSION = "2.4.6"
@@ -430,7 +431,7 @@ SEQUENCE_STOPPING_FAILURES = {"QUOTA", "AUTH", "CONTENT_FILTER"}
 # "Output blocked by content filtering policy". A blocked reply never enters native history,
 # so the identical request is re-sent, at most CONTENT_FILTER_SENDS sends in total.
 CONTENT_FILTER_SENDS = 3
-CONTENT_FILTER_PROVIDERS = {"anthropic_oauth"}
+CONTENT_FILTER_PROVIDERS = {"anthropic_oauth", "anthropic"}
 CONTENT_FILTER_MARKER = "output blocked by content filtering policy"
 
 
@@ -920,6 +921,7 @@ def probe_provider(model: dict, credential: str, timeout: float = 120) -> dict:
     """
     import urllib.error
     import urllib.request
+    check_custom_destination(model)
     if model["api"] == "messages":
         path, body = "/messages", {"model": model["model"], "max_tokens": 16,
                                    "messages": [{"role": "user", "content": PROBE_TEXT}]}

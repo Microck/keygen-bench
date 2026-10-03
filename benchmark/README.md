@@ -45,6 +45,25 @@ The system prompt documents output truncation and submission handling. The task 
 
 Provider protocols, exact model identity, generation settings, reasoning tier, image IDs and dependency provenance are recorded. A declared highest reasoning tier means the highest documented control on that route, not equal compute across providers. Configuration must not silently substitute another checkpoint or route.
 
+## Provider routes
+
+Use the [guided contributor CLI](../CONTRIBUTING-RUNS.md#guided-setup-and-run) for setup and private model configuration.
+
+| Provider | Protocol | Endpoint |
+| --- | --- | --- |
+| `openai` | Chat Completions or Responses | `https://api.openai.com/v1` |
+| `anthropic` | Messages | `https://api.anthropic.com/v1` |
+| `go` | Chat Completions, Responses or Messages | `https://opencode.ai/zen/go/v1` |
+| `vercel` | Chat Completions or Responses | `https://ai-gateway.vercel.sh/v1` |
+| `nim` | Chat Completions | `https://integrate.api.nvidia.com/v1` |
+| `custom` | Chat Completions, Responses or Messages | User-selected public HTTPS endpoint |
+| `anthropic_oauth` | Messages | User-owned authorized loopback bridge |
+| `codex_oauth` | Responses | User-owned authorized loopback bridge |
+
+The endpoint is a base URL, not the full request path. Custom service support requires compatible tool calling, generation controls and exact response-model identity. Selecting a protocol does not translate arbitrary service APIs or guarantee that a proxy forwards the requested settings. Public custom URLs are included in submission provenance; keep private endpoints and identifying tenant paths out of public bundles.
+
+Only OAuth bridges use private loopback HTTP. Bridge login and server lifecycle remain the user's responsibility; the CLI records the executable digest rather than its private path or address. Never route a direct API key through a bridge without deliberately configuring that service.
+
 ## Configure a campaign
 
 Keep working configuration, credentials and run artifacts outside this checkout. `config/campaign.example.json` shows the selection structure; it is not a ready-to-run campaign. Fill in actual immutable image IDs, model configuration and verified readiness evidence.

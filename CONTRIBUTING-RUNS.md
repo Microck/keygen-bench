@@ -4,7 +4,69 @@ Run one exact model three times and submit every outcome to
 [Microck/keygen-bench](https://github.com/Microck/keygen-bench).
 Community results stay separate from ranked results.
 
-## Prepare
+## Guided setup and run
+
+Use Linux with Python 3.11 or later and a working local Docker Engine.
+From the repository root:
+
+```sh
+python3 benchmark/contrib/cli.py setup --home "$HOME/.local/share/keygen-bench"
+```
+
+Setup installs the pinned controller packages in a private virtual environment,
+builds both Docker targets, and builds the trusted analysis renderer. It makes
+no model requests. Missing compiler or system packages produce installation
+instructions; setup does not run `sudo` for you.
+
+Use the installed environment for the remaining commands:
+
+```sh
+PYTHON="$HOME/.local/share/keygen-bench/venv/bin/python"
+CONFIG="$HOME/.config/keygen-bench/model.json"
+"$PYTHON" benchmark/contrib/cli.py configure --config "$CONFIG"
+"$PYTHON" benchmark/contrib/cli.py doctor --config "$CONFIG"
+```
+
+The configuration wizard asks for the provider, exact model, native protocol,
+documented reasoning tier, generation settings and public GitHub handle.
+It stores configuration with private permissions outside the checkout.
+Credentials are supplied separately; they are not stored in the configuration.
+Use `--no-input` and explicit configuration flags for automation; see
+`configure --help`. Presets supply endpoint defaults, not guessed model settings.
+
+For API-key routes, set `KEYGEN_CONTRIB_API_KEY` privately as shown below.
+For `anthropic_oauth` or `codex_oauth`, first install and sign in to your own
+authorized bridge, start its loopback server, and provide its URL and executable
+path to the wizard. The CLI does not implement an OAuth login or extract tokens
+from another application's credential store. The bridge credential goes in
+`KEYGEN_CONTRIB_API_KEY`; only its executable digest is exported.
+Doctor checks a bridge listener without sending an inference request.
+
+Try a short paid model smoke run before committing to three full attempts:
+
+```sh
+"$PYTHON" benchmark/contrib/cli.py smoke --config "$CONFIG" \
+  --work "$HOME/.local/share/keygen-bench/smoke-01"
+```
+
+Smoke outputs are private diagnostics, not eligible submission bundles.
+Smoke and official runs require interactive spending consent or `--yes`.
+Consent authorizes requests; it is not a dollar cap or a guarantee of model access.
+Doctor makes no provider requests and does not verify authentication or billing.
+
+When ready, run all three official attempts:
+
+```sh
+"$PYTHON" benchmark/contrib/cli.py run --config "$CONFIG" \
+  --work "$HOME/.local/share/keygen-bench/run-01" \
+  --out submissions/MODEL/DATE-YOUR-HANDLE
+```
+
+Use new work and bundle directories each time. Review and validate the bundle,
+then follow the PR instructions below. The guided command uses the same frozen
+runner and submission contract as the explicit invocation.
+
+## Manual setup
 
 1. Fork and clone the repository. Use Linux, Python 3.11 or later, Git,
    Docker Engine, and a funded provider account. Allow at least 8 GiB RAM,
@@ -41,9 +103,12 @@ Community results stay separate from ranked results.
 5. Read your provider's model documentation. Use the exact model ID, highest
    documented reasoning tier for that route, and documented output cap. Keep
    the documentation URL. No alias, checkpoint substitution, or provider
-   fallback is allowed. Supported providers are `go`, `nim`, `vercel`,
-   `codex_oauth`, and `anthropic_oauth`. See `benchmark/README.md` for route
-   restrictions. OAuth routes require your own authorized loopback bridge.
+   fallback is allowed. API-key routes include `openai`, `anthropic`, `go`,
+   `nim`, `vercel`, and `custom` for a public HTTPS service implementing
+   Chat Completions, Responses, or Messages. Protocol compatibility does not
+   establish model identity or equivalent reasoning behavior. See
+   `benchmark/README.md` for route restrictions. `codex_oauth` and
+   `anthropic_oauth` require your own authorized loopback bridge.
 6. Set your credential privately. Do not put it in a command, config, PR, or
    committed file. Bash can read it without showing it or saving it in history:
 

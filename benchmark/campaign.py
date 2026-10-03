@@ -23,7 +23,9 @@ SCHEMA = "keygen-native-campaign-3"
 # Cohort label of the frozen prompts/system.txt + prompts/task.txt pair. Campaigns compiled
 # before the label existed (no prompts.version) ran prompt-v1.
 PROMPT_VERSION = "prompt-v2"
-PROVIDERS = {"Codex OAuth": "codex_oauth", "Anthropic OAuth": "anthropic_oauth", "OpenCode Go": "go", "Vercel AI Gateway": "vercel", "NVIDIA NIM": "nim", "Google AI Studio": "google", "Devin": "devin"}
+PROVIDERS = {"Codex OAuth": "codex_oauth", "Anthropic OAuth": "anthropic_oauth", "OpenCode Go": "go",
+             "Vercel AI Gateway": "vercel", "NVIDIA NIM": "nim", "Google AI Studio": "google", "Devin": "devin",
+             "OpenAI": "openai", "Anthropic": "anthropic", "Custom": "custom"}
 LIMIT_KEYS = {"steps", "wall_seconds", "request_seconds", "command_seconds", "render_seconds", "video_seconds", "artifact_bytes"}
 FIRST_SUCCESS = "first_success_up_to_three_attempts"
 # Every predetermined repetition runs regardless of earlier outcomes; only QUOTA/AUTH/CONTENT_FILTER stop
@@ -364,8 +366,12 @@ def validate(config: dict, *, check_provenance=True) -> dict:
     if limits["command_seconds"] > limits["wall_seconds"]:
         raise ValueError("Command budget cannot exceed the attempt wall budget")
     concurrency = config["concurrency"]
-    if set(concurrency) != CONCURRENCY_KEYS or set(concurrency["providers"]) != set(PROVIDERS.values()):
-        raise ValueError("Declare global worker/render/video, every provider concurrency bound and key pools")
+    declared_providers = set(concurrency["providers"])
+    required_providers = {"go", "vercel", "nim", "anthropic_oauth", "codex_oauth"} | {
+        model.get("provider") for model in config["models"]}
+    if (set(concurrency) != CONCURRENCY_KEYS
+            or not required_providers <= declared_providers <= set(PROVIDERS.values())):
+        raise ValueError("Declare global worker/render/video, selected provider concurrency bounds and key pools")
     for key in ("workers", "render", "video"):
         positive(concurrency[key], key)
     for key, value in concurrency["providers"].items():
