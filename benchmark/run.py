@@ -64,6 +64,15 @@ def docker_command() -> list[str]:
     return [binary, "--host", host]
 
 
+# The calling attempt's CPU pin on a shared Boat VM (None: unpinned, as on a sole VM).
+_ATTEMPT = threading.local()
+
+
+def cpu_flags() -> list[str]:
+    cpuset = getattr(_ATTEMPT, "cpuset", None)
+    return ["--cpus", "2"] + (["--cpuset-cpus", cpuset] if cpuset else [])
+
+
 def start_container(docker: list[str], image: str, name: str) -> str:
     # A private tmpfs-backed Docker volume is held by a read-only export helper.
     # docker cp cannot reliably read tmpfs; this also permits export while the agent is paused.
@@ -78,7 +87,7 @@ def start_container(docker: list[str], image: str, name: str) -> str:
     shell(docker + ["start", name + "-files"])
     cmd = docker + ["create", "--name", name, "--network", "none", "--read-only",
                     "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--pids-limit", "256",
-                    "--cpus", "2", "--memory", "2g", "--memory-swap", "2g", "--user", "10001:10001"]
+                    *cpu_flags(), "--memory", "2g", "--memory-swap", "2g", "--user", "10001:10001"]
     cmd += ["--mount", f"type=volume,source={volume},target=/workspace,volume-nocopy"]
     for path, size in (("/tmp", "256m"), ("/home/agent", "16m")):
         cmd += ["--tmpfs", f"{path}:rw,nosuid,nodev,size={size},uid=10001,gid=10001"]
@@ -314,7 +323,7 @@ def visualize(docker: list[str], image: str, run_dir: Path, config: dict, durati
     name = "keygen-video-" + uuid.uuid4().hex[:16]
     try:
         shell(docker + ["run", "-d", "--name", name, "--network", "none", "--read-only", "--cap-drop", "ALL",
-                        "--security-opt", "no-new-privileges", "--user", "10001:10001", "--cpus", "2", "--memory", "2g",
+                        "--security-opt", "no-new-privileges", "--user", "10001:10001", *cpu_flags(), "--memory", "2g",
                         "--pids-limit", "256", "--tmpfs", "/tmp:rw,nosuid,nodev,size=1g,uid=10001,gid=10001", image])
         shell(docker + ["exec", "-i", name, "sh", "-c", "cat > /tmp/input.xm"],
               input=(run_dir / "submission/tune.xm").read_bytes())
@@ -815,6 +824,30 @@ def pace_boat_allocation(root: Path, interval_seconds: int) -> None:
             write_json(path, record)
 
 
+_BOAT_POOLS: dict = {}
+_BOAT_POOLS_LOCK = threading.Lock()
+
+
+def boat_pool(root: Path, config: dict):
+    """This process's shared-VM pool for one campaign root (one VM per attempt unless packed)."""
+    from boat_pool import BoatPool
+    limits = config["limits"]
+    required = limits["wall_seconds"] + 4 * limits["render_seconds"] + limits["video_seconds"] + 600
+    with _BOAT_POOLS_LOCK:
+        if root not in _BOAT_POOLS:
+            _BOAT_POOLS[root] = BoatPool(
+                config["transport"], root, required,
+                lambda: pace_boat_allocation(root, config["transport"]["boat"].get("allocation_interval_seconds", 0)))
+        return _BOAT_POOLS[root]
+
+
+def shutdown_boat_pools() -> None:
+    with _BOAT_POOLS_LOCK:
+        pools = list(_BOAT_POOLS.values())
+    for pool in pools:
+        pool.shutdown()
+
+
 def run_one(root: Path, config: dict, model: dict, docker: list[str] | None, image: str, visualizer_image: str,
             repetition: int, attempt_id: str, store, retry_of=None, key_lease: KeyLease | None = None) -> None:
     run_dir = root / attempt_id
@@ -823,18 +856,28 @@ def run_one(root: Path, config: dict, model: dict, docker: list[str] | None, ima
             if STOP.is_set():
                 raise KeyboardInterrupt()
             with ExitStack() as stack:
+                lease = None
                 if config["transport"]["backend"] == "boat":
-                    from boat import BoatSession
-                    pace_boat_allocation(root, config["transport"]["boat"].get("allocation_interval_seconds", 0))
-                    session = stack.enter_context(BoatSession(config["transport"], audit_dir=run_dir / "transport"))
+                    lease = stack.enter_context(boat_pool(root, config).lease(attempt_id, run_dir))
+                    session = lease.session
                     docker = session.docker_prefix
                     if session.image_id("agent") != image or session.image_id("visualizer") != visualizer_image:
                         raise ValueError("Boat images differ from frozen campaign")
-                    write_json(run_dir / "transport.json", {"boat_id": session.id, "images": {"agent": image, "visualizer": visualizer_image}})
+                    write_json(run_dir / "transport.json", {**lease.record(),
+                                                            "images": {"agent": image, "visualizer": visualizer_image}})
                     required = config["limits"]["wall_seconds"] + 4 * config["limits"]["render_seconds"] + config["limits"]["video_seconds"] + 600
                     if session.archive_deadline - time.time() < required:
                         raise RuntimeError("Boat delivered TTL cannot cover the frozen runtime and export budgets")
-                _run_one(root, config, model, docker, image, visualizer_image, repetition, attempt_id, store, retry_of, key_lease)
+                _ATTEMPT.cpuset = lease.cpuset if lease is not None else None
+                try:
+                    _run_one(root, config, model, docker, image, visualizer_image, repetition, attempt_id, store, retry_of, key_lease)
+                finally:
+                    _ATTEMPT.cpuset = None
+                if lease is not None and (events := lease.host_oom()):
+                    # A neighbour exhausted the shared host: never charge this attempt to its model.
+                    write_json(run_dir / "host-oom.json", {"events": events})
+                    from boat import BoatError
+                    raise BoatError("Host-level OOM on a shared Boat VM during this attempt", code="shared_host_oom")
     except BaseException as exc:
         status = json.loads((run_dir / "status.json").read_text())
         status.update(status="INTERRUPTED" if isinstance(exc, (KeyboardInterrupt, SystemExit)) else "INFRA_ERROR",
@@ -1789,4 +1832,7 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    finally:
+        shutdown_boat_pools()  # never leave a lingering shared VM billing after the campaign
