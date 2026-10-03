@@ -57,7 +57,7 @@ def file_digest(path: Path) -> str:
 
 
 def source_provenance() -> dict:
-    names = ["run.py", "drive.py", "campaign.py", "native_models.py", "boat.py", "boat_transport.py", "artifacts.py", "bridge.py", "visualize.sh", "Dockerfile", "requirements.txt"]
+    names = ["run.py", "drive.py", "campaign.py", "native_models.py", "boat.py", "boat_pool.py", "boat_transport.py", "artifacts.py", "bridge.py", "visualize.sh", "Dockerfile", "requirements.txt"]
     return {name: file_digest(HERE / name) for name in names if (HERE / name).is_file()}
 
 

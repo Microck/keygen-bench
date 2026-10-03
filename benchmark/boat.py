@@ -41,6 +41,8 @@ SOURCE_ALLOWLIST = (
 )
 IMAGE_ID = re.compile(r"sha256:[a-f0-9]{64}\Z")
 BOAT_ID = re.compile(r"bx_[a-z0-9]{8}\Z")
+# small 2 vCPU/4 GB (0.5x), default 4 vCPU/8 GB (1x), large 8 vCPU/16 GB (2x burn rate).
+MAX_ATTEMPTS_PER_VM = {"small": 1, "default": 3, "large": 6}
 BASE_IMAGE = "debian:bookworm-slim@sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2e3687004faa906251"
 API_BASES = {"https://boat.dev/api/v1", "https://ascii.dev/api/boat"}
 BUNDLE_MAX_BYTES = 2 * 1024 * 1024 * 1024
@@ -200,6 +202,17 @@ def validate_config(config: dict) -> dict:
     interval = boat.get("allocation_interval_seconds", 0)
     if type(interval) is not int or not 0 <= interval <= 86400:
         raise ValueError("Boat allocation_interval_seconds must be an integer from 0 to 86400")
+    # Shared VMs: attempts per machine type, bounded so the sum of per-attempt container caps
+    # (agent 2 GiB + helper 256 MiB + 512 MiB workspace tmpfs) stays within ~5% of VM memory.
+    tenants = boat.get("attempts_per_vm", 1)
+    if type(tenants) is not int or not 1 <= tenants <= MAX_ATTEMPTS_PER_VM.get(boat.get("type", "small"), 1):
+        raise ValueError("Boat attempts_per_vm must be an integer from 1 to the machine type's bound "
+                         + json.dumps(MAX_ATTEMPTS_PER_VM))
+    linger = boat.get("linger_seconds", 0)
+    if type(linger) is not int or not 0 <= linger <= 600:
+        raise ValueError("Boat linger_seconds must be an integer from 0 to 600")
+    if (tenants > 1 or linger) and mode != "new":
+        raise ValueError("Shared or lingering VMs require fresh new machines")
     for option, default in (("startup_seconds", 120), ("stop_seconds", 120)):
         value = boat.get(option, default)
         if type(value) is not int or not 10 <= value <= 600:
