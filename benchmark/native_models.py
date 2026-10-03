@@ -4,7 +4,8 @@ Codex uses the OpenAI Responses protocol through an operator-verified loopback
 OAuth bridge. LiteLLM's chatgpt provider is deliberately not used: it injects
 instructions, discovers token files, and drops output-token limits. Anthropic
 uses LiteLLM's native Messages transport through the user-authorized bridge.
-Neither route is ready until its exact protocol and settings pass a real gate.
+Devin uses OpenAI Chat through the operator-verified loopback CLIProxyAPI bridge.
+No bridge route is ready until its exact protocol and settings pass a real gate.
 """
 from __future__ import annotations
 
@@ -20,10 +21,11 @@ from typing import Any
 from urllib.parse import urlsplit
 
 LITELLM_VERSION = "1.102.1"
-PROVIDERS = {"go", "vercel", "nim", "google", "anthropic_oauth", "codex_oauth"}
+PROVIDERS = {"go", "vercel", "nim", "google", "devin", "anthropic_oauth", "codex_oauth"}
+BRIDGE_PROVIDERS = {"devin", "anthropic_oauth", "codex_oauth"}
 # Each route runs only its provider's original native protocol(s).
 PROTOCOLS = {"go": {"chat", "responses", "messages"}, "vercel": {"chat", "responses"}, "nim": {"chat"},
-             "google": {"chat"}, "anthropic_oauth": {"messages"}, "codex_oauth": {"responses"}}
+             "google": {"chat"}, "devin": {"chat"}, "anthropic_oauth": {"messages"}, "codex_oauth": {"responses"}}
 # LiteLLM provider prefix per route; Google AI Studio uses LiteLLM's native Gemini provider
 # (generateContent), never an OpenAI-compatible shim.
 SDK_PREFIX = {"google": "gemini"}
@@ -44,16 +46,24 @@ EXTRA_BODY = {("nim", "chat"): {"chat_template_kwargs"}}
 # Boolean NIM chat-template switches documented on the model cards (force_nonempty_content
 # is required by Nemotron 3 for tool calls); only thinking/enable_thinking select a tier.
 TEMPLATE_SWITCHES = {"thinking", "enable_thinking", "clear_thinking", "force_nonempty_content"}
-# User-approved SDK capability declarations, keyed by exact (provider, protocol, model).
-# The pinned SDK's request-time output_config gate accepts effort xhigh only for model-map
-# entries advertising supports_xhigh_reasoning_effort, i.e. Claude names. OpenCode Go serves
-# these Qwen models on Messages with documented output_config effort xhigh, so this declaration
-# registers that one capability through LiteLLM's model registry (register_model); transmission
-# is never patched. Mirrored by each tier-spec entry's capability_override field. Any other
-# route or effort is untouched and stays behind the SDK gate (fail closed).
+# Explicit SDK capability declarations, keyed by exact (provider, protocol, model).
+# Go Messages' Qwen output_config xhigh declarations are user-approved. Devin Chat's
+# exact GPT aliases advertise xhigh in the frozen Devin catalog, but the pinned SDK
+# cannot find those aliases in its model map. register_model supplies only the missing
+# capability; no transmission is patched. Each tier spec mirrors capability_override.
+# Other routes and efforts stay behind the SDK gate (fail closed).
 CAPABILITY_OVERRIDES = {
     ("go", "messages", "qwen3.8-flash"): {"effort": "xhigh", "approved_by": "user", "date": "2026-10-01"},
     ("go", "messages", "qwen3.8-max"): {"effort": "xhigh", "approved_by": "user", "date": "2026-10-01"},
+    ("devin", "chat", "devin/gpt-5-4"): {
+        "effort": "xhigh", "date": "2026-10-03",
+        "source": "https://raw.githubusercontent.com/router-for-me/models/refs/heads/main/devin_models.json"},
+    ("devin", "chat", "devin/gpt-5-4-mini"): {
+        "effort": "xhigh", "date": "2026-10-03",
+        "source": "https://raw.githubusercontent.com/router-for-me/models/refs/heads/main/devin_models.json"},
+    ("devin", "chat", "devin/gpt-5-3-codex"): {
+        "effort": "xhigh", "date": "2026-10-03",
+        "source": "https://raw.githubusercontent.com/router-for-me/models/refs/heads/main/devin_models.json"},
 }
 # User-approved (2026-10-01) outgoing-history declarations, keyed by exact (provider, protocol, model).
 # The pinned OpenAI SDK's ChatCompletionMessage.model_dump() adds refusal=None to every Chat reply,
@@ -115,7 +125,7 @@ def digest(value: Any) -> str:
 
 
 def validate_url(url: str, provider: str | None = None, api: str | None = None) -> str:
-    """Allow only the approved public endpoints or explicit local OAuth bridges."""
+    """Allow only the approved public endpoints or explicit local credential bridges."""
     if not isinstance(url, str):
         raise ValueError("Model base_url must be a string")
     try:
@@ -126,11 +136,11 @@ def validate_url(url: str, provider: str | None = None, api: str | None = None) 
     if u.username or u.password or u.query or u.fragment:
         raise ValueError("Model base_url must not contain credentials, queries or fragments")
     path = u.path.rstrip("/")
-    if provider in {None, "anthropic_oauth", "codex_oauth"}:
+    if provider is None or provider in BRIDGE_PROVIDERS:
         if u.scheme != "http" or u.hostname != "127.0.0.1" or not port:
-            raise ValueError("OAuth bridge must use explicit http://127.0.0.1:PORT")
+            raise ValueError("Credential bridge must use explicit http://127.0.0.1:PORT")
         if path != "/v1":
-            raise ValueError("OAuth bridge base_url must end in /v1")
+            raise ValueError("Credential bridge base_url must end in /v1")
     elif provider == "go":
         if (u.scheme, u.hostname, port, path) != ("https", "opencode.ai", None, "/zen/go/v1"):
             raise ValueError("Go requires https://opencode.ai/zen/go/v1")
@@ -306,6 +316,10 @@ def _generation(model: dict) -> dict:
         raise ValueError("Native SDK would alter or drop the declared reasoning control")
     if model.get("provider") == "google" and wire.get("max_output_tokens") != value["max_tokens"]:
         raise ValueError("Native Gemini SDK would not transmit the declared output cap")
+    if model.get("provider") == "devin":
+        for key in {"max_tokens", "max_completion_tokens"} & value.keys():
+            if wire.get(key) != value[key]:
+                raise ValueError("Native Devin Chat SDK would alter or drop the declared output cap")
     if api == "messages":
         thinking = wire.get("thinking")
         if isinstance(thinking, dict) and thinking.get("type") == "enabled":
@@ -343,9 +357,9 @@ def sdk_controls(model: dict) -> dict:
 
 
 def capability_override(model: dict) -> dict | None:
-    """The approved SDK capability declaration for this exact Messages route, or None.
+    """The declared SDK capability for this exact route, or None.
 
-    An approved name on another Messages route, or at another effort, is rejected rather
+    A declared name on another route, or at another effort, is rejected rather
     than run with the name's registry entry.
     """
     override = CAPABILITY_OVERRIDES.get((model["provider"], model["api"], model["model"]))
@@ -353,9 +367,10 @@ def capability_override(model: dict) -> dict | None:
         if model["model"] in {name for _, _, name in CAPABILITY_OVERRIDES}:
             raise ValueError("Capability override is approved only for its exact provider route")
         return None
-    if (model["generation"].get("output_config") != {"effort": override["effort"]}
-            or model["tier"]["level"] != override["effort"]):
-        raise ValueError("Capability override covers only its approved output_config effort")
+    control = ("reasoning_effort", override["effort"]) if model["api"] == "chat" else (
+        "output_config", {"effort": override["effort"]})
+    if model["generation"].get(control[0]) != control[1] or model["tier"]["level"] != override["effort"]:
+        raise ValueError("Capability override covers only its declared reasoning effort")
     return override
 
 
@@ -379,7 +394,7 @@ def _register_capability_override(llm, model: dict) -> None:
     if override is None:
         return
     name = model["model"]
-    entry = {"litellm_provider": "anthropic", "mode": "chat",
+    entry = {"litellm_provider": sdk_prefix(model), "mode": "chat",
              f"supports_{override['effort']}_reasoning_effort": True}
 
     def registered() -> bool:
@@ -397,11 +412,10 @@ def _register_capability_override(llm, model: dict) -> None:
 def _map_generation(model: dict, value: dict) -> dict:
     llm = _litellm()
     name = model["model"]
+    _register_capability_override(llm, model)
     if model["api"] == "responses":
         from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
         return OpenAIResponsesAPIConfig().map_openai_params(value, name, drop_params=False)
-    if model["api"] == "messages":
-        _register_capability_override(llm, model)
     mapped = llm.utils.get_optional_params(
         model=name, custom_llm_provider=sdk_prefix(model),
         drop_params=False, **value, **sdk_controls(model),
@@ -431,7 +445,7 @@ def validate_model(config: dict, model: dict) -> dict:
     provider = model.get("provider")
     api = model.get("api")
     if provider not in PROVIDERS:
-        raise ValueError("Only Go, Vercel, NVIDIA NIM, Google AI Studio and user-authorized Anthropic/Codex OAuth routes are approved")
+        raise ValueError("Only Go, Vercel, NVIDIA NIM, Google AI Studio, Devin and user-authorized Anthropic/Codex OAuth routes are approved")
     if api not in {"chat", "responses", "messages"}:
         raise ValueError("Model api must be chat, responses or messages")
     if api not in PROTOCOLS[provider]:
@@ -489,7 +503,7 @@ def validate_model(config: dict, model: dict) -> dict:
         "expected_transmitted_generation": transmitted_generation,
         "delivered_generation": None,
         "settings_evidence": "pinned native SDK transformation only; endpoint delivery remains unverified",
-        "sdk_capability_override": capability_override(model) if api == "messages" else None,
+        "sdk_capability_override": capability_override(model),
         "effective_generation": effective_generation,
         "output_limit": next((transmitted_generation[k] for k in
                               ("max_output_tokens", "max_completion_tokens", "max_tokens")
