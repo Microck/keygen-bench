@@ -19,7 +19,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import campaign
 import run
-from native_models import MAX_TRANSPORT_RETRIES, build_probe_model, digest, redact_credentials
+from native_models import MAX_TRANSPORT_RETRIES, build_probe_model, credential_target, digest, redact_credentials
 
 MAX_ARTIFACT_BYTES = 16 * 1024 * 1024
 DEFAULT_LIMITS = {"steps": 5, "wall_seconds": 180, "command_seconds": 15}
@@ -120,7 +120,7 @@ def worker(spec_path: Path) -> None:
     resource.setrlimit(resource.RLIMIT_FSIZE, (MAX_ARTIFACT_BYTES, MAX_ARTIFACT_BYTES))
     spec = load_json(spec_path)
     root, model = spec_path.parent, spec["model"]
-    target = "ANTHROPIC_API_KEY" if model["api"] == "messages" else "OPENAI_API_KEY"
+    target = credential_target(model)
     secrets = [os.environ.get(target, "")]
     agent = None
     result = {"exit_status": "NotStarted", "failure_category": "infrastructure_error"}

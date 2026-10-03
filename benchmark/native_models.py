@@ -403,8 +403,7 @@ def _map_generation(model: dict, value: dict) -> dict:
     if model["api"] == "messages":
         _register_capability_override(llm, model)
     mapped = llm.utils.get_optional_params(
-        model=name, custom_llm_provider=("gemini" if model.get("provider") == "google" else
-                                         "anthropic" if model["api"] == "messages" else "openai"),
+        model=name, custom_llm_provider=sdk_prefix(model),
         drop_params=False, **value, **sdk_controls(model),
     )
     if model.get("provider") == "google":
