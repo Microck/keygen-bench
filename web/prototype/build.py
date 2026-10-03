@@ -25,11 +25,10 @@ MEDIA = DIST / "media"
 CONDITION_ORDER = ("highest-declared-tier", "declared-tier", "provider-default")
 LEGACY_COHORT = {"key": "historical-prototype-20260929", "condition": "historical-prototype", "prompt_version": "prompt-v1",
                  "label": "historical prototype 2026-09-29, effort as recorded per model, prompt-v1"}
-# Replaces SAMPLE_NOTE when later independent repetitions are published beside the ranked attempt 1.
-ATTEMPT_NOTE = ("Ranking uses attempt 1 only: the same predetermined slot for every model, whatever later attempts scored. "
-                "Models with independent repetitions under the same frozen condition show them as separate, unranked "
-                "attempts; they are never combined into the ranked score. Quota, funds, rate-limit and auth stops are "
-                "infrastructure, and the slots they leave unstarted are labeled not run.")
+# Frozen campaigns retain their original stopping policies; publication ranks the available ordinal samples.
+ATTEMPT_NOTE = ("Ranking uses the best eligible score among three predetermined ordinals under the same frozen condition. "
+                "Ties use the lowest ordinal. Every eligible ordinal remains playable. Failed and unstarted slots have "
+                "no score. Infrastructure reruns replace their ordinal's failed sample, not add another repetition.")
 # Public wording for the campaign an attempt ran in; campaign identities stay private.
 SOURCE_LABELS = {"main": "main campaign", INDEPENDENT_SELECTION: "independent repeats campaign", QUEUE_SELECTION: "rerun queue"}
 
@@ -184,135 +183,168 @@ def cohort_order(cohort: dict) -> tuple:
     return (CONDITION_ORDER.index(condition) if condition in CONDITION_ORDER else len(CONDITION_ORDER), cohort["key"])
 
 
-def queue_precedence(snapshots: list[dict]) -> None:
-    """A rerun queue's group replaces the independent-repeats group of the same model, with that group's runs.
-
-    The queue re-exports every chain's sample, including repeats attempts it did not rerun, so nothing is lost.
-    It reports only its own attempts outside the condition, so the replaced group's outside attempts carry over.
-    A superseded repeats campaign must be one the queue takes origins from.
-    """
-    covered = {}
-    for snapshot in snapshots:
-        if snapshot["scope"] == "repetitions" and snapshot.get("attempt_selection") == QUEUE_SELECTION:
-            linked = {item["campaign_sha256"] for item in snapshot["linked_campaigns"]}
-            for group in snapshot["repetition_groups"]:
-                covered.setdefault((snapshot["cohort"]["key"], price_id(group["name"]).rsplit("/", 1)[-1]), []).append((linked, group))
-    for snapshot in snapshots:
-        if snapshot["scope"] != "repetitions" or snapshot.get("attempt_selection") != INDEPENDENT_SELECTION:
-            continue
-        replaced = set()
-        for group in snapshot["repetition_groups"]:
-            model = (snapshot["cohort"]["key"], price_id(group["name"]).rsplit("/", 1)[-1])
-            for linked, queue_group in covered.get(model, []):
-                if snapshot["campaign_sha256"] not in linked:
-                    raise ValueError(f"{group['name']}: a rerun queue may replace only the repeats campaign it takes origins from")
-                queue_group["outside_condition"] += [item for item in group["outside_condition"] if item not in queue_group["outside_condition"]]
-                replaced.add(model[1])
-        snapshot["repetition_groups"] = [group for group in snapshot["repetition_groups"] if price_id(group["name"]).rsplit("/", 1)[-1] not in replaced]
-        snapshot["runs"] = [run for run in snapshot["runs"] if run["model_key"] not in replaced]
-
-
 def repetition_groups(snapshots: list[dict], runs: list[dict], roster: set, additions: set) -> tuple[list[dict], set]:
-    """Public attempt groups and the repetition-1 slugs that duplicate their ranked main row.
+    """Merge frozen ordinal samples, following explicit rerun chains rather than publication order."""
+    published = {snapshot["campaign_sha256"]: snapshot for snapshot in snapshots}
+    links = {sha: {item["campaign_sha256"] for item in snapshot.get("linked_campaigns", [])
+                   if item["campaign_sha256"] != sha} for sha, snapshot in published.items()}
+    for sha, linked in links.items():
+        if any(item not in published or published[item]["cohort"] != published[sha]["cohort"] for item in linked):
+            raise ValueError("Every linked campaign must be published in the same cohort")
 
-    Ranking uses attempt 1 only. A group attaches to its model's main row only when that row is the
-    group's own repetition 1 (same campaign, attempt ordinal 1, profile and inputs); anything else is
-    refused. Later eligible repetitions become unranked runs linked to that row; no aggregate is built.
-    A model added to the roster in a rerun queue (`additions`) has no main row: its eligible attempt 1
-    is its ranked row. Rerun-queue attempts list the attempts their chain superseded, without media.
-    """
-    # Every campaign an attempt comes from must be published in this build, within the same cohort.
-    published = {snapshot["campaign_sha256"]: (snapshot["campaign_id"], snapshot["cohort"],
-                                               SOURCE_LABELS["main" if snapshot["scope"] == "main" else snapshot.get("attempt_selection")])
-                 for snapshot in snapshots if snapshot["scope"] == "main" or (snapshot["scope"] == "repetitions" and snapshot.get("attempt_selection") in SOURCE_LABELS)}
-    main_runs = {(run["cohort"]["key"], run["model_key"]): run for run in runs if run["provenance"]["scope"] == "main"}
-    groups, duplicates, seen = [], set(), set()
+    def ancestors(sha: str, trail: frozenset = frozenset()) -> set:
+        if sha in trail:
+            raise ValueError("Linked campaigns must not contain a cycle")
+        return links[sha] | {item for parent in links[sha] for item in ancestors(parent, trail | {sha})}
+
+    dependencies = {sha: ancestors(sha) for sha in published}
+
+    def identity(attempt: dict) -> tuple:
+        return attempt["source_campaign_sha256"], attempt.get("source_attempt_id", attempt.get("ordinal"))
+
+    def public_attempt(attempt: dict) -> dict:
+        sha = attempt["source_campaign_sha256"]
+        if sha not in published:
+            raise ValueError("An attempt comes from an unpublished campaign")
+        source = published[sha]
+        label = SOURCE_LABELS["main" if source["scope"] == "main" else source.get("attempt_selection")]
+        return {**attempt, "source_campaign_id": source["campaign_id"], "source": label,
+                "queue_pending": bool(attempt.get("queue_pending")),
+                "superseded": [public_attempt(link) for link in attempt.get("superseded", [])]}
+
+    models, claimed, duplicates = {}, set(), set()
     for snapshot in snapshots:
-        if snapshot["scope"] != "repetitions":
+        if snapshot["scope"] not in ("main", "repetitions"):
             continue
-        queue = snapshot.get("attempt_selection") == QUEUE_SELECTION
-        if snapshot.get("attempt_selection") not in (INDEPENDENT_SELECTION, QUEUE_SELECTION) or not isinstance(snapshot.get("repetition_groups"), list):
-            raise ValueError(f"{snapshot['campaign_id']}: a repetitions snapshot needs independent repetition groups")
-        public = {}
-        for item in snapshot["linked_campaigns"]:
-            sha = item["campaign_sha256"]
-            if sha not in published or published[sha][1] != snapshot["cohort"]:
-                raise ValueError("Every linked repetition campaign must be published as a main or repetitions snapshot of the same cohort in this build")
-            public[sha] = published[sha]
+        if not isinstance(snapshot.get("repetition_groups"), list):
+            raise ValueError("Main and repetitions snapshots must retain all predetermined slots; re-export with collect_public.py")
         by_slug = {run["slug"]: run for run in snapshot["runs"]}
-        claimed = set()
-        for run in snapshot["runs"]:
-            if run["provenance"]["campaign_sha256"] not in public:
-                raise ValueError(f"{run['name']}: repetition result comes from an undeclared campaign")
-            run["provenance"]["source_campaign_id"] = public[run["provenance"]["campaign_sha256"]][0]
-
-        def source(attempt: dict) -> dict:
-            campaign_id, _, label = public[attempt["source_campaign_sha256"]]
-            return {"source_campaign_id": campaign_id, "source": label}
-
         for group in snapshot["repetition_groups"]:
-            model_key = price_id(group["name"]).rsplit("/", 1)[-1]
-            key = (snapshot["cohort"]["key"], model_key)
-            addition = bool(group.get("roster_addition"))
-            if (key in seen or key not in (additions if addition else roster) or group.get("cohort") != snapshot["cohort"]
-                    or (addition and not queue)):
-                raise ValueError(f"{group['name']}: repetition groups need one row per model of their cohort's main roster or rerun-queue additions")
-            seen.add(key)
-            if [attempt["ordinal"] for attempt in group["attempts"]] != list(range(1, group["declared"] + 1)):
-                raise ValueError(f"{group['name']}: repetitions must list every declared ordinal once, in order")
-            if sum(bool(attempt["eligible"]) for attempt in group["attempts"]) != group["eligible"]:
-                raise ValueError(f"{group['name']}: repetition eligible count differs from its attempts")
-            first = by_slug.get(group["attempts"][0]["slug"]) if group["attempts"][0]["slug"] else None
-            if addition:
-                # Its eligible attempt 1 is the ranked row; later attempts need that row to attach to.
-                main = first if first and first["provenance"].get("roster_addition") and first["provenance"]["attempt_ordinal"] == 1 else None
-                if main is None and group["eligible"]:
-                    raise ValueError(f"{group['name']}: a roster addition without an eligible attempt 1 has no ranked row for its later attempts")
-            else:
-                main = main_runs.get(key)
-                if not (main and first and main["provenance"]["attempt_ordinal"] == 1 and main["score"] == first["score"]
-                        and all(main["provenance"].get(field) == first["provenance"].get(field)
-                                for field in ("campaign_sha256", "profile_sha256", "input_sha256", "evaluation_fingerprint"))):
-                    raise ValueError(f"{group['name']}: repetition 1 is not the cohort's ranked main attempt 1; refusing to attach later attempts")
-            attempts = []
+            key = (snapshot["cohort"]["key"], price_id(group["name"]).rsplit("/", 1)[-1])
+            if key not in roster | additions or group["cohort"] != snapshot["cohort"]:
+                raise ValueError(f"{group['name']}: attempt group is outside its cohort's roster")
+            if group["declared"] != 3 or [attempt["ordinal"] for attempt in group["attempts"]] != [1, 2, 3]:
+                raise ValueError(f"{group['name']}: all three predetermined ordinals must be listed once")
+            if group["eligible"] != sum(bool(attempt["eligible"]) for attempt in group["attempts"]):
+                raise ValueError(f"{group['name']}: eligible count differs from the ordinal samples")
+            entry = models.setdefault(key, {"group": group, "samples": {1: [], 2: [], 3: []},
+                                           "outside": [], "campaigns": set(), "queued": False})
+            if entry["group"]["condition_fingerprint"] != group["condition_fingerprint"]:
+                raise ValueError(f"{group['name']}: overlapping product identities have contradictory frozen conditions")
+            entry["campaigns"].add(snapshot["campaign_id"])
+            entry["queued"] |= snapshot.get("attempt_selection") == QUEUE_SELECTION
+            for outside in group["outside_condition"]:
+                item = public_attempt(outside)
+                if item not in entry["outside"]:
+                    entry["outside"].append(item)
             for attempt in group["attempts"]:
                 run = by_slug.get(attempt["slug"]) if attempt["slug"] else None
                 if bool(attempt["eligible"]) != (run is not None) or (run and (
-                        run["model_key"] != model_key or run["score"] != attempt["score"]
+                        run["model_key"] != key[1] or run["score"] != attempt["score"]
                         or run["provenance"]["attempt_ordinal"] != attempt["ordinal"]
                         or run["provenance"]["campaign_sha256"] != attempt["source_campaign_sha256"]
                         or run["provenance"]["condition_fingerprint"] != group["condition_fingerprint"])):
-                    raise ValueError(f"{group['name']}: repetition {attempt['ordinal']} differs from its published result")
+                    raise ValueError(f"{group['name']}: ordinal differs from its published result")
+                if attempt["source_campaign_sha256"] not in {snapshot["campaign_sha256"]} | dependencies[snapshot["campaign_sha256"]]:
+                    raise ValueError(f"{group['name']}: attempt comes from an undeclared source campaign")
                 if run:
                     claimed.add(run["slug"])
-                    if attempt["ordinal"] == 1 and not addition:
-                        duplicates.add(run["slug"])
-                    elif attempt["ordinal"] != 1:
-                        run.update(ranked=False, attempt_of=main["slug"])
-                attempts.append({**{key: attempt[key] for key in ("ordinal", "status", "outcome", "eligible", "attempted", "stopped_by",
-                                                                  "failure_category", "model_failure", "score", "source_campaign_sha256")},
-                                 "slug": main["slug"] if attempt["ordinal"] == 1 and main else attempt["slug"], "ranked": attempt["ordinal"] == 1 and main is not None,
-                                 **source(attempt),
-                                 **({"queue_pending": attempt["queue_pending"],
-                                     "superseded": [{**{field: link[field] for field in ("status", "outcome", "failure_category", "attempted", "stopped_by",
-                                                                                         "source_campaign_sha256")}, **source(link)}
-                                                    for link in attempt["superseded"]]} if queue else {})})
-            maker = public_maker(group["name"], {})
-            groups.append({"cohort_key": key[0], "model_key": model_key, "name": group["name"],
-                           "maker": group["maker"] if maker == "Other" else maker, "tier": group["tier"],
-                           "campaign_id": snapshot["campaign_id"], "condition_fingerprint": group["condition_fingerprint"],
-                           **{field: group[field] for field in ("declared", "eligible", "pending", "state")},
-                           **({"rerun_queue": True, "reruns": sum(len(attempt["superseded"]) for attempt in group["attempts"]),
-                               "roster_addition": addition} if queue else {}),
-                           "attempts": attempts,
-                           "outside_condition": [{**{field: attempt[field] for field in ("ordinal", "status", "failure_category", "attempted", "operator_cancelled",
-                                                                                         "retry", "source_campaign_sha256")},
-                                                  "source_campaign_id": public[attempt["source_campaign_sha256"]][0] if attempt["source_campaign_sha256"] in public else "unpublished campaign",
-                                                  "source": public[attempt["source_campaign_sha256"]][2] if attempt["source_campaign_sha256"] in public else "unpublished campaign"}
-                                                 for attempt in group["outside_condition"]],
-                           "ranked_slug": main["slug"] if main else None})
-        if claimed != set(by_slug):
-            raise ValueError(f"{snapshot['campaign_id']}: every repetition result must belong to its model's group")
+                    run["provenance"]["source_campaign_id"] = published[attempt["source_campaign_sha256"]]["campaign_id"]
+                entry["samples"][attempt["ordinal"]].append((snapshot, public_attempt(attempt), run))
+        if {run["slug"] for run in snapshot["runs"]} - claimed:
+            raise ValueError("Every published result must belong to its model's attempt group")
+
+    def supersedes(new: tuple, old: tuple) -> bool:
+        _, new_attempt, _ = new
+        old_snapshot, old_attempt, _ = old
+        old_id = identity(old_attempt)
+        explicit = old_id in {identity(link) for link in new_attempt["superseded"]}
+        # Ownership follows the sample's source, even when a later queue re-exports it.
+        sources = {item["source_campaign_sha256"] for item in [*new_attempt["superseded"], new_attempt]}
+        companion = (old_snapshot["scope"] == "main" and any(
+            published[sha].get("attempt_selection") == INDEPENDENT_SELECTION
+            and old_snapshot["campaign_sha256"] in dependencies[sha] for sha in sources))
+        if explicit or companion:
+            if old_attempt["eligible"]:
+                raise ValueError("A rerun or companion cannot replace a scored eligible ordinal")
+            return True
+        return False
+
+    groups = []
+    for key, entry in models.items():
+        group = entry["group"]
+        attempts, eligible_runs = [], []
+        for ordinal, candidates in entry["samples"].items():
+            unique = {}
+            for candidate in candidates:
+                snapshot, attempt, run = candidate
+                attempt_id = identity(attempt)
+                previous = unique.get(attempt_id)
+                if previous:
+                    previous_snapshot, old, old_run = previous
+                    if old["eligible"] != attempt["eligible"] or old["score"] != attempt["score"]:
+                        raise ValueError(f"{group['name']}: contradictory evaluations for the same ordinal source")
+                    if run and any(run["provenance"].get(field) != old_run["provenance"].get(field)
+                                   for field in ("profile_sha256", "input_sha256", "evaluation_fingerprint")):
+                        raise ValueError(f"{group['name']}: duplicate ordinal has different pinned evaluation inputs")
+                    replace = (previous_snapshot["campaign_sha256"] in dependencies[snapshot["campaign_sha256"]]
+                               or len(attempt["superseded"]) > len(old["superseded"]))
+                    discarded = old_run if replace else run
+                    kept = run if replace else old_run
+                    if discarded and discarded["slug"] != kept["slug"]:
+                        duplicates.add(discarded["slug"])
+                    if replace:
+                        unique[attempt_id] = candidate
+                else:
+                    unique[attempt_id] = candidate
+            samples = list(unique.values())
+            # Empty queue branches reserve the same slots but contribute no replacement outcome.
+            attempted = [candidate for candidate in samples if candidate[1]["attempted"]]
+            active = attempted or samples
+            survivors = [candidate for candidate in active
+                         if not any(other is not candidate and supersedes(other, candidate) for other in active)]
+            if not attempted:
+                survivors = [max(survivors, key=lambda candidate: (
+                    len(candidate[1]["superseded"]), len(dependencies[candidate[0]["campaign_sha256"]]),
+                    candidate[0]["campaign_sha256"]))]
+            if len(survivors) != 1:
+                raise ValueError(f"{group['name']}: contradictory ordinal {ordinal} without frozen rerun precedence")
+            _, attempt, run = survivors[0]
+            for _, replaced, replaced_run in samples:
+                if replaced_run and replaced is not attempt:
+                    raise ValueError(f"{group['name']}: eligible media would be lost by ordinal replacement")
+            attempt["ranked"] = False
+            attempts.append(attempt)
+            if run:
+                eligible_runs.append((attempt, run))
+        best = min(eligible_runs, key=lambda item: (-item[1]["score"], item[0]["ordinal"])) if eligible_runs else None
+        ranked_slug = best[1]["slug"] if best else None
+        best_ordinal = best[0]["ordinal"] if best else None
+        for attempt, run in eligible_runs:
+            attempt["ranked"] = run is best[1]
+            run.update(ranked=attempt["ranked"], ranking_policy="best of 3",
+                       eligible_attempts=len(eligible_runs), best_ordinal=best_ordinal)
+            run["provenance"]["selected_by"] = "best eligible score among three predetermined ordinals; ties use the lowest ordinal"
+            if attempt["ranked"]:
+                run.pop("attempt_of", None)
+            else:
+                run["attempt_of"] = ranked_slug
+        maker = public_maker(group["name"], {})
+        pending = sum(attempt["queue_pending"] or not attempt["attempted"]
+                      or attempt["status"] in {"RUNNING", "RESERVED", "MISSING"} for attempt in attempts)
+        state = "complete" if len(eligible_runs) == 3 else "complete_with_failures" if eligible_runs else "pending"
+        groups.append({"cohort_key": key[0], "model_key": key[1], "name": group["name"],
+                       "maker": group["maker"] if maker == "Other" else maker, "tier": group["tier"],
+                       "campaign_id": sorted(entry["campaigns"])[0], "campaign_ids": sorted(entry["campaigns"]),
+                       "condition_fingerprint": group["condition_fingerprint"], "declared": 3,
+                       "eligible": len(eligible_runs), "eligible_attempts": len(eligible_runs), "pending": pending,
+                       "state": state, "ranking_policy": "best of 3", "best_ordinal": best_ordinal,
+                       "ranked_slug": ranked_slug, "attempts": attempts, "outside_condition": entry["outside"],
+                       "reason": "; ".join(f"attempt {attempt['ordinal']}: {attempt['status'].lower().replace('_', ' ')}"
+                                           for attempt in attempts if not attempt["eligible"]),
+                       **({"roster_addition": True} if key in additions else {}),
+                       **({"rerun_queue": True, "reruns": sum(len(attempt["superseded"]) for attempt in attempts)}
+                          if entry["queued"] else {})})
     return groups, duplicates
 
 
@@ -437,10 +469,9 @@ def build_snapshots(sources: list[Path], publish_root: Path, excluded: list[tupl
             if maker != "Other":
                 run["maker"] = maker
             run["model_key"] = price_id(run["name"]).rsplit("/", 1)[-1]
-    queue_precedence(snapshots)
     runs = [run for snapshot in snapshots for run in snapshot["runs"]]
-    if not runs or len({run["slug"] for run in runs}) != len(runs):
-        raise ValueError("Public snapshots need results with unique slugs")
+    if len({run["slug"] for run in runs}) != len(runs):
+        raise ValueError("Public snapshots need unique exported result slugs")
     # Uniqueness and roster membership hold within one cohort; cohorts are separate experiments.
     original_hashes = {snapshot["campaign_sha256"] for snapshot in snapshots if snapshot["scope"] == "main"}
     original_models = {(run["cohort"]["key"], run["model_key"]) for run in runs if run["provenance"]["scope"] == "main"}
@@ -448,22 +479,23 @@ def build_snapshots(sources: list[Path], publish_root: Path, excluded: list[tupl
         if run["provenance"]["scope"] == "recovery":
             if run["provenance"]["campaign_sha256"] not in original_hashes or (run["cohort"]["key"], run["model_key"]) in original_models:
                 raise ValueError("A recovery must belong to an original main cohort and cannot replace its selected success")
-    original_roster = {(model["cohort_key"], model["model_key"]) for snapshot in snapshots if snapshot["scope"] == "main" for model in snapshot["roster"]}
-    # Models a rerun queue added after requalification join their cohort's roster; they were never in the main campaign.
+    def standalone(snapshot: dict) -> bool:
+        return (snapshot.get("attempt_selection") == INDEPENDENT_SELECTION
+                and all(item["campaign_sha256"] == snapshot["campaign_sha256"] for item in snapshot.get("linked_campaigns", [])))
+
+    original_roster = {(model["cohort_key"], model["model_key"]) for snapshot in snapshots
+                       if snapshot["scope"] == "main" or standalone(snapshot) for model in snapshot["roster"]}
+    # New queue rosters join the same cohort; recursive queues may re-export them.
     additions = {(model["cohort_key"], model["model_key"]) for snapshot in snapshots if snapshot.get("attempt_selection") == QUEUE_SELECTION
-                 for model in snapshot["roster"] if model.get("roster_addition")}
-    if additions & original_roster:
-        raise ValueError("A rerun-queue roster addition must be outside its cohort's main roster")
-    selected_models = [(run["cohort"]["key"], run["model_key"]) for run in runs if run["provenance"]["scope"] not in ("pilot", "repetitions")]
-    repeated_models = [(run["cohort"]["key"], run["model_key"]) for run in runs if run["provenance"]["scope"] == "repetitions"]
-    if len(set(selected_models)) != len(selected_models) or any(model not in original_roster | additions for model in selected_models + repeated_models):
-        raise ValueError("Current selections must belong to their cohort's original roster without duplicate model rows")
-    # Ranking stays on attempt 1; later repetitions are unranked runs linked to it. Roster and availability counts stay the main snapshot's.
+                 for model in snapshot["roster"] if model.get("roster_addition")} - original_roster
+    if any((run["cohort"]["key"], run["model_key"]) not in original_roster | additions
+           for run in runs if run["provenance"]["scope"] != "pilot"):
+        raise ValueError("Current results must belong to their cohort's frozen roster")
     groups, duplicates = repetition_groups(snapshots, runs, original_roster, additions)
     runs = [run for run in runs if run["slug"] not in duplicates]
 
     def added_ranked(run: dict) -> bool:
-        return bool(run["provenance"].get("roster_addition")) and not run.get("attempt_of")
+        return (run["cohort"]["key"], run["model_key"]) in additions and run.get("ranked", False)
 
     cohort_keys = {snapshot["cohort"]["key"] for snapshot in snapshots}
     excluded_models = [{"cohort_key": key, "name": name, "model_key": price_id(name).rsplit("/", 1)[-1], "reason": reason} for key, name, reason in excluded]
@@ -474,11 +506,20 @@ def build_snapshots(sources: list[Path], publish_root: Path, excluded: list[tupl
     cohorts = list({cohort["key"]: cohort for cohort in cohorts}.values())
     for cohort in cohorts:
         members = [run for run in runs if run["cohort"]["key"] == cohort["key"]]
-        cohort["results"] = sum(run["provenance"]["scope"] not in ("pilot", "repetitions") or added_ranked(run) for run in members)
+        ranked_members = sorted((run for run in members if run.get("ranked")), key=lambda run: (-run["score"], run["model_key"]))
+        for rank, run in enumerate(ranked_members, 1):
+            run["rank"] = rank
+        cohort["results"] = sum(run.get("ranked", run["provenance"]["scope"] not in ("pilot", "repetitions")) for run in members)
         cohort["main_model_roster"] = sum(key == cohort["key"] for key, _ in original_roster)
         cohort["selection_counts"] = {name: sum(run["provenance"]["scope"] == scope for run in members) for name, scope in (
-            ("main_first_successes", "main"), ("archive_only_recoveries", "recovery"),
+            ("archive_only_recoveries", "recovery"),
             ("native_continuation_successes", "continuation"), ("musical_pilots", "pilot"))}
+        cohort["selection_counts"]["main_first_successes"] = sum(
+            model.get("selected_attempt") is not None for snapshot in snapshots
+            if snapshot["scope"] == "main" and snapshot["cohort"]["key"] == cohort["key"] for model in snapshot["roster"])
+        cohort["ranking_policy"] = "best of 3"
+        cohort["selection_counts"]["ranked_best_of_three"] = sum(run.get("ranked", False) for run in members)
+        cohort["selection_counts"]["eligible_attempts"] = sum(run.get("ranking_policy") == "best of 3" for run in members)
         if any(key == cohort["key"] for key, _ in additions):
             cohort["roster_additions"] = sum(key == cohort["key"] for key, _ in additions)
             cohort["selection_counts"]["rerun_queue_additions"] = sum(added_ranked(run) for run in members)
@@ -522,23 +563,28 @@ def build_snapshots(sources: list[Path], publish_root: Path, excluded: list[tupl
                     if digest.hexdigest() != run["provenance"]["public_media_sha256"]["mp3" if key == "audio" else key]:
                         raise ValueError("Copied public media checksum mismatch")
     runs.sort(key=lambda run: (run["exhibition"], run["name"].lower()))
-    main_snapshots = [snapshot for snapshot in snapshots if snapshot["scope"] == "main"]
-    main_count = sum(run["provenance"]["scope"] == "main" for run in runs)
+    main_count = sum(cohort["selection_counts"]["main_first_successes"] for cohort in cohorts)
     recovery_count = sum(run["provenance"]["scope"] == "recovery" for run in runs)
     continuation_count = sum(run["provenance"]["scope"] == "continuation" for run in runs)
     pilot_count = sum(run["provenance"]["scope"] == "pilot" for run in runs)
     addition_count = sum(added_ranked(run) for run in runs)
-    native_count = main_count + recovery_count + continuation_count + addition_count
-    model_count = sum(len(snapshot["roster"]) for snapshot in main_snapshots) + len(additions)
+    native_count = sum(run.get("ranked", False) for run in runs) + recovery_count + continuation_count
+    model_count = len(original_roster | additions)
     generated = datetime.now(timezone.utc).isoformat()
     public_ids = {snapshot["campaign_sha256"]: snapshot["campaign_id"] for snapshot in snapshots}
     availability = (f"{native_count}/{model_count} available" if len(cohorts) == 1 else
                     " | ".join(f"{cohort['label']}: {cohort['results']}/{cohort['main_model_roster'] + cohort.get('roster_additions', 0)}" for cohort in cohorts))
     out = {
-        "generated": generated, "dataset_kind": "native-first-success",
-        "publication_note": f"Main snapshot {generated[:10]} | {availability}",
-        "selection_counts": {"main_first_successes": main_count, "archive_only_recoveries": recovery_count, "native_continuation_successes": continuation_count, "musical_pilots": pilot_count, "main_model_roster": model_count,
+        "generated": generated, "dataset_kind": "native-best-of-three", "ranking_policy": "best of 3",
+        "publication_note": f"Best-of-3 snapshot {generated[:10]} | {availability}",
+        "selection_counts": {"main_first_successes": main_count, "ranked_best_of_three": sum(run.get("ranked", False) for run in runs),
+                             "eligible_attempts": sum(group["eligible"] for group in groups),
+                             "archive_only_recoveries": recovery_count, "native_continuation_successes": continuation_count,
+                             "musical_pilots": pilot_count, "main_model_roster": model_count,
                              **({"rerun_queue_additions": addition_count} if additions else {})},
+        "ranked_results": sum(run.get("ranked", False) for run in runs),
+        "eligible_attempts": sum(group["eligible"] for group in groups),
+        "pending_models": sum(not group["eligible"] for group in groups),
         "cohorts": cohorts,
         "limitations": [
             "This is an immutable snapshot, not a live campaign monitor.",
@@ -563,18 +609,15 @@ def build_snapshots(sources: list[Path], publish_root: Path, excluded: list[tupl
     if groups:
         repeated_cohorts = [cohort for cohort in cohorts if "repetitions" in cohort]
         out["limitations"] += [
-            f"{cohort['label']}: {cohort['repetitions']['models']} models also ran later predetermined independent repetitions under the "
-            "same frozen condition. Each eligible later attempt is playable from its model's attempt switcher and labeled not ranked; "
-            "failed and unstarted attempts are listed without media. Attempts outside the frozen condition, such as an operator-cancelled "
-            "slot, are listed but never count as repetitions." for cohort in repeated_cohorts]
+            f"{cohort['label']}: all {cohort['repetitions']['models']} models retain three predetermined ordinal slots. "
+            "The best eligible score is ranked and every eligible sample remains playable. Failed and unstarted slots "
+            "are listed without media or invented scores. Attempts outside the frozen condition never count as repetitions."
+            for cohort in repeated_cohorts]
         out["limitations"] += [
             f"{cohort['label']}: a later rerun queue covers {cohort['repetitions']['rerun_queue']['models']} models. Their provider-limit, "
             "infrastructure and unstarted attempts were rerun as separate attempts under the same frozen condition. Each attempt shows "
             "the last run of its chain; the runs it superseded are listed without media. Scored attempts and model failures are never rerun."
             for cohort in repeated_cohorts if "rerun_queue" in cohort["repetitions"]]
-        out["limitations"] += [
-            f"{group['name']} joined the roster after requalification and ran in the rerun queue under the same frozen condition. "
-            "Only its attempt 1 can be ranked, like every other model's; its later attempts are not ranked." for group in groups if group.get("roster_addition")]
         out["repetition_groups"] = sorted(groups, key=lambda group: (cohort_order(next(c for c in cohorts if c["key"] == group["cohort_key"])), group["name"].lower()))
     (dist / "data.json").write_text(json.dumps(out, separators=(",", ":"), allow_nan=False) + "\n")
     assets = ["index.html", "app.js", "site.js"]
@@ -588,10 +631,9 @@ def build_snapshots(sources: list[Path], publish_root: Path, excluded: list[tupl
             raise ValueError("Public assets must not be symlinks")
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(source, target)
-    print(f"{main_count} original main first successes, {recovery_count} labeled recoveries, {continuation_count} native continuations, {pilot_count} labeled pilots"
-          f"{f', {addition_count} ranked rerun-queue roster additions of {len(additions)}' if additions else ''} -> {publish_root}")
+    print(f"{native_count} ranked results, {sum(group['eligible'] for group in groups)} eligible ordinal samples -> {publish_root}")
     if groups:
-        print(f"{len(groups)} attempt groups: {sum(attempt['eligible'] and not attempt['ranked'] for group in groups for attempt in group['attempts'])} unranked playable attempts beside {len(duplicates) + addition_count} ranked attempt-1 rows")
+        print(f"{len(groups)} best-of-3 groups, {sum(not group['eligible'] for group in groups)} pending models")
 
 
 if __name__ == "__main__":

@@ -127,7 +127,8 @@ function pickScale() {
 
 export async function mount(root, ctx) {
   const { data } = ctx;
-  const native = data.dataset_kind === "native-first-success";
+  const native = data.dataset_kind === "native-best-of-three";
+  const bestOfThree = data.ranking_policy === "best of 3" || data.repetition_groups?.some((g) => g.ranking_policy === "best of 3");
   let { page, run: slug } = ctx;
   root.append(h("style", {}, CSS + TRANSITION_CSS));
   const main = h("main", { class: "page" });
@@ -137,7 +138,7 @@ export async function mount(root, ctx) {
   const shell = h("div", { class: "ft2 vb" }, bar, main);
   root.append(shell);
   let raf = 0, k = 1;
-  const S = { sort: native ? "name" : "score", asc: native, maker: "All", sel: slug, exh: true, scoringTab: "keygen", cohort: data.bySlug[slug]?.cohort?.key ?? data.cohorts?.[0]?.key };
+  const S = { sort: native && !bestOfThree ? "name" : "score", asc: native && !bestOfThree, maker: "All", sel: slug, exh: true, scoringTab: "keygen", cohort: data.bySlug[slug]?.cohort?.key ?? data.cohorts?.[0]?.key };
   const cohortOf = (key) => (data.cohorts ?? []).find((c) => c.key === key);
 
   const fit = () => {
@@ -154,12 +155,28 @@ export async function mount(root, ctx) {
     tabs.replaceChildren(...PAGES.map((p) => h("button", { class: "btn", "aria-current": p.id === page ? "page" : null, onclick: () => ctx.go({ page: p.id }) }, native && p.id === "ranking" ? "Results" : p.label)));
   }
   const meter = (v, max, color) => h("div", { class: "meter sunken" }, h("i", { style: { width: `calc(${Math.max(0, Math.min(1, v / max)) * 100}% - 1px)`, background: color ?? "var(--pattext)" } }));
-  // Each ranked score is one quality sample from attempt 1. Models with independent repetitions also list their
-  // later predetermined attempts: playable when eligible, never ranked or combined with attempt 1.
+  // A group's ranked run is its best eligible predetermined ordinal. Other eligible ordinals remain playable.
   const groups = data.repetition_groups ?? [];
   const groupOf = Object.fromEntries(groups.flatMap((g) => g.attempts.filter((a) => a.slug).map((a) => [a.slug, g])));
+  const modelName = (r) => groupOf[r.slug]?.name ?? r.name;
+  const eligibleCount = (g) => g.eligible ?? g.attempts.filter((a) => a.eligible).length;
+  const scoredCount = (g) => `${eligibleCount(g)}/${g.declared} scored`;
+  const bestOrdinal = (g) => g.best_ordinal ?? g.attempts.find((a) => a.ranked)?.ordinal;
+  const pendingKey = (g) => `pending:${g.cohort_key}:${g.model_key}`;
+  const pendingGroup = (key) => groups.find((g) => !g.ranked_slug && !g.attempts.some((a) => a.ranked) && pendingKey(g) === key);
+  const alternateAttempt = (r) => bestOfThree ? r.ranked === false : !!r.attempt_of;
+  const attemptProvenance = (a) => a.provenance ?? data.bySlug[a.slug]?.provenance ?? {};
+  const attemptTransport = (a) => a.transport ?? attemptProvenance(a).transport;
+  const transportText = (transport) => transport
+    ? `VM cpuset ${Array.isArray(transport.cpuset) ? transport.cpuset.join(",") : transport.cpuset ?? "not recorded"} | slot ${transport.slot ?? "not recorded"} | attempts/VM ${transport.attempts_per_vm ?? "not recorded"}`
+    : "VM cpuset, slot and attempts/VM not recorded";
+  const attemptMetadata = (a) => {
+    const provenance = attemptProvenance(a);
+    return [provenance.provider, provenance.tier ? `highest declared tier: ${provenance.tier}` : null,
+      provenance.output_cap == null ? null : `output cap ${provenance.output_cap} tokens`, transportText(attemptTransport(a))].filter(Boolean).join(" | ");
+  };
   const sc = (v) => (v == null ? "--" : v.toFixed(1));
-  const reason = (cat) => cat.toLowerCase().replaceAll("_", " ");
+  const reason = (cat) => String(cat ?? "pending").toLowerCase().replaceAll("_", " ");
   const why = (x) => reason(x.failure_category ?? x.status);
   // A rerun-queue attempt is the last run of its chain; the runs it superseded are labels without media.
   const supersededCause = (s) => s.attempted ? why(s) : s.stopped_by ? reason(s.stopped_by) : "not run";
@@ -167,43 +184,51 @@ export async function mount(root, ctx) {
   const supersededLabel = (s, i) => `${i ? `rerun ${i}` : "first run"} ${s.attempted ? `failed (${why(s)})` : `not run${s.stopped_by ? ` (${reason(s.stopped_by)})` : ""}`}, rerun`;
   const attemptState = (a) => {
     const rerun = rerunNote(a);
-    if (a.eligible) return [rerun, a.ranked ? "ranked" : "not ranked"].filter(Boolean).join(", ");
+    if (a.eligible) return [rerun, a.ranked ? (bestOfThree ? "best, ranked" : "ranked") : "not ranked"].filter(Boolean).join(", ");
     if (a.status === "RUNNING") return rerun ? `running (${rerun})` : "running";
     if (a.queue_pending) {
-      const last = a.attempted ? a : a.superseded.at(-1) ?? (a.stopped_by ? a : null);
+      const last = a.attempted ? a : a.superseded?.at(-1) ?? (a.stopped_by ? a : null);
       return last ? `pending rerun (${supersededCause(last)})` : "queued, not started";
     }
     const state = a.attempted ? `failed (${why(a)})` : `not run${a.stopped_by ? ` (${reason(a.stopped_by)})` : ""}`;
     return rerun ? `${state}, ${rerun}` : state;
   };
   const attemptLabel = (a) => a.eligible ? `Attempt ${a.ordinal} (${attemptState(a)})` : `Attempt ${a.ordinal}: ${attemptState(a)}`;
-  const attemptTitle = (a) => `${attemptLabel(a)} | ${a.status}${a.failure_category && a.status !== "RUNNING" ? " / " + a.failure_category : ""} | ${a.source}${a.slug ? "" : " | no media"}${a.superseded?.length ? " | " + a.superseded.map(supersededLabel).join("; ") : ""}`;
+  const attemptTitle = (a) => `${attemptLabel(a)} | ${a.status}${a.failure_category && a.status !== "RUNNING" ? " / " + a.failure_category : ""} | ${a.source}${a.eligible && a.slug ? "" : " | no media"}${a.superseded?.length ? " | " + a.superseded.map(supersededLabel).join("; ") : ""}`;
   const SOURCE_NOTE = { "main campaign": "Main-campaign", "independent repeats campaign": "Repetition-campaign", "rerun queue": "Rerun-queue" };
   const outsideNote = (o) => `${SOURCE_NOTE[o.source] ?? "Unpublished-campaign"} attempt ${o.ordinal ?? "?"} (${[o.status, o.failure_category].filter(Boolean).join(" / ")})${o.operator_cancelled ? " was cancelled by the operator. It" : ""} is outside the frozen condition: not a repetition, never counted or replaced.`;
-  const attemptedOutside = (g) => g.outside_condition.filter((o) => o.attempted);
+  const attemptedOutside = (g) => (g.outside_condition ?? []).filter((o) => o.attempted);
   const attemptOf = (r) => groupOf[r.slug]?.attempts.find((a) => a.slug === r.slug);
+  const pendingReason = (g) => g.attempts.filter((a) => !a.eligible).map((a) => `Attempt ${a.ordinal}: ${attemptState(a)}`).join("; ");
   const selection = (r) => {
+    const g = groupOf[r.slug];
+    if (bestOfThree && g) return `${r.ranked ? `rank ${r.rank}, best of 3` : "not ranked"} | attempt ${attemptOf(r)?.ordinal ?? r.provenance.attempt_ordinal} of ${g.declared} | ${scoredCount(g)}`;
     if (!native) return r.rank ? `${r.rank} of ${data.runs.filter((x) => x.rank && x.cohort?.key === r.cohort?.key).length}` : r.failed ? "failed" : "exhibition";
     const rerun = attemptOf(r) ? rerunNote(attemptOf(r)) : null;
     if (r.attempt_of) return `attempt ${r.provenance.attempt_ordinal} of ${groupOf[r.slug].declared}: independent repetition${rerun ? ` (${rerun})` : ""}, not ranked`;
     if (r.provenance.roster_addition) return `rerun queue: attempt 1${rerun ? ` (${rerun})` : ""}; added to the roster after requalification`;
     return `${r.provenance.scope}: first valid at attempt ${r.provenance.attempt_ordinal}; ${r.usage.attempts}/3 slots attempted`;
   };
-  const unrankedNote = (r) => `Not ranked. Independent predetermined repetition ${r.provenance.attempt_ordinal} under the same frozen condition; the ranked score is attempt 1's (${sc(data.bySlug[r.attempt_of].score)}).`;
+  const unrankedNote = (r) => {
+    const g = groupOf[r.slug], ranked = data.bySlug[r.attempt_of];
+    return bestOfThree
+      ? `Not ranked. Attempt ${attemptOf(r)?.ordinal ?? r.provenance.attempt_ordinal} remains playable. Best of 3 selects attempt ${bestOrdinal(g)} (${sc(ranked?.score)}); ties select the lowest ordinal.`
+      : `Not ranked. Independent predetermined repetition ${r.provenance.attempt_ordinal} under the same frozen condition; the ranked score is attempt 1's (${sc(ranked.score)}).`;
+  };
 
   function scoreCard(r, { compact = false } = {}) {
     const parts = [["Tonal", r.parts.tonal_organization, 50], ["Develop.", r.parts.development, 40], ["Dynamics", r.parts.dynamics, 10]];
     const f = r.factors;
     return [
       h("div", { class: "row", style: { gap: "4px", padding: "1px 1px 0" } },
-        badge(r.maker), r.attempt_of ? h("span", { class: "unranked", title: unrankedNote(r) }, "NOT RANKED") : null, h("span", { class: "grow" }), h("span", { class: "big" }, r.score.toFixed(1))),
-      h("div", { class: "shadow-text card-name", style: { padding: "0 1px" } }, r.name),
+        badge(r.maker), alternateAttempt(r) ? h("span", { class: "unranked", title: unrankedNote(r) }, "NOT RANKED") : null, h("span", { class: "grow" }), h("span", { class: "big" }, r.score.toFixed(1))),
+      h("div", { class: "shadow-text card-name", style: { padding: "0 1px" } }, modelName(r)),
       h("div", { class: "sunken", style: { padding: "3px 4px", display: "grid", gridTemplateColumns: "auto 1fr auto", gap: "2px 6px", alignItems: "center" } },
         ...parts.flatMap(([kk, v, m]) => [h("span", { class: "muted" }, kk), meter(v, m), h("span", { style: { textAlign: "right" } }, `${v.toFixed(1)}/${m}`)]),
         ...[["Signal", f.signal_integrity], ["Noise", f.noise_integrity], ["Loop", f.loop_continuity], ["Duration", f.duration_sufficiency]]
           .flatMap(([kk, v]) => [h("span", { class: "muted" }, kk), meter(v, 1, v < 0.8 ? "#FFAA00" : null), h("span", { style: { textAlign: "right" } }, "x" + v.toFixed(3))])),
       compact ? null : h("dl", { class: "kv sunken" },
-        h("dt", {}, native ? "Selection" : "Rank"), h("dd", {}, selection(r)),
+        h("dt", {}, native && !bestOfThree ? "Selection" : "Rank"), h("dd", {}, selection(r)),
         h("dt", {}, "Est. cost"), h("dd", {}, money(r.cost_usd)),
         h("dt", {}, "Wall time"), h("dd", {}, r.usage.wall_minutes + " min"),
         h("dt", {}, "Flags"), h("dd", { style: { color: r.flags.length ? "#FFAA00" : "#fff" } }, r.flags.length ? r.flags.map((x) => SHORT[x.id] ?? x.id).join(" ") : "none")),
@@ -322,7 +347,7 @@ export async function mount(root, ctx) {
       h("span", { class: "shadow-text" }, "Company"),
       dropdown({ label: "Company", items: makerItems(data), value: r.maker, width: 120, onChange: (mk) => ctx.go({ run: data.makers.find((x) => x.name === mk).runs[0].slug }) }),
       h("span", { class: "shadow-text" }, "Model"),
-      dropdown({ label: "Model", items: modelItems(data, r.maker), value: r.attempt_of ?? r.slug, width: 170, onChange: (s2) => ctx.go({ run: s2 }) }),
+      dropdown({ label: "Model", items: bestOfThree ? modelItems(data, r.maker).map((item) => ({ ...item, label: modelName(data.bySlug[item.value]) })) : modelItems(data, r.maker), value: r.attempt_of ?? r.slug, width: 170, onChange: (s2) => ctx.go({ run: s2 }) }),
       h("span", { class: "grow" }),
       r.media.xm ? h("a", { class: "btn", href: data.base + r.media.xm, download: r.slug + ".xm", style: { height: "14px" } }, ".XM") : null,
       r.media.audio ? h("a", { class: "btn", href: data.base + r.media.audio, download: r.slug + ".mp3", title: "Listening derivative of canonical evaluation audio", style: { height: "14px" } }, ".MP3") : null,
@@ -331,7 +356,7 @@ export async function mount(root, ctx) {
     // Attempt switcher: every declared attempt of this model; eligible ones load in place, the others are labels.
     const g = groupOf[r.slug];
     V.attHost.style.display = g ? "" : "none";
-    V.attHost.replaceChildren(...(g ? g.attempts.map((a) => a.slug
+    V.attHost.replaceChildren(...(g ? g.attempts.map((a) => a.eligible && a.slug
       ? h("button", { class: "btn", "aria-pressed": String(a.slug === r.slug), title: attemptTitle(a), onclick: () => { if (a.slug !== r.slug) ctx.go({ run: a.slug }); } }, attemptLabel(a))
       : h("span", { class: "off", title: attemptTitle(a) }, attemptLabel(a))) : []));
     V.infoHost.replaceChildren(
@@ -378,31 +403,41 @@ export async function mount(root, ctx) {
 
   // ---------------- Rankings ----------------
   const COLS = [
-    { k: "rank", l: native ? "Try" : "#", num: true, v: (r) => native ? r.provenance.attempt_ordinal : r.rank ?? 999, cell: (r) => native ? String(r.provenance.attempt_ordinal) : (r.rank ?? (r.failed ? "--" : "EX")), cls: "rk" },
-    { k: "name", l: "Model", v: (r) => r.name, cls: "nm", cell: (r) => h("div", { class: "nmc", title: r.name }, badge(r.maker), h("span", { class: "nmt" }, r.name + (r.exhibition ? " *" : ""))) },
-    { k: "score", l: "Score", num: true, v: (r) => r.score, cell: (r) => [h("span", { class: "sbar", style: { width: Math.round(r.score * 0.34) + "px", background: scoreColor(r.score) } }), r.score.toFixed(1)] },
+    { k: "rank", l: native && !bestOfThree ? "Try" : "#", num: true, v: (r) => native && !bestOfThree ? r.provenance.attempt_ordinal : r.rank ?? 999, cell: (r) => native && !bestOfThree ? String(r.provenance.attempt_ordinal) : (r.rank ?? (r.failed ? "--" : "EX")), cls: "rk" },
+    { k: "name", l: "Model", v: modelName, cls: "nm", cell: (r) => h("div", { class: "nmc", title: modelName(r) }, badge(r.maker), h("span", { class: "nmt" }, modelName(r) + (r.exhibition ? " *" : ""))) },
+    { k: "score", l: bestOfThree ? "Best of 3" : "Score", num: true, v: (r) => r.score, cell: (r) => [h("span", { class: "sbar", style: { width: Math.round(r.score * 0.34) + "px", background: scoreColor(r.score) } }), r.score.toFixed(1)] },
+    ...(bestOfThree ? [
+      { k: "ordinal", l: "Try", num: true, width: 30, v: (r) => attemptOf(r)?.ordinal ?? r.provenance.attempt_ordinal, cell: (r) => String(attemptOf(r)?.ordinal ?? r.provenance.attempt_ordinal) },
+      { k: "scored", l: "Scored", num: true, width: 44, v: (r) => groupOf[r.slug] ? eligibleCount(groupOf[r.slug]) : 1, cell: (r) => groupOf[r.slug] ? `${eligibleCount(groupOf[r.slug])}/${groupOf[r.slug].declared}` : "1/1" },
+    ] : []),
     { k: "cost", l: "Cost", num: true, v: (r) => r.cost_usd ?? 1e9, cell: (r) => money(r.cost_usd) },
     { k: "out", l: "Out tok", num: true, v: (r) => r.usage.completion_tokens ?? 1e12, cell: (r) => (r.usage.completion_tokens == null ? "n/a" : tokens(r.usage.completion_tokens)) },
     { k: "min", l: "Min", num: true, v: (r) => r.usage.wall_minutes ?? 1e9, cell: (r) => Math.round(r.usage.wall_minutes ?? 0) },
   ];
-  // Results detail for a model with independent repetitions: every declared attempt, attempt 1 ranked, the rest
-  // unranked. Eligible attempts switch the detail (Open in tracker then plays that attempt); the others are labels.
-  const attemptsPanel = (g, current, onShow) => h("section", { class: "panel raised" }, h("h2", {}, "Attempts"),
+  // Eligible ordinals switch the score breakdown; noneligible and superseded runs have labels without media.
+  const attemptsPanel = (g, current, onShow) => h("section", { class: "panel raised", "data-model": g.model_key }, h("h2", {}, bestOfThree ? `Attempts | ${scoredCount(g)}` : "Attempts"),
     h("div", { class: "att sunken" }, ...g.attempts.flatMap((a) => [
-      a.slug ? h("button", { class: "btn", "aria-pressed": String(a.slug === current), title: attemptTitle(a), onclick: () => onShow(a.slug) }, `Attempt ${a.ordinal}`)
-        : h("span", { class: "off", title: attemptTitle(a) }, `Attempt ${a.ordinal}`),
-      h("span", { class: a.slug ? (a.ranked ? null : "unranked") : "off", title: attemptTitle(a) }, attemptState(a)),
-      h("span", { style: { textAlign: "right", color: "#fff" } }, a.slug ? sc(a.score) : ""),
+      a.eligible && a.slug ? h("button", { class: "btn", "data-attempt": a.ordinal, "aria-pressed": String(a.slug === current), title: attemptTitle(a), onclick: () => onShow(a.slug) }, `Attempt ${a.ordinal}`)
+        : h("span", { class: "off", "data-attempt": a.ordinal, title: attemptTitle(a) }, `Attempt ${a.ordinal}`),
+      h("span", { class: a.eligible && a.slug ? (a.ranked ? null : "unranked") : "off", title: attemptTitle(a) }, attemptState(a)),
+      h("span", { style: { textAlign: "right", color: "#fff" } }, a.eligible && a.slug ? sc(a.score) : ""),
+      ...(bestOfThree ? [h("span", { class: "off", style: { gridColumn: "1 / -1", whiteSpace: "normal" } }, attemptMetadata(a))] : []),
       ...(a.superseded ?? []).flatMap((s, i) => [h("span", {}), h("span", { class: "off", style: { gridColumn: "2 / -1", whiteSpace: "normal" } }, supersededLabel(s, i))])])),
     ...attemptedOutside(g).map((o) => h("p", { class: "note" }, outsideNote(o))),
-    g.rerun_queue ? h("p", { class: "note" }, "Provider-limit, infrastructure and unstarted attempts were rerun in a later rerun queue. Each attempt shows its last run; superseded runs have no media.") : null,
-    h("p", { class: "note" }, "Ranked by attempt 1 only. Later attempts are independent predetermined repetitions under the same frozen condition, never ranked or combined with attempt 1. Pick an attempt to show it; Open in tracker plays it."));
+    g.rerun_queue ? h("p", { class: "note" }, "Provider-limit, infrastructure and unstarted attempts were rerun in a later rerun queue. Each ordinal shows its last run; superseded runs have no media and do not add attempts.") : null,
+    h("p", { class: "note" }, bestOfThree
+      ? "Best of 3 ranks the highest eligible score from the three predetermined ordinals. Ties select the lowest ordinal. Pick any scored attempt to show its breakdown; Open in tracker plays it. VM placement is provenance only and has no ranking effect."
+      : "Ranked by attempt 1 only. Later attempts are independent predetermined repetitions under the same frozen condition, never ranked or combined with attempt 1. Pick an attempt to show it; Open in tracker plays it."));
   function ranking() {
     main.style.gridTemplateColumns = "minmax(0,1fr) clamp(160px, 27%, 200px)";
     main.style.gridTemplateRows = "auto auto minmax(0,1fr)";
-    // The table lists ranked rows only; a later attempt opened by link selects its ranked row and shows itself in the detail.
-    if (data.bySlug[S.sel]?.attempt_of) { S.shown = S.sel; S.sel = data.bySlug[S.sel].attempt_of; }
-    const makerDD = dropdown({ label: "Maker", items: [{ value: "All", label: "All makers" }, ...makerItems(data)], value: S.maker, width: 130, onChange: (mk) => { S.maker = mk; renderTable(); } });
+    if (bestOfThree && !data.bySlug[S.sel] && !pendingGroup(S.sel)) {
+      const firstPending = groups.find((g) => g.cohort_key === S.cohort && eligibleCount(g) === 0);
+      S.sel = data.listed.find((r) => r.cohort?.key === S.cohort)?.slug ?? (firstPending ? pendingKey(firstPending) : S.sel);
+    }
+    // Alternate-attempt links select the model's ranked row while keeping the requested attempt in detail.
+    if (alternateAttempt(data.bySlug[S.sel] ?? {})) { S.shown = S.sel; S.sel = data.bySlug[S.sel].attempt_of; }
+    const makerDD = dropdown({ label: "Maker", items: [{ value: "All", label: "All makers" }, ...(bestOfThree ? [...new Set([...data.makers.map((m) => m.name), ...groups.map((g) => g.maker)])].sort().map((maker) => ({ value: maker, label: maker, badge: maker })) : makerItems(data))], value: S.maker, width: 130, onChange: (mk) => { S.maker = mk; renderTable(); } });
     // The toggle only filters pilot/exhibition rows; without any it would advertise a cohort that is not published.
     const exh = data.runs.some((r) => r.exhibition) ? h("button", { class: "btn", "aria-pressed": String(S.exh), style: { height: "14px" }, onclick: (e) => { S.exh = !S.exh; e.currentTarget.setAttribute("aria-pressed", String(S.exh)); renderTable(); } }, native ? "Pilot" : "Exhibitions") : null;
     // One table per cohort: max-tier and provider-default results are never listed or ranked together.
@@ -410,11 +445,15 @@ export async function mount(root, ctx) {
     const cohortHead = h("h2", {});
     const cohortDD = cohorts.length > 1 ? dropdown({ label: "Cohort", items: cohorts.map((c) => ({ value: c.key, label: c.label })), value: S.cohort, width: 260, onChange: (key) => {
       S.cohort = key;
-      if (data.bySlug[S.sel]?.cohort?.key !== key) { S.sel = data.listed.find((r) => r.cohort?.key === key)?.slug ?? S.sel; S.shown = null; }
+      if (data.bySlug[S.sel]?.cohort?.key !== key) {
+        const pending = groups.find((g) => g.cohort_key === key && eligibleCount(g) === 0);
+        S.sel = data.listed.find((r) => r.cohort?.key === key)?.slug ?? (pending ? pendingKey(pending) : S.sel);
+        S.shown = null;
+      }
       renderTable(); renderDetail();
     } }) : null;
     const tbody = h("tbody"), thead = h("thead"), colgroup = h("colgroup");
-    const counts = (c) => native ? `${[`${c.main_first_successes} original`, c.native_continuation_successes ? `${c.native_continuation_successes} new` : null, c.archive_only_recoveries ? `${c.archive_only_recoveries} recovery` : null, c.rerun_queue_additions ? `${c.rerun_queue_additions} added in rerun queue` : null].filter(Boolean).join(" + ")} | 1 quality sample each | diagnostics, not ranks` : `${data.runs.filter((r) => r.rank).length} ranked | 1 attempt per model`;
+    const counts = (c) => bestOfThree ? `${data.listed.filter((r) => r.ranked && (!S.cohort || r.cohort?.key === S.cohort)).length} ranked | best of 3 | ${groups.filter((g) => !g.attempts.some((a) => a.eligible) && (!S.cohort || g.cohort_key === S.cohort)).length} pending` : native ? `${[`${c.main_first_successes} original`, c.native_continuation_successes ? `${c.native_continuation_successes} new` : null, c.archive_only_recoveries ? `${c.archive_only_recoveries} recovery` : null, c.rerun_queue_additions ? `${c.rerun_queue_additions} added in rerun queue` : null].filter(Boolean).join(" + ")} | 1 quality sample each | diagnostics, not ranks` : `${data.runs.filter((r) => r.rank).length} ranked | 1 attempt per model`;
     const countsText = h("span", { class: "shadow-text", style: { whiteSpace: "nowrap" }, title: data.limitations?.join("\n") });
     const detail = h("div", { class: "ft2-scroll detail", style: { gridColumn: "2", gridRow: "1 / span 3", display: "flex", flexDirection: "column", gap: "1px", minHeight: "0", overflowY: "auto" } });
     const top3 = h("section", { style: { gridColumn: "1", display: "grid", gridTemplateColumns: "repeat(3, minmax(0,1fr))", gap: "1px" } });
@@ -430,27 +469,39 @@ export async function mount(root, ctx) {
     function renderTable() {
       const cohort = cohortOf(S.cohort);
       const col = COLS.find((c) => c.k === S.sort) ?? COLS[1];
-      cohortHead.textContent = cohort ? `${cohort.label}${cohort.main_model_roster ? ` | ${cohort.results}/${cohort.main_model_roster + (cohort.roster_additions ?? 0)} with a valid result` : ""}` : "";
+      cohortHead.textContent = cohort ? `${cohort.label}${cohort.main_model_roster ? ` | ${cohort.results}/${cohort.main_model_roster + (cohort.roster_additions ?? 0)} with ${bestOfThree ? "an eligible" : "a valid"} result` : ""}` : "";
       countsText.textContent = counts(cohort?.selection_counts ?? data.selection_counts);
       const runs = data.listed.filter((r) => (S.maker === "All" || r.maker === S.maker) && (S.exh || !r.exhibition) && (!cohort || r.cohort?.key === cohort.key));
       const list = runs.slice().sort((a, b) => { const x = col.v(a), y = col.v(b); const d = x < y ? -1 : x > y ? 1 : 0; return (S.asc ? d : -d) || b.score - a.score; });
-      colgroup.replaceChildren(...COLS.map((c) => h("col", { class: "c-" + c.k })));
+      colgroup.replaceChildren(...COLS.map((c) => h("col", { class: "c-" + c.k, style: c.width ? { width: c.width + "px" } : null })));
       thead.replaceChildren(h("tr", {}, ...COLS.map((c) => h("th", {
         class: c.num ? "num" : null, "aria-sort": c.k === S.sort ? (S.asc ? "ascending" : "descending") : null,
         onclick: () => { if (S.sort === c.k) S.asc = !S.asc; else { S.sort = c.k; S.asc = ["rank", "name", "cost", "min", "out"].includes(c.k); } renderTable(); },
       }, c.l + (c.k === S.sort ? (S.asc ? " \u25B2" : " \u25BC") : "")))));
       tbody.replaceChildren(...list.map((r) => h("tr", { class: (r.slug === S.sel ? "sel " : "") + (r.exhibition ? "exh" : ""), onclick: () => select(r.slug), ondblclick: () => ctx.go({ page: "viewer", run: r.slug }) },
         ...COLS.map((c) => h("td", { class: [c.num ? "num" : "", c.cls ?? ""].join(" ") }, c.cell ? c.cell(r) : c.v(r))))));
-      top3.replaceChildren(...list.filter((r) => !r.exhibition && !r.failed).slice(0, 3).map((r, i) => h("div", { class: "panel raised", style: { flexDirection: "row", alignItems: "center", gap: "5px", cursor: "pointer" }, onclick: () => select(r.slug) },
+      if (bestOfThree) tbody.append(...groups.filter((g) => !g.attempts.some((a) => a.eligible) && (S.maker === "All" || g.maker === S.maker) && (!cohort || g.cohort_key === cohort.key)).map((g) =>
+        h("tr", { class: pendingKey(g) === S.sel ? "sel" : "", "data-pending-model": g.model_key, title: pendingReason(g), onclick: () => select(pendingKey(g)) },
+          ...COLS.map((c) => h("td", { class: [c.num ? "num" : "", c.cls ?? ""].join(" ") },
+            c.k === "name" ? h("div", { class: "nmc" }, badge(g.maker), h("span", { class: "nmt" }, g.name))
+              : c.k === "score" ? "Pending" : c.k === "scored" ? `${eligibleCount(g)}/${g.declared}` : "--")))));
+      top3.replaceChildren(...list.filter((r) => !r.exhibition && !r.failed).sort((a, b) => bestOfThree ? a.rank - b.rank : 0).slice(0, 3).map((r, i) => h("div", { class: "panel raised", style: { flexDirection: "row", alignItems: "center", gap: "5px", cursor: "pointer" }, onclick: () => select(r.slug) },
         h("div", { class: "grow", style: { display: "grid", gap: "2px", minWidth: "0" } },
           h("div", { class: "row", style: { gap: "4px" } },
-            h("span", { class: "big" }, native ? "A" + r.provenance.attempt_ordinal : String(i + 1)),
+            h("span", { class: "big" }, native && !bestOfThree ? "A" + r.provenance.attempt_ordinal : String(r.rank ?? i + 1)),
             h("img", { class: "badge", src: badge(r.maker).src, style: { width: "20px", height: "20px" }, alt: "" }),
             h("span", { class: "grow" }), h("span", { class: "big" }, r.score.toFixed(1))),
-          h("div", { class: "shadow-text pod-name" }, r.name),
+          h("div", { class: "shadow-text pod-name" }, modelName(r)),
           h("div", { style: { color: "var(--dim)", whiteSpace: "nowrap" } }, `${money(r.cost_usd)} | ${Math.round(r.usage.wall_minutes)} min`)))));
     }
     function renderDetail() {
+      const pending = pendingGroup(S.sel);
+      if (pending) {
+        detail.replaceChildren(
+          h("section", { class: "panel raised" }, h("h2", {}, pending.name), h("p", { class: "note" }, `Pending | ${scoredCount(pending)}. No eligible result; no score or media.`), h("p", { class: "note" }, pendingReason(pending)), h("p", { class: "note" }, pending.tier)),
+          attemptsPanel(pending, null, () => {}));
+        return;
+      }
       const r = data.bySlug[S.shown ?? S.sel];
       const g = groupOf[r.slug];
       const w = r.loop.worst;
@@ -462,14 +513,17 @@ export async function mount(root, ctx) {
         ...(g ? [attemptsPanel(g, r.slug, (s2) => { S.shown = s2 === S.sel ? null : s2; renderDetail(); })] : []),
         h("section", { class: "panel raised" }, h("h2", {}, "Run"),
           kv([
-            [native ? "Selection" : "Rank", selection(r)],
+            [native && !bestOfThree ? "Selection" : "Rank", selection(r)],
             ["Maker", r.maker], ["Condition", r.tier], ["Cohort", r.cohort?.label], ["Wall time", r.usage.wall_minutes + " min"],
+            ["Provider", r.provenance?.provider], ["Output cap", r.provenance?.output_cap == null ? null : `${r.provenance.output_cap} tokens`],
+            ...(g ? [["Attempt", `${attemptOf(r).ordinal}/${g.declared}`], ["Scored", scoredCount(g)]] : []),
+            ...(bestOfThree ? [["VM placement", transportText(r.provenance?.transport ?? attemptTransport(attemptOf(r) ?? {}))]] : []),
             ...(r.exhibition ? [["Chat turns", r.usage.turns], ["Commands", r.usage.commands]] : [["Requests", r.usage.requests], ["Commands", r.usage.commands]]),
             ["In tokens", tokens(r.usage.prompt_tokens)], ["- cached", tokens(r.usage.cached_tokens)],
             ["Out tokens", tokens(r.usage.completion_tokens)], ["- reasoning", tokens(r.usage.reasoning_tokens)],
             ["Est. cost", money(r.cost_usd)],
           ]),
-          r.attempt_of ? h("p", { class: "note unranked" }, unrankedNote(r)) : null,
+          alternateAttempt(r) ? h("p", { class: "note unranked" }, unrankedNote(r)) : null,
           r.exhibition ? h("p", { class: "note" }, native ? "Separate musical pilot. Excluded from main-campaign counts. Its number is an auxiliary diagnostic, not a rank." : "Run by hand in the chat app: it reports no token counts and has no per-token price. Not ranked.") : null,
           r.provenance?.recovery_note ? h("p", { class: "note" }, r.provenance.recovery_note) : null,
           r.provenance?.continuation_note ? h("p", { class: "note" }, r.provenance.continuation_note) : null,
@@ -513,6 +567,7 @@ export async function mount(root, ctx) {
       { id: "checks", label: "Checks", render: () => SCORING.filter((m) => m.kind !== "points").flatMap(measure) },
       { id: "example", label: "Worked example", render: () => [head("Worked example"), para("Every run's score, step by step. Pick any run."), worked(exampleRun())] },
       { id: "notes", label: "Fine print", render: () => SCORING_NOTES.flatMap((n) => [head(n.title), para(n.text),
+        n.url ? h("p", {}, h("a", { href: n.url, target: "_blank", rel: "noopener" }, "Microck/keygen-bench#21")) : null,
         n.id === "flags" ? h("table", { class: "plain" }, ...Object.entries(data.flag_rules).filter(([kk]) => kk !== "RAW_XM").map(([kk, v]) => h("tr", {}, h("td", { style: { color: "#FFAA00", whiteSpace: "nowrap", verticalAlign: "top" } }, SHORT[kk] ?? kk), h("td", { style: { color: "#fff" } }, v)))) : null]) },
     ];
     const toc = h("nav", { class: "panel raised toc", "aria-label": "Sections" }, h("h2", {}, "Help subjects"));
@@ -545,7 +600,7 @@ export async function mount(root, ctx) {
       ];
       holder.replaceChildren(
         h("div", { class: "row", style: { gap: "4px", margin: "2px 0 6px" } }, h("span", {}, "Pick a run:"),
-          dropdown({ label: "Example run", items: data.runs.filter((x) => !x.failed).map((x) => ({ value: x.slug, label: x.name + (x.attempt_of ? ", not ranked" : ""), badge: x.maker, right: x.score.toFixed(1) })), value: run.slug, width: 220, onChange: (s2) => render(data.bySlug[s2]) })),
+          dropdown({ label: "Example run", items: data.runs.filter((x) => !x.failed).map((x) => ({ value: x.slug, label: modelName(x) + (groupOf[x.slug] ? `, attempt ${attemptOf(x).ordinal}` : "") + (x.attempt_of ? ", not ranked" : ""), badge: x.maker, right: x.score.toFixed(1) })), value: run.slug, width: 220, onChange: (s2) => render(data.bySlug[s2]) })),
         h("table", { class: "plain" }, ...rows.map(([a, b]) => h("tr", {},
           h("td", { style: { color: a.startsWith("=") ? "#fff" : null } }, a),
           h("td", { style: { color: "#fff", textAlign: "right" } }, b)))));
@@ -568,7 +623,7 @@ export async function mount(root, ctx) {
       const available = new Set(members.filter((run) => run.provenance.scope !== "pilot").map((run) => run.model_key));
       const retainedPilot = new Set(members.filter((run) => run.provenance.scope === "pilot").map((run) => run.model_key));
       const excluded = (data.excluded_models ?? []).filter((model) => inCohort(model.cohort_key, cohort.key));
-      return { cohort, roster, excluded, pending: roster.filter((model) => !available.has(model.model_key) && !retainedPilot.has(model.model_key)) };
+      return { cohort, roster, excluded, pending: bestOfThree ? groups.filter((g) => inCohort(g.cohort_key, cohort.key) && eligibleCount(g) === 0) : roster.filter((model) => !available.has(model.model_key) && !retainedPilot.has(model.model_key)) };
     });
     const named = states.length > 1;
     main.replaceChildren(
@@ -576,6 +631,12 @@ export async function mount(root, ctx) {
         h("h2", {}, "Current campaign snapshot"),
         h("div", { class: "well sunken" },
           ...states.map(({ cohort, roster, pending, excluded }) => {
+            if (bestOfThree) {
+              const members = groups.filter((g) => inCohort(g.cohort_key, cohort.key));
+              const ranked = members.filter((g) => eligibleCount(g) > 0).length;
+              const pendingCount = members.length - ranked;
+              return h("p", {}, `${named ? cohort.label + ": " : ""}${ranked}/${members.length} models have an eligible result, ranked best of 3. ${pendingCount} ${pendingCount === 1 ? "model is" : "models are"} pending. Scored counts and the reason for every unscored ordinal appear in each model's attempts.`);
+            }
             const c = cohort.selection_counts ?? data.selection_counts;
             const items = [`${c.main_first_successes} original first successes`, c.native_continuation_successes ? `${c.native_continuation_successes} native continuation results` : null,
               c.archive_only_recoveries ? `${c.archive_only_recoveries} archive-only ${c.archive_only_recoveries === 1 ? "recovery" : "recoveries"}` : null,
@@ -584,17 +645,22 @@ export async function mount(root, ctx) {
             const withheld = excluded.length ? `; ${excluded.length} more ${excluded.length === 1 ? "model was" : "models were"} excluded before launch` : "";
             const added = cohort.roster_additions ? ` plus ${cohort.roster_additions} ${cohort.roster_additions === 1 ? "model" : "models"} added in the rerun queue after requalification` : "";
             return h("p", {}, `${named ? cohort.label + ": " : ""}${list} are available from the ${roster.length - (cohort.roster_additions ?? 0)}-model main roster${added}. ${pending.length} models have no eligible published output${withheld}.`); }),
-          ...cohorts.filter((cohort) => cohort.repetitions).map((cohort) => { const n = cohort.repetitions, q = n.rerun_queue; return h("p", {}, `${named ? cohort.label + ": " : ""}Ranked by attempt 1 only. ${n.models} models also ran later predetermined independent repetitions under the same frozen condition; ${n.unranked_playable_attempts} of those later attempts are eligible and playable from the attempt switcher, labeled not ranked.${q ? ` A later rerun queue reran provider-limit, infrastructure and unstarted attempts of ${q.models} models: ${q.rerun_attempts} ${q.rerun_attempts === 1 ? "attempt shows its" : "attempts show their"} rerun; ${q.pending_reruns} ${q.pending_reruns === 1 ? "is" : "are"} still running or awaiting a run.` : ""}`); }),
+          ...cohorts.filter((cohort) => cohort.repetitions).map((cohort) => {
+            const n = cohort.repetitions, q = n.rerun_queue;
+            return h("p", {}, bestOfThree
+              ? `${named ? cohort.label + ": " : ""}Best of 3 ranks each model's highest eligible score from three predetermined ordinals. All eligible ordinals remain playable with separate score breakdowns. Infrastructure reruns replace an ordinal, never add an attempt.`
+              : `${named ? cohort.label + ": " : ""}Ranked by attempt 1 only. ${n.models} models also ran later predetermined independent repetitions under the same frozen condition; ${n.unranked_playable_attempts} of those later attempts are eligible and playable from the attempt switcher, labeled not ranked.${q ? ` A later rerun queue reran provider-limit, infrastructure and unstarted attempts of ${q.models} models: ${q.rerun_attempts} ${q.rerun_attempts === 1 ? "attempt shows its" : "attempts show their"} rerun; ${q.pending_reruns} ${q.pending_reruns === 1 ? "is" : "are"} still running or awaiting a run.` : ""}`);
+          }),
           ...pilots.map((run) => h("p", {}, `${run.name} is retained as a pilot-only result, outside main counts. This preview does not request another attempt for it.`)),
           h("p", {}, "No donation totals or confirmed payment links are published in this preview. Funding and availability can block unfinished work; no missing model receives a fabricated zero score."))),
-      ...(groups.length ? [h("section", { class: "panel raised", style: { gridColumn: "1 / -1" } }, h("h2", {}, "Every attempt (only attempt 1 is ranked)"),
+      ...(groups.length ? [h("section", { class: "panel raised", style: { gridColumn: "1 / -1" } }, h("h2", {}, bestOfThree ? "Every attempt | best of 3" : "Every attempt (only attempt 1 is ranked)"),
         h("div", { class: "well sunken ft2-scroll" }, ...groups.flatMap((g) => [
-          h("p", { style: { margin: attemptedOutside(g).length ? "0" : null } }, h("span", { style: { color: "#fff" } }, `${g.name}: `), g.attempts.map((a) => `${attemptLabel(a)}${a.slug ? " " + sc(a.score) : ""}${a.superseded?.length ? ` [${a.superseded.map(supersededLabel).join("; ")}]` : ""}`).join(" | ")),
+          h("p", { style: { margin: attemptedOutside(g).length ? "0" : null } }, h("span", { style: { color: "#fff" } }, `${g.name}${bestOfThree ? ` (${scoredCount(g)})` : ""}: `), g.attempts.map((a) => `${attemptLabel(a)}${a.eligible && a.slug ? " " + sc(a.score) : ""}${a.superseded?.length ? ` [${a.superseded.map(supersededLabel).join("; ")}]` : ""}`).join(" | ")),
           ...attemptedOutside(g).map((o, i, all) => h("p", { class: "muted", style: { margin: i === all.length - 1 ? null : "0" } }, outsideNote(o)))])))] : []),
       h("section", { class: "panel raised" }, h("h2", {}, "Pending: no eligible result"),
         h("div", { class: "well sunken ft2-scroll" }, ...states.flatMap(({ cohort, pending, excluded }) => [
           named && (pending.length || excluded.length) ? h("p", { style: { color: "#fff" } }, `${cohort.label} (state at metadata capture)`) : null,
-          ...pending.map((model) => h("p", {}, `${model.name}: ${model.reason ?? `original ${model.state}, ${model.attempts} historical attempts`}`)),
+          ...pending.map((model) => h("p", {}, `${model.name}: ${bestOfThree ? `${scoredCount(model)}; ${model.reason ?? pendingReason(model)}` : model.reason ?? `original ${model.state}, ${model.attempts} historical attempts`}`)),
           ...excluded.map((model) => h("p", {}, `${model.name}: excluded before launch, ${model.reason}`))]))),
       h("section", { class: "panel raised" }, h("h2", {}, "Publication limits"),
         h("div", { class: "well sunken ft2-scroll" }, ...data.limitations.map((note) => h("p", {}, note)))));
@@ -602,7 +668,7 @@ export async function mount(root, ctx) {
 
   // ---------------- Support ----------------
   function support() {
-    if (native) { currentSupport(); return; }
+    if (native || bestOfThree) { currentSupport(); return; }
     main.style.gridTemplateColumns = "minmax(0,1fr) minmax(0,1fr)";
     main.style.gridTemplateRows = "auto auto minmax(0,1fr)";
     const priced = data.runs.filter((r) => r.cost_usd != null);

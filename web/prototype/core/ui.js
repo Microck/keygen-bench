@@ -78,7 +78,7 @@ export function makerItems(data) {
 }
 export function modelItems(data, maker) {
   const mk = data.makers.find((m) => m.name === maker);
-  return (mk?.runs ?? []).map((r) => ({ value: r.slug, label: r.name + (r.exhibition && data.dataset_kind !== "native-first-success" ? " (exh)" : ""), right: r.score.toFixed(1) }));
+  return (mk?.runs ?? []).map((r) => ({ value: r.slug, label: r.name + (r.exhibition && data.dataset_kind !== "native-best-of-three" ? " (exh)" : ""), right: r.score.toFixed(1) }));
 }
 
 export function scoreColor(s) {

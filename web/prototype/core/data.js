@@ -15,7 +15,7 @@ export async function loadData(base = "./dist/") {
   }
   data.makers = [...byMaker.entries()]
     .map(([name, runs]) => ({ name, runs, best: Math.max(...runs.map((r) => r.score)) }))
-    .sort((a, b) => data.dataset_kind === "native-first-success" ? a.name.localeCompare(b.name) : b.best - a.best);
+    .sort((a, b) => data.dataset_kind === "native-best-of-three" ? a.name.localeCompare(b.name) : b.best - a.best);
   data.bySlug = Object.fromEntries(data.runs.map((r) => [r.slug, r]));
   return data;
 }
