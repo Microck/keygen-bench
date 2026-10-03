@@ -19,7 +19,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import campaign
 import run
-from native_models import MAX_TRANSPORT_RETRIES, build_probe_model, credential_target, digest, redact_credentials
+from native_models import BRIDGE_PROVIDERS, MAX_TRANSPORT_RETRIES, build_probe_model, credential_target, digest, redact_credentials
 
 MAX_ARTIFACT_BYTES = 16 * 1024 * 1024
 DEFAULT_LIMITS = {"steps": 5, "wall_seconds": 180, "command_seconds": 15}
@@ -98,14 +98,14 @@ def normalize_spec(spec: dict, bridge_executable: Path | None) -> dict:
     if revision is not None and (not isinstance(revision, str) or len(revision) > 200):
         raise ValueError("Invalid provider revision")
     bridge = backend["bridge"]
-    if model["provider"] in {"codex_oauth", "anthropic_oauth"}:
+    if model["provider"] in BRIDGE_PROVIDERS:
         if (not isinstance(bridge, dict) or set(bridge) != {"implementation", "version", "executable_sha256"}
                 or not isinstance(bridge["implementation"], str) or not bridge["implementation"]
                 or not isinstance(bridge["version"], str) or not bridge["version"]
                 or not re.fullmatch(r"[a-f0-9]{64}", bridge["executable_sha256"])):
-            raise ValueError("OAuth qualification requires exact executable provenance")
+            raise ValueError("Bridge qualification requires exact executable provenance")
         if bridge_executable is None or campaign.file_digest(bridge_executable) != bridge["executable_sha256"]:
-            raise ValueError("Actual OAuth bridge executable does not match declared provenance")
+            raise ValueError("Actual credential bridge executable does not match declared provenance")
     elif bridge is not None or bridge_executable is not None:
         raise ValueError("Direct routes must not introduce a bridge")
     # Do not carry a previous proof or a pretend verified flag into the bootstrap.
@@ -411,7 +411,7 @@ def qualify(spec_path: Path, root: Path, bridge_executable: Path | None = None) 
         if failure is not None or spec is None:
             raise ValueError("Readiness pilot failed")
         if bridge_executable is not None and campaign.file_digest(bridge_executable) != spec["model"]["backend_provenance"]["bridge"]["executable_sha256"]:
-            raise ValueError("OAuth bridge executable changed during qualification")
+            raise ValueError("Credential bridge executable changed during qualification")
         payload = verify_pilot(spec, root, marker)
     except Exception as exc:
         failure = failure or {"category": "native_proof_rejected", "exception_type": type(exc).__name__}
@@ -579,7 +579,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--spec", type=Path, help="Sanitized model/config/image pilot JSON")
     parser.add_argument("--out", type=Path, help="New proof output directory; never overwritten")
-    parser.add_argument("--bridge-executable", type=Path, help="Actual OAuth bridge executable to hash")
+    parser.add_argument("--bridge-executable", type=Path, help="Actual credential bridge executable to hash")
     parser.add_argument("--probe", choices=[PROBE_LONG_GENERATION],
                         help="Run a transport probe instead of readiness; writes probe.json, never readiness.json")
     parser.add_argument("--worker", type=Path, help=argparse.SUPPRESS)

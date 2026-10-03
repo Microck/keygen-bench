@@ -7,7 +7,7 @@ import subprocess
 import tempfile
 import threading
 import unittest
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import patch
@@ -44,7 +44,7 @@ MAX_TIER = {
 
 
 @contextmanager
-def peer(api, error=False, failures=(), truncated=False, refused=0):
+def peer(api, error=False, failures=(), truncated=False, refused=0, response_model=None):
     """failures: (status, message) replies sent before the normal reply, one per request.
 
     refused: Messages replies after the failures that Anthropic's content filter blocked
@@ -109,6 +109,8 @@ def peer(api, error=False, failures=(), truncated=False, refused=0):
                                         "arguments": '{"command":"echo ready"}', "status": "completed"}],
                             "usage": {"input_tokens": 11, "output_tokens": 7, "total_tokens": 18},
                             "tool_choice": "auto", "tools": payload["tools"]}
+            if response_model is not None and "model" in response:
+                response["model"] = response_model
             raw = json.dumps(response).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
@@ -156,20 +158,27 @@ class LocalShell:
 
 
 class NativeProtocolTests(unittest.TestCase):
-    def roundtrip(self, api, provider=None, name=None, tier=None):
+    def roundtrip(self, api, provider=None, name=None, tier=None, output_limit=4096, response_name=None, cap_key=None):
         provider = provider or {"chat": "go", "messages": "anthropic_oauth", "responses": "codex_oauth"}[api]
-        with tempfile.TemporaryDirectory() as temporary, peer(api) as (base, seen):
+        with tempfile.TemporaryDirectory() as temporary, peer(api, response_model=response_name) as (base, seen):
             root = Path(temporary)
             spec = model_spec(api, provider, base)
             name = name or {"chat": "kimi-k3", "messages": "claude-opus-4-8"}.get(api)
             if name:
                 spec["model"] = spec["response_model"] = name
+            if response_name is not None:
+                spec["response_model"] = response_name
+            default_cap = "max_output_tokens" if api == "responses" else "max_tokens"
+            cap_key = cap_key or default_cap
+            spec["generation"].pop(default_cap)
+            spec["generation"][cap_key] = output_limit
             level, reasoning = tier or MAX_TIER[api]
             tiered(spec, level, **reasoning)
             wire = native.transmitted_reasoning(spec)
-            # Only the third-party hostname is replaced. The real SDK, model, parser,
-            # serializer, request transformations, and history handling all execute.
-            with patch.object(native, "validate_url", return_value=base), worker_env(root, spec):
+            # Public endpoints use the synthetic peer; Devin exercises its real loopback URL
+            # validation too. SDK, model, parser, serialization and history all execute.
+            route = nullcontext() if provider == "devin" else patch.object(native, "validate_url", return_value=base)
+            with route, worker_env(root, spec):
                 model = native.build_probe_model(CONFIG, spec, root)
                 from minisweagent.agents.default import DefaultAgent
                 agent = DefaultAgent(model, LocalShell(root), system_template="Frozen system",
@@ -198,6 +207,7 @@ class NativeProtocolTests(unittest.TestCase):
                 self.assertEqual(len(seen), 2)
                 for _, payload in seen:
                     self.assertEqual({k: payload.get(k) for k in wire}, wire)
+                    self.assertEqual(payload[cap_key], output_limit)
                     self.assertNotIn("extra_body", payload)
                     if api == "chat":
                         self.assertEqual(payload["messages"][0]["role"], "system")
@@ -208,7 +218,7 @@ class NativeProtocolTests(unittest.TestCase):
                     self.assertTrue(any(item.get("type") == "function_call_output"
                                         and item.get("call_id") == "call-1" and "ready" in item["output"]
                                         for item in history))
-                    self.assertEqual(seen[0][1]["max_output_tokens"], 4096)
+                    self.assertEqual(seen[0][1]["max_output_tokens"], output_limit)
                 elif api == "messages":
                     self.assertEqual(seen[1][0], "/v1/messages")
                     blocks = [block for item in seen[1][1]["messages"] for block in item["content"]]
@@ -225,6 +235,48 @@ class NativeProtocolTests(unittest.TestCase):
 
     def test_chat_native_history(self):
         self.roundtrip("chat")
+
+    def test_devin_chat_native_max_effort_and_default_history(self):
+        for name, tier in (("gpt-oss-120b", ("max", {"reasoning_effort": "max"})),
+                           ("kimi-k2.7", ("none-available", {}))):
+            with self.subTest(name=name, tier=tier[0]):
+                _, seen, _ = self.roundtrip("chat", "devin", f"devin/{name}", tier,
+                                            output_limit=64000, response_name=name)
+                if tier[0] == "none-available":
+                    for _, payload in seen:
+                        self.assertNotIn("reasoning_effort", payload)
+                        self.assertNotIn("reasoning", payload)
+
+    def test_devin_gpt_catalog_xhigh_reaches_chat_without_rerouting(self):
+        for name in ("gpt-5-4", "gpt-5-4-mini", "gpt-5-3-codex"):
+            with self.subTest(name=name):
+                self.roundtrip("chat", "devin", f"devin/{name}",
+                               ("xhigh", {"reasoning_effort": "xhigh"}), output_limit=64000,
+                               response_name=name, cap_key="max_completion_tokens")
+
+    def test_devin_gpt_capability_is_exact_route_and_effort(self):
+        for provider, base, effort in (("devin", "http://127.0.0.1:8417/v1", "high"),
+                                       ("go", "https://opencode.ai/zen/go/v1", "xhigh")):
+            spec = tiered(model_spec("chat", provider, base), effort, reasoning_effort=effort)
+            spec["model"] = spec["response_model"] = "devin/gpt-5-4"
+            spec["generation"]["max_completion_tokens"] = spec["generation"].pop("max_tokens")
+            with self.subTest(provider=provider, effort=effort), self.assertRaises(ValueError):
+                native.validate_model(CONFIG, spec)
+
+    def test_devin_response_identity_is_not_inferred_from_request(self):
+        with tempfile.TemporaryDirectory() as temporary, peer("chat", response_model="other-model") as (base, seen):
+            root = Path(temporary)
+            spec = tiered(model_spec("chat", "devin", base), "max", reasoning_effort="max")
+            spec["model"] = "devin/exact-model"
+            spec["response_model"] = "exact-model"
+            with worker_env(root, spec):
+                model = native.build_probe_model(CONFIG, spec, root)
+                message = model.query([{"role": "user", "content": "Use bash"}])
+            self.assertEqual(native.audit_messages([message], spec)[0]["identity_status"], "identity_mismatch")
+            transport = [json.loads(line) for line in (root / "transport.jsonl").read_text().splitlines()]
+            self.assertEqual(transport[-1]["response_model"], "other-model")
+            self.assertEqual(transport[-1]["identity_status"], "identity_mismatch")
+            self.assertEqual(seen[0][1]["model"], "devin/exact-model")
 
     def test_go_glm_chat_drops_only_the_sdk_synthesized_assistant_key(self):
         # The SDK wraps its own refusal=None as provider_specific_fields; Go's GLM upstream rejects
@@ -489,7 +541,7 @@ class NativePolicyTests(unittest.TestCase):
             native.validate_model(CONFIG, spec)
 
     def test_keys_and_unapproved_routes_are_rejected(self):
-        for provider in ("zen", "kimi_pool", "gemini_bridge", "devin"):
+        for provider in ("zen", "kimi_pool", "gemini_bridge", "unknown"):
             with self.subTest(provider=provider), self.assertRaises(ValueError):
                 native.validate_model(CONFIG, model_spec(provider=provider))
         spec = model_spec()
@@ -500,6 +552,19 @@ class NativePolicyTests(unittest.TestCase):
                     "http://secret@127.0.0.1:8417/v1", "https://opencode.ai/zen/v1"):
             with self.subTest(url=url), self.assertRaises(ValueError):
                 native.validate_url(url, "codex_oauth")
+
+    def test_devin_credential_route_rejects_nonloopback_and_wrong_protocols(self):
+        spec = model_spec("chat", "devin")
+        spec["model"] = spec["response_model"] = "devin/exact-model"
+        for base in ("https://devin.ai/v1", "http://localhost:8417/v1", "http://100.92.22.120:8417/v1",
+                     "http://127.0.0.1/v1", "http://127.0.0.1:8417", "http://127.0.0.1:8417/v1?key=secret",
+                     "http://secret@127.0.0.1:8417/v1", "http://127.0.0.1:8417/v1#key"):
+            with (self.subTest(base=base), patch.dict(os.environ, {"BENCHMARK_TEST_KEY": "synthetic-only"}),
+                  self.assertRaises(ValueError)):
+                native.credential_env(CONFIG, {**spec, "base_url": base})
+        for api in ("messages", "responses"):
+            with self.subTest(api=api), self.assertRaisesRegex(ValueError, "protocol"):
+                native.validate_model(CONFIG, {**spec, "api": api})
 
     def test_redaction_covers_nested_exception_and_response_echoes(self):
         value = {"messages": [{"extra": {"traceback": "token=secret"}}], "secret": "secret"}
@@ -525,10 +590,13 @@ class NativePolicyTests(unittest.TestCase):
                 native.validate_model(CONFIG, spec)
 
     def test_chat_route_that_sdk_would_reroute_to_responses_is_rejected(self):
-        spec = tiered(model_spec("chat", "vercel", "https://ai-gateway.vercel.sh/v1"), "xhigh", reasoning_effort="xhigh")
-        spec["model"] = spec["response_model"] = "openai/gpt-5.4"
-        with self.assertRaisesRegex(ValueError, "Responses"):
-            native.validate_model(CONFIG, spec)
+        for provider, base in (("vercel", "https://ai-gateway.vercel.sh/v1"),
+                               ("devin", "http://127.0.0.1:8417/v1")):
+            spec = tiered(model_spec("chat", provider, base), "xhigh", reasoning_effort="xhigh")
+            spec["model"] = spec["response_model"] = "openai/gpt-5.4"
+            spec["generation"]["max_completion_tokens"] = spec["generation"].pop("max_tokens")
+            with self.subTest(provider=provider), self.assertRaises(ValueError):
+                native.validate_model(CONFIG, spec)
 
     def test_anthropic_effort_rejected_where_native_sdk_would_refuse_it(self):
         spec = tiered(model_spec("messages", "anthropic_oauth"), "max", output_config={"effort": "max"})

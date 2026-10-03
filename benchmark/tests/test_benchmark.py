@@ -94,6 +94,38 @@ class BenchmarkTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "readiness"):
             self.compile()
 
+    def test_devin_compilation_freezes_alias_response_identity_bridge_and_concurrency(self):
+        self.model.update(provider="devin", model="devin/exact-model",
+                          base_url="http://127.0.0.1:8417/v1", api_key_env="DEVIN_BRIDGE_API_KEY")
+        self.model["backend_provenance"]["bridge"] = {
+            "implementation": "CLIProxyAPI", "version": "synthetic", "executable_sha256": "d" * 64}
+        self.inventory["models"][0].update(provider="Devin", proxy_request_model="devin/exact-model")
+        self.tier_spec_path.write_text(json.dumps({"entries": [
+            {"provider": "devin", "api": "chat", "model": "devin/exact-model", "tier": "max",
+             "reasoning": {"reasoning_effort": "max"}}]}))
+        self.model["tier"]["spec_sha256"] = campaign.file_digest(self.tier_spec_path)
+        self.proof["route"] = {key: self.model[key] for key in
+                              ("provider", "api", "base_url", "model", "response_model", "backend_provenance")}
+        self.proof["effective_settings"] = campaign.normalize_native(self.selection, [self.model])[0]
+        self.proof_path.write_text(json.dumps(self.proof))
+        self.model["readiness"]["evidence"]["artifact_sha256"] = campaign.file_digest(self.proof_path)
+        compiled = self.compile()
+        self.assertEqual(compiled["models"][0]["model"], "devin/exact-model")
+        self.assertEqual(compiled["models"][0]["response_model"], "exact-model")
+        for mutation in ("bridge", "request_identity", "response_identity", "concurrency"):
+            changed = copy.deepcopy(compiled)
+            if mutation == "bridge":
+                changed["models"][0]["backend_provenance"]["bridge"] = None
+                expected = "Bridge route"
+            elif mutation == "concurrency":
+                del changed["concurrency"]["providers"]["devin"]
+                expected = "every provider"
+            else:
+                changed["models"][0]["model" if mutation == "request_identity" else "response_model"] = "other-model"
+                expected = "identity differs"
+            with self.subTest(mutation=mutation), self.assertRaisesRegex(ValueError, expected):
+                campaign.validate(changed, check_provenance=False)
+
     def test_claimed_readiness_without_real_proof_file_rejected(self):
         self.proof_path.unlink()
         with self.assertRaisesRegex(ValueError, "existing bounded"):
