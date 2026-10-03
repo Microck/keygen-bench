@@ -30,7 +30,7 @@ import wave
 # Explicit project import only; also works with `python -I benchmark/run.py`.
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
-from native_models import build_model, audit_messages, redact_credentials, classify_error, validate_url, _native, PROVIDERS, PROTOCOLS
+from native_models import build_model, audit_messages, redact_credentials, classify_error, validate_url, _native, PROVIDERS, PROTOCOLS, sdk_prefix, credential_target
 import campaign
 
 MINI_VERSION = "2.4.6"
@@ -400,13 +400,12 @@ def worker_credentials(config: dict, model: dict, key_name: str | None = None) -
         raise ValueError("Credential resolution requires validated native constructor metadata")
     native_name = effective["model_name"]
     prefix = native_name.split("/", 1)[0]
-    expected = "anthropic" if api == "messages" else "openai"
-    if prefix != expected or native_name != f"{prefix}/{model.get('model')}":
+    if prefix != sdk_prefix(model) or native_name != f"{prefix}/{model.get('model')}":
         raise ValueError("Credential target differs from the validated native constructor")
     value = os.environ.get(key_name)
     if not value:
         raise ValueError(f"Missing credential environment variable {key_name}")
-    return {f"{prefix.upper()}_API_KEY": value,
+    return {credential_target(model): value,
             "MSWEA_MODEL_RETRY_STOP_AFTER_ATTEMPT": "1",
             "LITELLM_MODE": "PRODUCTION", "LITELLM_LOCAL_MODEL_COST_MAP": "True"}
 
@@ -487,7 +486,7 @@ def worker(spec_path: Path) -> None:
     from minisweagent.agents.default import DefaultAgent
     if __version__ != MINI_VERSION:
         raise RuntimeError("mini-swe-agent version mismatch")
-    target = "ANTHROPIC_API_KEY" if model["api"] == "messages" else "OPENAI_API_KEY"
+    target = credential_target(model)
     secrets = [os.environ[target]]
     agent = None
     try:
