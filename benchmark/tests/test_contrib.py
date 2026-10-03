@@ -176,6 +176,59 @@ class ContribTests(unittest.TestCase):
         status = json.loads((self.bundle / 'attempt-1/status.json').read_text())
         self.assertIsNone(validator.public_status(status)['totals']['model_seconds'])
 
+    def test_direct_and_custom_public_route_provenance(self):
+        original = json.loads((self.bundle / 'manifest.json').read_text())
+        for provider, api, base in (
+                ('openai', 'chat', 'https://api.openai.com/v1'),
+                ('openai', 'responses', 'https://api.openai.com/v1'),
+                ('anthropic', 'messages', 'https://api.anthropic.com/v1'),
+                ('custom', 'chat', 'https://api.example.com/custom/v1'),
+                ('custom', 'responses', 'https://api.example.com/custom/v1'),
+                ('custom', 'messages', 'https://api.example.com/custom/v1')):
+            with self.subTest(provider=provider, api=api):
+                manifest = copy.deepcopy(original)
+                environment = manifest['environment']
+                model = environment['model']
+                generation = {'max_output_tokens' if api == 'responses' else 'max_tokens': 4096}
+                model.update(provider=provider, api=api, base_url=base, generation=generation)
+                model['tier'] = {
+                    'level': 'none-available', 'reasoning': {},
+                    'spec_sha256': validator.campaign.digest(
+                        {'source': environment['tier_source'], 'level': 'none-available',
+                         'generation': generation})}
+                published = validator.public_model(model)
+                self.assertEqual(published['base_url'], base)
+                self.assertNotIn('bridge', published)
+                environment['model'] = published
+                for attempt in validator.ATTEMPTS:
+                    directory = self.bundle / attempt
+                    validator.write_json(directory / 'environment.json', environment)
+                    status = json.loads((directory / 'status.json').read_text())
+                    status['model'] = published
+                    validator.write_json(directory / 'status.json', status)
+                    if status['eligible']:
+                        (directory / 'transport.jsonl').write_text(json.dumps(
+                            {'event': 'request', 'settings': generation}) + '\n')
+                validator.seal(self.bundle, manifest)
+                accepted = validator.validate(self.bundle)['environment']['model']
+                self.assertEqual((accepted['provider'], accepted['api'], accepted['base_url']),
+                                 (provider, api, base))
+
+    def test_custom_provenance_rejects_private_or_credential_urls(self):
+        original = json.loads((self.bundle / 'manifest.json').read_text())
+        for base in ('https://127.0.0.1/v1', 'https://10.0.0.1/v1', 'https://api.internal/v1',
+                     'https://user:password@api.example.com/v1',
+                     'https://api.example.com/v1?token=synthetic', 'https://api.example.com/v1#secret'):
+            with self.subTest(base=base):
+                manifest = copy.deepcopy(original)
+                model = manifest['environment']['model']
+                model.update(provider='custom', base_url=base)
+                with self.assertRaises(ValueError):
+                    validator.public_model(model)
+                validator.write_json(self.bundle / 'manifest.json', manifest)
+                with self.assertRaises(ValueError):
+                    validator.validate(self.bundle)
+
     def test_oauth_provenance_without_private_endpoint(self):
         for provider, api in (('anthropic_oauth', 'messages'), ('codex_oauth', 'responses')):
             with self.subTest(provider=provider):
