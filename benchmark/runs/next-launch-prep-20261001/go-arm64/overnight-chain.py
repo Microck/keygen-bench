@@ -5,10 +5,9 @@
    answers (give up after 12 h, recorded).
 2. Phase A: the main arm64 queue with every Devin-available model and Hy4 Preview held, so only the
    OpenCode-Go-exclusive models run (user priority). It exits once nothing more can start.
-3. Phase B: the main queue again (Hy4 still held) plus the add-on queue, running the Go models that
-   are also on Devin. Both draw the same controller-wide key-3 lease locks (3 at once in total).
-Hy4 Preview stays held: it failed twice with the same Go-side error at ~140k context (~80 min each).
-Every step is recorded in chain-state.json; a failing step stops the chain with its reason.
+3. Hy4: measure Go's real context limit and apply the matching fix (hy4_fix.py), then run it.
+The Go models also available on Devin are NOT run (user 2026-10-04: wait until Hy4 is sorted).
+Every step is recorded in chain-state.json and control/hy4/record.json.
 """
 import calendar
 import json
@@ -100,9 +99,30 @@ def main():
     if any(codes.values()):
         save(status="FAILED", reason=f"phase A queue exited {codes}")
         return 1
-    codes = phase("B_devin_available", {"main": HELD_ALWAYS, "addon": []}, env)
-    save(status="FAILED" if any(codes.values()) else "COMPLETED",
-         reason=f"phase B queue exited {codes}" if any(codes.values()) else None)
+    sys.path.insert(0, str(CONTROL))
+    import hy4_fix
+    hy4_fix.HY4.mkdir(exist_ok=True)
+    record = {"started_at": time.time()}
+    save(status="HY4_MEASURING")
+    record["outcome"] = outcome = hy4_fix.measure(env, record)
+    (hy4_fix.HY4 / "record.json").write_text(json.dumps(record, indent=2) + "\n")
+    if outcome == "TOTAL_LIMIT":
+        save(status="HY4_REQUALIFYING")
+        process = hy4_fix.capped_campaign(env, record)
+        (hy4_fix.HY4 / "record.json").write_text(json.dumps(record, indent=2) + "\n")
+        if process is None:
+            save(status="FAILED", reason="Hy4 capped campaign did not qualify/compile/doctor; see hy4/record.json")
+            return 1
+        state["steps"].append({"phase": "hy4_cap32k", "started_at": time.time(), "pids": {"hy4": process.pid}})
+        save(status="RUNNING_hy4_cap32k")
+        code = process.wait()
+        state["steps"][-1].update(finished_at=time.time(), returncodes={"hy4": code})
+    elif outcome == "NOT_REPRODUCED":
+        code = phase("hy4_unchanged", {"main": DEVIN_AVAILABLE}, env)["main"]
+    else:
+        save(status="COMPLETED", reason=f"Hy4 not run: {outcome} (see hy4/record.json)")
+        return 0
+    save(status="FAILED" if code else "COMPLETED", reason=f"Hy4 exit {code}" if code else None)
     return 0
 
 
