@@ -261,6 +261,35 @@ class BenchmarkTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "condition differs"):
             compile_queue("changed.json")
 
+    def test_cross_environment_queue_links_only_when_declared_and_route_unchanged(self):
+        primary = self.compile()
+        self.selection["campaign_id"] = "fixture-queue"
+        # Another sandbox environment: a different agent image (e.g. a local arm64 build).
+        self.selection["image"] = "sha256:" + "c" * 64
+        self.selection_path.write_text(json.dumps(self.selection))
+        plan = {"max_queue_attempts": 4, "models": {"verified": [
+            {"repetition": n, "origin": {"campaign_id": primary["campaign_id"], "attempt_id": f"verified-rep-{n}",
+                                         "status": "RESERVED", "status_sha256": "a" * 64,
+                                         "outcome": "UNATTEMPTED", "failure_category": None}} for n in (1, 2, 3)]}}
+        plan_path = self.root / "queue-plan.json"
+        compile_queue = lambda out: campaign.compile_campaign(self.inventory_path, self.selection_path, self.root / out,
+                                                              self.tier_spec_path, queue_plan=plan_path,
+                                                              queue_links=[self.root / "campaign.json"])
+        plan_path.write_text(json.dumps(plan))
+        with self.assertRaisesRegex(ValueError, "condition differs"):
+            compile_queue("undeclared.json")
+        plan["cross_environment"] = True
+        plan_path.write_text(json.dumps(plan))
+        queue = compile_queue("cross.json")
+        self.assertTrue(queue["policies"]["cross_environment"])
+        self.assertEqual(queue["policies"]["linked_campaigns"][0]["condition_fingerprints"],
+                         {"verified": campaign.environment_free_fingerprint(primary, primary["models"][0])})
+        # Anything beyond the environment must still match.
+        self.selection["limits"]["command_seconds"] += 60
+        self.selection_path.write_text(json.dumps(self.selection))
+        with self.assertRaisesRegex(ValueError, "condition differs"):
+            compile_queue("changed.json")
+
     def test_model_mapping_and_effective_settings_cannot_be_faked(self):
         self.model["response_model"] = "substitute"
         with self.assertRaisesRegex(ValueError, "identity differs"):
