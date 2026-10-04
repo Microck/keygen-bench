@@ -25,6 +25,7 @@ START = calendar.timegm(time.strptime("2026-10-05T00:01:00", "%Y-%m-%dT%H:%M:%S"
 DEVIN_AVAILABLE = ["go-deepseek-v4-pro", "go-deepseek-v4.1-flash", "go-glm-5.3-flash", "go-grok-4.6",
                    "go-grok-4.7", "go-kimi-k3"]
 HELD_ALWAYS = ["go-hy4-preview"]
+LAST = ["go-qwen3.8-max-messages"]  # smallest monthly allowance ($15), most attempts left: runs last
 RUNS = {"main": ("repo-main", "next-max-tier-prompt-v2-go-arm64-20261005"),
         "addon": ("repo-addon", "next-max-tier-prompt-v2-paris-addon-go-arm64-20261005")}
 STATE = CONTROL / "chain-state.json"
@@ -83,21 +84,26 @@ def main():
     save()
     while time.time() < START:
         time.sleep(30)
-    deadline = time.time() + 12 * 3600
+    deadline = time.time() + 35 * 24 * 3600  # monthly window: keep checking until it reopens
     while True:
         result = probe(env)
         state.setdefault("probes", []).append({"at": time.time(), "http_status": result.get("http_status"),
                                                "category": result.get("category")})
+        state["probes"] = state["probes"][-50:]
         save(status="PROBING")
         if result.get("category") == "ok":
             break
         if time.time() > deadline:
-            save(status="FAILED", reason="key 3 did not recover within 12 h of START")
+            save(status="FAILED", reason="key 3 did not recover within 35 days")
             return 1
-        time.sleep(600)
-    codes = phase("A_go_exclusive", {"main": DEVIN_AVAILABLE + HELD_ALWAYS}, env)
+        time.sleep(1800)
+    # User 2026-10-05: biggest monthly allowance first. $60/$30 Go-only models (and GLM-5.2, which
+    # failed Devin qualification), then Hy4 ($30), then Qwen3.8 Max ($15) last. GLM-5.3 and the
+    # other Devin-available models run on Devin and stay held here.
+    codes = phase("A1_larger_allowance", {"main": DEVIN_AVAILABLE + HELD_ALWAYS + LAST,
+                                          "addon": ["go-glm-5.3-chat"]}, env)
     if any(codes.values()):
-        save(status="FAILED", reason=f"phase A queue exited {codes}")
+        save(status="FAILED", reason=f"phase A1 queue exited {codes}")
         return 1
     sys.path.insert(0, str(CONTROL))
     import hy4_fix
@@ -106,23 +112,25 @@ def main():
     save(status="HY4_MEASURING")
     record["outcome"] = outcome = hy4_fix.measure(env, record)
     (hy4_fix.HY4 / "record.json").write_text(json.dumps(record, indent=2) + "\n")
+    release_hy4 = False
     if outcome == "TOTAL_LIMIT":
         save(status="HY4_REQUALIFYING")
         process = hy4_fix.capped_campaign(env, record)
         (hy4_fix.HY4 / "record.json").write_text(json.dumps(record, indent=2) + "\n")
         if process is None:
-            save(status="FAILED", reason="Hy4 capped campaign did not qualify/compile/doctor; see hy4/record.json")
-            return 1
-        state["steps"].append({"phase": "hy4_cap32k", "started_at": time.time(), "pids": {"hy4": process.pid}})
-        save(status="RUNNING_hy4_cap32k")
-        code = process.wait()
-        state["steps"][-1].update(finished_at=time.time(), returncodes={"hy4": code})
+            state["hy4"] = "capped campaign did not qualify/compile/doctor; see hy4/record.json"
+        else:
+            state["steps"].append({"phase": "hy4_cap32k", "started_at": time.time(), "pids": {"hy4": process.pid}})
+            save(status="RUNNING_hy4_cap32k")
+            state["steps"][-1].update(finished_at=time.time(), returncodes={"hy4": process.wait()})
     elif outcome == "NOT_REPRODUCED":
-        code = phase("hy4_unchanged", {"main": DEVIN_AVAILABLE}, env)["main"]
+        release_hy4 = True
     else:
-        save(status="COMPLETED", reason=f"Hy4 not run: {outcome} (see hy4/record.json)")
-        return 0
-    save(status="FAILED" if code else "COMPLETED", reason=f"Hy4 exit {code}" if code else None)
+        state["hy4"] = f"not run: {outcome} (see hy4/record.json)"
+    holds = DEVIN_AVAILABLE + ([] if release_hy4 else HELD_ALWAYS)
+    codes = phase("A2_qwen38max" + ("_and_hy4" if release_hy4 else ""), {"main": holds}, env)
+    save(status="FAILED" if any(codes.values()) else "COMPLETED",
+         reason=f"phase A2 queue exited {codes}" if any(codes.values()) else None)
     return 0
 
 
