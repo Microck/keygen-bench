@@ -683,12 +683,28 @@ class ModelSequenceTests(unittest.TestCase):
         self.assertEqual(result["status"], "COMPLETED")
 
     def test_rerun_queue_starts_nothing_that_would_breach_the_boat_reserve(self):
-        root, config, snapshot = self.queue_root({"backend": "boat", "boat": {"ttl_seconds": 10800}})
+        boat = {"type": "default", "ttl_seconds": 10800}
+        root, config, snapshot = self.queue_root({"backend": "boat", "boat": boat})
         with patch.object(run, "run_one", side_effect=self.queue_attempt({})), patch.object(run.STOP, "wait"):
             result = run.RerunQueue(root, config, None, snapshot, None, probe_interval=0, retry_interval=0,
                                     boat_reserve=36000, probe=lambda model, key: {"category": "ok"},
                                     balance=lambda: 46799).run()
         self.assertEqual((self.invoked, result["status"], result["stopped"]["reason"]), ([], "STOPPED_BOAT_RESERVE", "boat_reserve"))
+
+    def admits_one_start(self, tenants):
+        boat = {"type": "default", "ttl_seconds": 10800, "attempts_per_vm": tenants}
+        root, config, snapshot = self.queue_root({"backend": "boat", "boat": boat})
+        return run.RerunQueue(root, config, None, snapshot, None, probe_interval=60, retry_interval=60,
+                              boat_reserve=100, probe=lambda model, key: {"category": "ok"},
+                              balance=lambda: 2000).reserve_allows_start()
+
+    def test_boat_reserve_counts_a_shared_vm_once_not_per_tenant(self):
+        # 6 tenants on one default VM: one attempt's worst case is a sixth of the VM's TTL (1800 s),
+        # so 2000 s of credit admits a start.
+        self.assertTrue(self.admits_one_start(6))
+
+    def test_boat_reserve_charges_an_unshared_vm_its_whole_ttl(self):
+        self.assertFalse(self.admits_one_start(1))
 
     def test_rerun_queue_gates_each_model_holds_deferred_ones_and_continues_earlier_reruns(self):
         root, config, snapshot = self.queue_root()
