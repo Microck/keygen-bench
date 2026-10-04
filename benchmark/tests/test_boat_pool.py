@@ -164,11 +164,16 @@ class ConfigTests(unittest.TestCase):
         return {"backend": "boat", "boat": {"mode": "new", "ttl_seconds": 14400, **boat_options}}
 
     def test_attempts_per_vm_bounded_by_type(self):
-        boat.validate_config(self.base(type="default", attempts_per_vm=3))
-        for options in ({"type": "small", "attempts_per_vm": 2}, {"type": "default", "attempts_per_vm": 4},
-                        {"type": "large", "attempts_per_vm": 7}):
+        boat.validate_config(self.base(type="default", attempts_per_vm=6))
+        for options in ({"type": "small", "attempts_per_vm": 2}, {"type": "default", "attempts_per_vm": 7},
+                        {"type": "large", "attempts_per_vm": 13}):
             with self.assertRaises(ValueError):
                 boat.validate_config(self.base(**options))
+
+    def test_record_video_must_be_boolean(self):
+        boat.validate_config(self.base(record_video=False))
+        with self.assertRaises(ValueError):
+            boat.validate_config(self.base(record_video="no"))
 
 
 if __name__ == "__main__":

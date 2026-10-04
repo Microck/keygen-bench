@@ -1032,6 +1032,8 @@ def probe_provider(model: dict, credential: str, timeout: float = 120) -> dict:
 KEY_GATE_FRESH_SECONDS = 3600
 # A key whose provider reports its weekly usage window spent re-probes only this often.
 WEEKLY_LIMIT_BACKOFF_SECONDS = 6 * 3600
+# Boat credit burn per VM type (credit seconds are 1x seconds): small 0.5x, default 1x, large 2x.
+BOAT_BURN_RATE = {"small": 0.5, "default": 1.0, "large": 2.0}
 
 
 def quota_wait(probe_interval: int, limit_text: str) -> int:
@@ -1300,11 +1302,15 @@ class RerunQueue:
         remaining = self.balance()
         if remaining is None:
             return True
-        ttl = self.config["transport"]["boat"]["ttl_seconds"]
+        boat = self.config["transport"]["boat"]
+        ttl = boat["ttl_seconds"]
+        # Worst case per attempt: its VM runs the whole deadman TTL at the type's burn rate, shared
+        # by attempts_per_vm tenants (credit seconds are 1x-rate seconds; small 0.5x, large 2x).
+        share = ttl * BOAT_BURN_RATE[boat.get("type", "small")] / boat.get("attempts_per_vm", 1)
         now = time.time()
         started = [item[2] for item in self.inflight.values()] + [value for record in others for value in record["inflight_started"]]
-        running = sum(max(0, ttl - (now - value)) for value in started)
-        projected = remaining - running - ttl
+        running = sum(share * max(0, ttl - (now - value)) / ttl for value in started)
+        projected = remaining - running - share
         if projected < self.boat_reserve:
             self.stopped = {"reason": "boat_reserve", "remaining_seconds": remaining, "projected_seconds": projected,
                             "reserve_seconds": self.boat_reserve}
@@ -1509,11 +1515,15 @@ def _run_one(root: Path, config: dict, model: dict, docker: list[str], image: st
                 result["render"] = "ok"
                 if not fault:
                     result.update(status="RENDERED_UNSCORED", failure_category=None, eligible=True)
-                try:
-                    with slot(root, "video", config["concurrency"]["video"]):
-                        result["video"] = visualize(docker, visualizer_image, run_dir, config, result["audio"]["duration_seconds"])
-                except (OSError, ValueError, subprocess.SubprocessError) as exc:
-                    result["video"] = {"error": type(exc).__name__}
+                if (config["transport"].get("boat") or {}).get("record_video", True) is False:
+                    # Presentation only and no longer published; never graded (scores use canonical.wav).
+                    result["video"] = {"skipped": "campaign disables the presentation-only video"}
+                else:
+                    try:
+                        with slot(root, "video", config["concurrency"]["video"]):
+                            result["video"] = visualize(docker, visualizer_image, run_dir, config, result["audio"]["duration_seconds"])
+                    except (OSError, ValueError, subprocess.SubprocessError) as exc:
+                        result["video"] = {"error": type(exc).__name__}
             except (ValueError, wave.Error, EOFError) as exc:
                 result.update(status="MODEL_FAILED" if not fault else result["status"], render="invalid",
                               failure_category=fault or "MODEL", model_failure=not bool(fault), error=str(exc))
