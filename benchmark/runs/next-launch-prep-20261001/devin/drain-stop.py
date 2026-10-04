@@ -45,7 +45,7 @@ def main():
                 save(phase="holding", held=sorted(held), slots=len(locks))
             except BlockingIOError:
                 pass
-        time.sleep(1)
+        time.sleep(0.02)  # faster than slot()'s 0.1 s poll, so a queued attempt cannot win the race
     time.sleep(10)  # a sequence that was between slots is now blocked inside slot()
     os.kill(pid, signal.SIGTERM)
     save(phase="terminated", held=sorted(held), slots=len(locks), pid=pid)
