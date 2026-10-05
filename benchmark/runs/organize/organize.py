@@ -6,30 +6,42 @@ Layout (user 2026-10-05), ~/keygen-data/ on this laptop, not a git checkout:
   runs/<model>/other/<date>-<attempt>/             everything else: failed, retried, quota, legacy, other services
   runs/index.json                                  every attempt: model, slot, status, score, source
   _store/<host>/<path>/                            verified mirror of each source run root (audit copy)
+  _archives/<generation>/                          evicted attempt bundles restored from gdrive2, minus videos
+  _flac/<wav sha256>.flac                          lossless FLAC of every WAV (exact original via flac -d)
 
 Each run root found on a host (a directory with campaign.lock.json) is mirrored into _store with rsync and
 every file's SHA-256 is checked against the source; sources are never modified. Laptop sources are mirrored
-as hard links (no extra disk). runs/ is rebuilt from _store as hard links on every invocation, so a later
-retry that becomes ranked simply moves into its attempt slot. Run roots with a RUNNING attempt are not
-re-mirrored (their previous mirror, if any, is used). Credentials, private logs and isolated homes are never
-copied.
+as hard links (no extra disk). Attempts whose bulk files were evicted to gdrive2 (archive.json) have their
+bundle streamed back once: the bundle SHA-256 and every file's SHA-256 must match archive.json, and videos
+are never written. runs/ is rebuilt from _store plus the restored bundles as hard links on every invocation,
+so a later retry that becomes ranked simply moves into its attempt slot. runs/ is publication-ready: no
+videos, and every WAV is stored as <name>.wav.flac encoded with --keep-foreign-metadata, verified to decode
+to the original bytes. Run roots with a RUNNING attempt are not re-mirrored (their previous mirror, if any,
+is used). Credentials, private logs and isolated homes are never copied.
 
-  organize.py --dry-run      list run roots, sizes and the per-model layout; copies nothing
-  organize.py                mirror, verify, rebuild runs/
+  organize.py --dry-run          list run roots, sizes and the per-model layout; copies nothing
+  organize.py                    mirror, verify, restore archives, rebuild runs/
+  organize.py --export DIR       also replace DIR/runs with runs/ (hard links), e.g. a repository checkout
 """
 import argparse
 import collections
+import concurrent.futures
 import datetime
+import hashlib
 import json
 import os
 from pathlib import Path
 import re
 import shutil
 import subprocess
+import tarfile
+import tempfile
 import time
 
 DATA = Path.home() / "keygen-data"
 STORE = DATA / "_store"
+ARCHIVES = DATA / "_archives"
+FLAC = DATA / "_flac"
 HOSTS = {
     "ashburn": ("ubuntu@100.92.22.120", "/home/ubuntu/keygen-full.OGHjBAkO"),
     "paris": ("oracle-paris", "/home/ubuntu/keygen-full.eALj54bh"),
@@ -121,6 +133,101 @@ def load(path):
         return None
 
 
+def sha256_file(path) -> str:
+    digest = hashlib.sha256()
+    with open(path, "rb") as source:
+        for block in iter(lambda: source.read(1 << 20), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def flac_of(wav: Path, sha: str) -> Path:
+    """Cached lossless FLAC of a WAV whose SHA-256 is sha; decoding it must give the original bytes back."""
+    cached = FLAC / f"{sha}.flac"
+    if cached.exists():
+        return cached
+    FLAC.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(dir=FLAC) as work:
+        encoded, decoded = Path(work) / "a.flac", Path(work) / "a.wav"
+        subprocess.run(["flac", "-s", "--best", "--keep-foreign-metadata", "-o", str(encoded), str(wav)], check=True)
+        subprocess.run(["flac", "-s", "-d", "--keep-foreign-metadata", "-o", str(decoded), str(encoded)], check=True)
+        if sha256_file(decoded) != sha:
+            raise RuntimeError(f"FLAC round trip of {wav} does not reproduce its bytes")
+        os.replace(encoded, cached)
+    return cached
+
+
+def wavs_to_flac(directory: Path, known: dict | None = None) -> None:
+    """Replace every <name>.wav under directory with a hard link <name>.wav.flac to its cached FLAC."""
+    for wav in list(directory.rglob("*.wav")):
+        rel = str(wav.relative_to(directory))
+        flac = flac_of(wav, (known or {}).get(rel) or sha256_file(wav))
+        target = wav.with_name(wav.name + ".flac")
+        target.unlink(missing_ok=True)
+        os.link(flac, target)
+        wav.unlink()
+
+
+class _Hashing:
+    def __init__(self, raw):
+        self.raw, self.sha = raw, hashlib.sha256()
+
+    def read(self, n=-1):
+        block = self.raw.read(n)
+        self.sha.update(block)
+        return block
+
+
+def restore_archive(record: dict) -> str:
+    """Stream one evicted bundle from gdrive2 into _archives/<generation>/ without videos, verified."""
+    target = ARCHIVES / record["generation"]
+    if (target / ".DONE").exists():
+        return "kept"
+    shutil.rmtree(target, ignore_errors=True)
+    target.mkdir(parents=True)
+    process = subprocess.Popen(["rclone", "cat", record["remote"]], stdout=subprocess.PIPE)
+    stream, written = _Hashing(process.stdout), {}
+    with tarfile.open(fileobj=stream, mode="r|gz") as tar:
+        for member in tar:
+            name = os.path.normpath(member.name)
+            if name.startswith(("/", "..")) or not member.isfile() or name.endswith(".mp4"):
+                continue
+            path, digest = target / name, hashlib.sha256()
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with tar.extractfile(member) as source, open(path, "wb") as sink:
+                for block in iter(lambda: source.read(1 << 20), b""):
+                    digest.update(block)
+                    sink.write(block)
+            written[name] = digest.hexdigest()
+    stream.read()  # the object hash covers trailing tar padding too
+    if process.wait() != 0 or stream.sha.hexdigest() != record["sha256"]:
+        raise RuntimeError(f"{record['remote']}: download failed or bundle SHA-256 differs from archive.json")
+    written.pop("manifest.json", None)  # the bundle's own manifest, not listed in archive.json
+    expected = {k: v["sha256"] for k, v in record["files"].items() if not k.endswith(".mp4")}
+    if written != expected:
+        raise RuntimeError(f"{record['remote']}: extracted files differ from archive.json")
+    wavs_to_flac(target, written)
+    (target / ".DONE").write_text(json.dumps({"remote": record["remote"], "sha256": record["sha256"]}) + "\n")
+    return "restored"
+
+
+def restore_archives(dry: bool) -> None:
+    records = {}
+    for path in STORE.glob("**/archive.json"):
+        record = load(path)
+        if isinstance(record, dict) and str(record.get("remote", "")).startswith("gdrive2:"):
+            records[record["generation"]] = record
+    pending = [r for r in records.values() if not (ARCHIVES / r["generation"] / ".DONE").exists()]
+    print(f"archives: {len(records)} evicted bundles, {len(pending)} to restore")
+    if dry:
+        return
+    with concurrent.futures.ThreadPoolExecutor(4) as pool:
+        for record, state in zip(pending, pool.map(restore_archive, pending)):
+            print(f"  {state} {record['generation'][:12]}")
+        # Bundles restored before audio was stored as FLAC.
+        list(pool.map(wavs_to_flac, [ARCHIVES / r["generation"] for r in records.values()]))
+
+
 def attempts_in_store():
     """Every attempt directory in the mirrored run roots, with the fields the layout needs."""
     out = []
@@ -208,6 +315,45 @@ def other_label(attempt, taken):
     return label
 
 
+RUNS_README = """# Benchmark runs
+
+Every attempt of every model, one folder per model:
+
+```text
+<model>/attempt-1/ attempt-2/ attempt-3/   the three attempts the leaderboard ranks (best of 3)
+<model>/other/<date>-<attempt>/             everything else: failed, retried, quota, older runs, other services
+index.json                                  every attempt: slot, status, score, route, source
+```
+
+Each attempt folder holds what the harness recorded: `status.json`, `trajectory.json` and `transport.jsonl`
+(the full model conversation), `submission/` (the model's `tune.xm` and files), `canonical/` (the trusted
+render), `evaluations/` (scores) and `ATTEMPT.json` (where it came from and why it is in this slot).
+
+Visualizer videos are not included. Audio is stored as lossless FLAC: `<name>.wav.flac` decodes to the
+exact original WAV, byte for byte, with `flac -d --keep-foreign-metadata <name>.wav.flac`; the original
+WAV SHA-256 is in the attempt's `archive.json` or its evaluation records.
+"""
+
+
+def publishable(destination: Path) -> None:
+    """Fill in an attempt's evicted files from its restored bundle, drop videos, store audio as FLAC."""
+    record = load(destination / "archive.json")
+    if isinstance(record, dict) and record.get("generation"):
+        bundle = ARCHIVES / record["generation"]
+        if not (bundle / ".DONE").exists():
+            raise SystemExit(f"{destination}: evicted bundle {record['generation'][:12]} is not restored")
+        for path in bundle.rglob("*"):
+            rel = path.relative_to(bundle)
+            if path.is_file() and path.name not in (".DONE", "manifest.json"):
+                target = destination / rel
+                if not target.exists() and not target.with_suffix("").exists():
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    os.link(path, target)
+    for video in destination.rglob("*.mp4"):
+        video.unlink()
+    wavs_to_flac(destination)
+
+
 def build(models, dry):
     index, staging = {}, DATA / "runs.new"
     if not dry:
@@ -227,6 +373,7 @@ def build(models, dry):
             destination = staging / name / target
             destination.parent.mkdir(parents=True, exist_ok=True)
             subprocess.run(["cp", "-al", str(source), str(destination)], check=True)
+            publishable(destination)
             (destination / "ATTEMPT.json").write_text(json.dumps(row, indent=2) + "\n")
         ranked = [r for r in rows if r["slot"] != "other"]
         index[name] = {"route": ranked[0]["route"] if ranked else None, "ranked": len(ranked),
@@ -238,6 +385,7 @@ def build(models, dry):
     (staging / "index.json").write_text(json.dumps(
         {"generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "ranking": "best of 3", "models": index},
         indent=2) + "\n")
+    (staging / "README.md").write_text(RUNS_README)
     old = DATA / "runs.old"
     shutil.rmtree(old, ignore_errors=True)
     if (DATA / "runs").exists():
@@ -249,6 +397,7 @@ def build(models, dry):
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--export", type=Path, help="Directory whose runs/ is replaced by hard links to runs/")
     args = parser.parse_args()
     for name, (host, base) in HOSTS.items():
         roots = python(host, FIND_ROOTS, base, json.dumps(SKIP_PARTS))
@@ -261,7 +410,13 @@ def main():
     if not STORE.exists():
         print("no mirror yet; run without --dry-run first")
         return
+    restore_archives(args.dry_run)
     build(classify(attempts_in_store()), args.dry_run)
+    if args.export and not args.dry_run:
+        target = args.export.resolve() / "runs"
+        shutil.rmtree(target, ignore_errors=True)
+        subprocess.run(["cp", "-al", str(DATA / "runs"), str(target)], check=True)
+        print(f"exported {target}")
 
 
 if __name__ == "__main__":
