@@ -1,12 +1,14 @@
-// PROTOTYPE: data access for the site.
+// Data access for the FT2 site.
 import { parseXM } from "./xm.js";
 
 export async function loadData(base = "./dist/") {
   const res = await fetch(base + "data.json");
-  if (!res.ok) throw new Error("Run `python web/prototype/build.py` first (dist/data.json missing)");
+  if (!res.ok) throw new Error("Website data is missing. Build a publication with web/classic/build.py and serve its output directory.");
   const data = await res.json();
   data.base = base;
-  data.spend = await fetch(base + "spend.json").then((r) => (r.ok ? r.json() : null)).catch(() => null);
+  const spend = await fetch(base + "spend.json");
+  if (!spend.ok && spend.status !== 404) throw new Error(`Could not load spend data (${spend.status}).`);
+  data.spend = spend.ok ? await spend.json() : null;
   groupAttempts(data);
   const byMaker = new Map();
   for (const r of data.runs) {
@@ -20,9 +22,8 @@ export async function loadData(base = "./dist/") {
   return data;
 }
 
-// "gpt-5.5 (max-tier, attempt 2)" -> "gpt-5.5". The tier is the same for every row of a cohort, so it is
-// shown once in the run details instead of in every name.
-const baseName = (name) => name.replace(/\s*\([^)]*\btier\b[^)]*\)\s*$/i, "");
+// The attempt number is shown separately from the model name.
+const baseName = (name) => name.replace(/\s*\(attempt \d+\)\s*$/i, "");
 
 // One model = all its attempts. The ranked row is the model's best-scoring attempt; every row carries the
 // model's attempt list (including failed and unstarted slots from the repetition group) for the

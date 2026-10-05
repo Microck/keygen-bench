@@ -1,41 +1,48 @@
-# Keygen tune production: tools, formats, and workflow
+# Keygen Bench
 
-Version 1.0.0  
-Research cut-off: 2026-09-04  
-Language: English
+A benchmark for language models composing tracker music with FastTracker II. A model gets one Bash tool in an offline Docker sandbox, creates an XM module, and submits it for independent rendering and scoring.
 
-## Core finding
+This repository contains the runner, pinned container build, evaluator, results website and community submission tools. It contains no keygens, cracks or license-bypass code.
 
-The ordinary keygen tune was usually tracker music, not a rendered MP3 or WAV. A musician entered notes, instrument numbers, volume values, and effect commands into a vertical pattern grid. The resulting module stored the score together with a small bank of reusable samples. A compact replay engine inside the executable mixed that data into PCM audio at runtime.
+## Run a model
 
-The central surviving formats are MOD, XM, S3M, and IT. Their canonical authoring programs were ProTracker, FastTracker II, Scream Tracker 3, and Impulse Tracker. Later Windows-era work could be edited in ModPlug Tracker/OpenMPT or in FT2-compatible tools such as MilkyTracker. The exact program used for a specific tune cannot safely be inferred from its extension alone.
+Start with [Contributing runs](CONTRIBUTING-RUNS.md). It covers prerequisites, container builds, your own API credentials, three attempts and a verifiable submission bundle.
 
-A second route existed: procedural synthesizers such as Farbrausch V2 and 4klang stored note, patch, and synthesis data rather than PCM samples. That route matters to the wider demoscene and appears in keygen-music collections, but it was designed primarily for severe size limits such as 4K intros. It should not be treated as the default explanation for classic keygen music.
+Model requests can cost money. Credentials stay outside the model's sandbox and must never be committed. Keep raw runs outside the repository; publish only reviewed bundles.
 
-## Music-only agent workflow
+For campaign configuration, evaluation and reporting, see [the benchmark guide](benchmark/README.md).
 
-The [FT2/MilkyTracker investigation and setup](docs/10-agent-xm-workflow.md), added on 2026-09-05, covers a pinned headless FT2 authoring fork, its missing controls, and the distinction between composition and rendering.
+## Results and scoring
 
-Use the [setup guide](docs/10-agent-xm-workflow.md#build-and-connect), [example MCP configuration](config/ft2-mcp.example.json), and [acceptance checker](tools/ft2_smoke.py) to validate the environment before using the [creative brief](prompts/keygen-composer.md). The [verification record](data/agent-tooling-verification.json) separates source inspection and 22 passing offline tests from native rendering and listening checks that were not run here.
+The evaluator renders the submitted XM in a fresh FT2 process. Craft-v7 measures tonal organization, development and dynamics, with audio, loop and duration adjustments. It is an auxiliary diagnostic, not a validated measure of musical quality. Listen to the music before interpreting a score as a preference.
 
-## Repository map
+Community submissions remain labelled separately until the maintainer verifies their provenance and re-renders and re-scores the module. A bundle validator cannot prove which model produced a file or that no undisclosed attempts occurred.
 
-- `docs/00-methodology.md`
-- `docs/01-historical-toolchain.md`
-- `docs/02-how-tracker-composition-works.md`
-- `docs/03-sound-design-and-optimization.md`
-- `docs/04-formats.md`
-- `docs/05-executable-playback.md`
-- `docs/06-procedural-synthesis.md`
-- `docs/07-case-studies.md`
-- `docs/08-modern-reproduction.md`
-- `docs/09-faq.md`
-- `docs/references.md`
-- `data/tool-format-matrix.csv`
-- `data/evidence-register.csv`
-- `data/archive-examples.csv`
-- `tools/module_probe.py`
+The [website guide](web/classic/README.md) explains how to export a reviewed local snapshot, build the FT2-style site and generate link previews. Run data and deployed sites are generated outputs, not repository source.
 
-## Scope
+## Repository layout
 
-This repository covers music production, file formats, replay technology, and technical history. It contains no keygens, cracks, license-bypass code, protected software, or archived music files.
+| Path | Purpose |
+| --- | --- |
+| `benchmark/` | Campaign runner, provider adapters, prompts, container build and evaluator |
+| `benchmark/contrib/` | Community-run packaging and validation |
+| `benchmark/tests/`, `tests/` | Offline regression tests and synthetic fixtures |
+| `scripts/`, `tools/` | Pinned FT2 builds and native acceptance checks |
+| `data/` | Scoring calibration metadata, without archived music |
+| `web/classic/` | Results frontend and local publication tools |
+| `submissions/` | Reviewed community bundles |
+
+## Development
+
+For code or documentation changes, follow [AGENTS.md](AGENTS.md). It links the task-specific guides and defines privacy, experiment provenance and verification requirements.
+
+Use the pinned requirements and build instructions in the benchmark guide. Tests do not require paid model calls:
+
+```sh
+python -m unittest discover -s benchmark/tests
+python -m unittest discover -s tests
+```
+
+Some integration tests require the pinned dependencies or a native FT2 build. Passing offline tests does not establish provider access, musical quality or production readiness.
+
+Read [NOTICE.md](NOTICE.md) for third-party attribution and [the public-launch checklist](PUBLIC-LAUNCH.md) before publishing a formerly private checkout.

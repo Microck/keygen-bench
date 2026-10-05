@@ -1,21 +1,14 @@
 # Notice
 
-This repository is a research compilation about tracked music and demoscene audio technology.
+Keygen Bench benchmarks tracker-music composition. It does not contain keygens, cracks, trainers or license-bypass logic.
 
-It contains:
+The repository includes benchmark source, explanatory text, scoring calibration metadata and synthetic test modules. Submitted music remains subject to its contributor's rights and any sample licenses. Do not submit music or samples you are not entitled to distribute.
 
-- original explanatory text;
-- public bibliographic links;
-- selected filenames, sizes, and hashes as factual metadata;
-- source code that reads basic module headers;
-- synthetic unit-test data.
+## Third-party material
 
-It does not contain:
+- The FT2 build scripts pin `mova77/fast-tracker2`, a fork of `8bitbubsy/ft2-clone`. Its source license and notices apply to that dependency.
+- The bitmap fonts and derived web fonts under `web/classic/core/` are attributed to Vogue and 8bitbubsy. Their CC BY-NC-SA 4.0 notice is in [LICENSE-gfx.txt](web/classic/core/ft2gfx/LICENSE-gfx.txt). That license has noncommercial and share-alike conditions.
+- The Win98-style favicons originate from [win98icons.alexmeub.com](https://win98icons.alexmeub.com/). Verify redistribution rights before a public release; this notice is not a license grant.
+- Product names, maker marks and trademarks belong to their respective owners. Their appearance does not imply endorsement.
 
-- keygens, cracks, trainers, or license-bypass logic;
-- copyrighted tracker modules;
-- extracted samples;
-- third-party executable code;
-- scene artwork.
-
-All third-party names, source code, documentation, music, samples, and trademarks remain subject to their respective rights and licenses.
+No project-wide license for original code or documentation has been selected. See [PUBLIC-LAUNCH.md](PUBLIC-LAUNCH.md) for the release checklist. Dependency and asset licenses do not license the rest of this repository.

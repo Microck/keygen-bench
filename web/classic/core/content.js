@@ -1,12 +1,11 @@
-// PROTOTYPE: page copy. Scoring text is condensed from benchmark/README.md.
-// Support copy is a placeholder skeleton for the author to rewrite.
+// Page copy. Scoring text is condensed from benchmark/README.md.
 
 export const SITE = {
   title: "KEYGEN BENCH",
   repo: "https://github.com/Microck/keygen-bench",
   twitter: "https://x.com/JustMicrock",
-  sponsors: "https://github.com/sponsors/Microck", // TODO(author): confirm Sponsors is enabled
-  kofi: "https://ko-fi.com/microck",               // TODO(author): confirm handle
+  sponsors: "https://github.com/sponsors/Microck",
+  kofi: "https://ko-fi.com/microck",
 };
 
 export const PAGES = [
@@ -108,7 +107,7 @@ export const SCORING_NOTES = [
   { id: "calibration", title: "Tuned on real keygen music", text: "The tonal, noise, DC-offset and loop level and tone thresholds were set from half of 256 real keygen tunes from the Keygenmusic archive and checked on the other half, so a normal keygen tune isn't penalised for sounding like a normal keygen tune. The loop click, gap and rhythm thresholds were not recalibrated. The 30-second length is from a separate sample of 256 tunes." },
   { id: "judges", title: "No judges", text: "No people and no AI rate the tunes. The same fixed rules score every model, with no special cases." },
   { id: "flags", title: "Flags are notes, not penalties", text: "Flags point out something worth listening for, like a masked melody. Only the checks and caps above change the score." },
-  { id: "cost", title: "What cost means", text: "Estimated from the tokens each run used, at the maker's published price (retrieved 2026-09-29). It's what the run would cost at those prices, not what was billed. Models without a published API price show n/a." },
+  { id: "cost", title: "What cost means", text: "Estimated from the tokens each run used, at the maker prices supplied with the publication. It's what the run would cost at those prices, not what was billed. Models without a published API price show n/a." },
 ];
 
 // Setup page copy. Sources: benchmark/run.py, benchmark/Dockerfile, benchmark/campaign.py, benchmark/README.md,
@@ -172,11 +171,10 @@ export const SUPPORT = {
     "I pay for this benchmark myself, including API credits, subscriptions and compute for every run. Some models are too expensive for me to test out of pocket.",
     "If there's a model you're curious about, you can help fund its run. General support helps me keep testing as new models come out.",
   ],
-  // Costs = token use of three run sizes x the model's list price (models.dev, USD per million
-  // input/output tokens), rounded up. Run sizes come from the 22 OpenAI + Anthropic runs on the board:
-  //   typical (p50) 1.03M input / 125k output, long (p75) 3.5M / 270k, heavy (p90) 6.9M / 333k.
-  // Models with a cached-input price get it on 94.5% of input (the benchmark's median cache share);
-  // the Pro models list none, so all their input is full price. Every figure is x3 (three attempts per model); est = 3 long runs.
+  // Planning estimates = assumed token use x the listed price, rounded up.
+  // Run sizes: typical 1.03M input / 125k output, long 3.5M / 270k, heavy 6.9M / 333k.
+  // Models with a cached-input price assume 94.5% cached input; Pro models assume full-price input.
+  // Every figure covers three attempts; est uses the long-run assumption. Update prices before fundraising.
   // raised: USD donated so far towards that model; update by hand.
   // tip: shows a hover asterisk with this note.
   wanted: [
@@ -191,24 +189,24 @@ export const SUPPORT = {
     // but doing several times the work. Tokens assumed 6x a normal run (gpt-5.5-pro's price is 6x gpt-5.5's).
     { model: "gpt-6-pro", maker: "OpenAI", price: "$10/$50", typical: 150, est: 345, heavy: 495, raised: 0 },
   ],
-  // Collapsible note under the wanted list. The money section is a promise: the author should confirm it.
+  // Collapsible note under the wanted list.
   costHelp: {
     summary: "How the estimate works",
     sections: [
       { title: "Where the estimate comes from", lines: [
         "Each estimate is what three longer-than-usual runs would cost at the model's public API price (shown as dollars per million tokens in/out).",
         "Runs vary a lot. The model decides how many turns it takes, from a dozen to several hundred, and every turn resends the whole conversation, so a long run costs far more than a short one.",
-        "So I priced three run sizes from the 22 OpenAI and Anthropic runs already on the board: typical (half of them used less), long (3 in 4 used less) and heavy (9 in 10 used less).",
+        "The planning assumptions per run are 1.03 million input and 125,000 output tokens for typical, 3.5 million and 270,000 for long, and 6.9 million and 333,000 for heavy. These are estimates, not limits or measured usage for a new model.",
         "Every model gets three attempts, so each figure is three runs of that size. The estimate is three long runs. Hover an estimate to see the other two.",
       ] },
       { title: "Chipping in", lines: [
         "You don't have to cover a whole run. Any amount counts, and the bar next to each model shows how much has been raised so far.",
-        "You can also aim for a typical run instead, which is cheaper. I can't and won't promise that will be enough to finish the benchmark: about half of runs cost more than that.",
+        "You can also aim for a typical run instead, which is cheaper. I can't promise that will be enough to finish the benchmark; actual token use can exceed the estimate.",
       ] },
       { title: "What happens with the money", lines: [
         "Once a model reaches its estimate, I run its three attempts and publish the results, whatever they score.",
         "If the runs cost less, the rest goes to the next model on this list. If they cost more, I cover the difference from general support.",
-        "The real cost goes on the board next to the scores, like every other run.",
+        "The list-price estimate goes on the board next to the scores. It is not an actual provider bill.",
       ] },
     ],
   },

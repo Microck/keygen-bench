@@ -1,4 +1,4 @@
-// PROTOTYPE: page transition ("slide deck"). The old page is a frozen ghost copy laid over the new one.
+// Page transition ("slide deck"). The old page is a frozen ghost copy laid over the new one.
 // Old panels slide off sideways in a wave; new panels slide in from the other side, row by row, left
 // column first. steps() keeps motion on whole FT2 pixels. Returns the total duration in ms.
 //   outs: top-level panels of the ghost, reading order

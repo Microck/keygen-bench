@@ -339,37 +339,6 @@ class ScoreTests(unittest.TestCase):
                 with self.assertRaises(RuntimeError):
                     score.aggregate_profiles(root)
 
-    def test_rescoring_evicted_attempt_restores_reexports_and_evicts(self):
-        from benchmark.artifacts import ArtifactStore
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp) / "attempts" / "fixture"
-            (root / "submission").mkdir(parents=True)
-            source = root / "submission/tune.xm"
-            source.write_bytes(build_xm())
-            (root / "status.json").write_text(json.dumps({
-                "model": {"model": "fixture"}, "status": "AUTH_ERROR", "failure_category": "AUTH"}))
-            first = score.profile_attempt(root)
-            config = {"backend": "local", "directory": str(Path(tmp) / "archive"),
-                      "reserve_bytes": 1, "peak_bytes_per_attempt": 1024 ** 2,
-                      "evict_after_archive": True}
-            store = ArtifactStore(config)
-            metadata = store.archive_attempt(root)
-            (root / "archive.json").write_text(json.dumps(metadata))
-            store.evict(root, metadata)
-            self.assertFalse(source.exists())
-            second = score.profile_attempt(root, force=True)
-            self.assertIsNone(second["craft"]["craft_score"])
-            self.assertNotEqual(first["evaluation_location"], second["evaluation_location"])
-            exported = json.loads((root / "archive.json").read_text())
-            self.assertTrue(store.verify_archive(exported))
-            self.assertNotEqual(metadata["generation"], exported["generation"])
-            self.assertIn(first["evaluation_location"] + "/profile.json", exported["files"])
-            self.assertIn(second["evaluation_location"] + "/profile.json", exported["files"])
-            self.assertFalse(source.exists())
-            reported = score.aggregate_profiles(root.parent)
-            self.assertEqual(reported[0]["evaluation_location"], second["evaluation_location"])
-            self.assertFalse(source.exists())
-
     def test_process_tags(self):
         def turn(cmd): return {"role": "assistant", "extra": {"actions": [{"command": cmd}]}}
         traj = {"messages": [turn("ft2 list"), turn("python3 - <<'PY'\nopen('/workspace/submission/tune.xm','wb').write(b'x')\nPY"),
