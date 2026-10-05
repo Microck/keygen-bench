@@ -29,6 +29,7 @@ export function dropdown({ items, value, onChange, label, width }) {
   const renderFace = () => {
     const it = items.find((i) => i.value === value);
     face.replaceChildren(...(it ? [it.badge ? badge(it.badge) : null, " ", it.label].filter(Boolean) : ["-"]));
+    face.title = it?.label ?? "";
     face.style.display = "flex"; face.style.gap = "3px"; face.style.alignItems = "center";
   };
   const renderPop = () => {
@@ -74,14 +75,18 @@ export function dropdown({ items, value, onChange, label, width }) {
 }
 
 export function makerItems(data) {
-  return data.makers.map((m) => ({ value: m.name, label: m.name, badge: m.name, right: String(m.runs.length) }));
+  return data.makers.map((m) => ({ value: m.name, label: m.name, badge: m.name, right: String(m.models.length) }));
 }
-// Tracker model list: each model's best attempt. A non-best attempt opened from the Rankings page is
-// listed too while it is the current one, so the picker can show what is playing.
+// Tracker model list: each model's best attempt, newest model release first. Unknown dates are last.
+// A non-best attempt opened from Rankings replaces its model's best entry while it is current.
 export function modelItems(data, maker, current) {
   const mk = data.makers.find((m) => m.name === maker);
-  return (mk?.runs ?? []).filter((r) => r.isBest || r.slug === current)
-    .map((r) => ({ value: r.slug, label: r.label + (r.isBest ? "" : ` #${r.attempt}`) + (r.exhibition ? " (exh)" : ""), right: r.score.toFixed(1) }));
+  return (mk?.runs ?? []).filter((r) => r.slug === current || (r.isBest && r.model !== data.bySlug[current]?.model)).sort((a, b) =>
+    (a.model.releaseDate == null) - (b.model.releaseDate == null)
+    || (b.model.releaseDate ?? "").localeCompare(a.model.releaseDate ?? "")
+    || a.model.best.label.localeCompare(b.model.best.label)
+    || a.model.key.localeCompare(b.model.key))
+    .map((r) => ({ value: r.slug, label: r.label, right: r.score.toFixed(1) }));
 }
 
 export function scoreColor(s) {

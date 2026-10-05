@@ -1,8 +1,11 @@
-"""Serve a dedicated public-only website directory, with audio byte-range support.
+"""Serve a dedicated public-only website directory, with audio byte-range support and gzip for text and modules.
 
     python web/classic/serve.py --root /absolute/publication --port 8780
 """
 import argparse
+import email.utils
+import functools
+import gzip
 import http.server
 import io
 import json
@@ -14,6 +17,35 @@ from urllib.parse import unquote, urlsplit
 
 
 APP_ROUTES = {"tracker", "rankings", "scoring", "support"}
+# Fetched whole by the app, never by byte range, and much smaller compressed: data.json is mostly repeated
+# keys and playback traces, and XM pattern data is sparse. MP3/WAV stay identity so audio seeking keeps ranges.
+COMPRESSIBLE = {".json", ".js", ".css", ".xm"}
+
+
+# Keyed by modification time and size, so a rebuilt file is compressed again rather than served stale.
+@functools.lru_cache(maxsize=64)
+def gzipped(path, mtime_ns, size):
+    return gzip.compress(Path(path).read_bytes(), compresslevel=6, mtime=0)
+
+
+# RFC 9110 Accept-Encoding: gzip is acceptable when listed (or covered by "*") with a nonzero q-value.
+# An explicit "gzip;q=0" refuses it even when "*" is allowed.
+def accepts_gzip(header):
+    q = {}
+    for item in header.split(","):
+        token, *params = [part.strip() for part in item.split(";")]
+        if not token:
+            continue
+        weight = 1.0
+        for param in params:
+            name, _, value = param.partition("=")
+            if name.strip().lower() == "q":
+                try:
+                    weight = float(value)
+                except ValueError:
+                    weight = 0.0
+        q[token.lower()] = weight
+    return q.get("gzip", q.get("x-gzip", q.get("*", 0.0))) > 0
 
 
 class Handler(http.server.SimpleHTTPRequestHandler):
@@ -24,6 +56,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     def end_headers(self):
         self.send_header("Accept-Ranges", "bytes")
         self.send_header("Cache-Control", "no-cache")
+        if getattr(self, "_vary", False):
+            self.send_header("Vary", "Accept-Encoding")
         super().end_headers()
 
     def list_directory(self, path):
@@ -74,6 +108,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             return self.app_shell("/" if requested == "/index.html" else route)
         rng = self.headers.get("Range")
         path = self.translate_path(self.path)
+        self._vary = Path(path).suffix in COMPRESSIBLE
+        if self._vary and rng is None and os.path.isfile(path) and accepts_gzip(self.headers.get("Accept-Encoding", "")):
+            return self.send_gzip(path)
         m = re.fullmatch(r"bytes=(\d*)-(\d*)", rng or "")
         if not m or not os.path.isfile(path):
             return super().send_head()
@@ -96,6 +133,28 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         self._remaining = end - start + 1
         return f
 
+    # Whole-file gzip response. Keeps the Last-Modified / If-Modified-Since revalidation the identity path
+    # has, so Cache-Control: no-cache still costs a 304 rather than a full download.
+    def send_gzip(self, path):
+        st = os.stat(path)
+        since = self.headers.get("If-Modified-Since")
+        if since:
+            try:
+                if int(st.st_mtime) <= email.utils.parsedate_to_datetime(since).timestamp():
+                    self.send_response(304)
+                    self.end_headers()
+                    return None
+            except (TypeError, ValueError, OverflowError):
+                pass
+        body = gzipped(path, st.st_mtime_ns, st.st_size)
+        self.send_response(200)
+        self.send_header("Content-Type", self.guess_type(path))
+        self.send_header("Content-Encoding", "gzip")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Last-Modified", self.date_time_string(st.st_mtime))
+        self.end_headers()
+        return io.BytesIO(body)
+
     def copyfile(self, source, outputfile):
         remaining = getattr(self, "_remaining", None)
         if remaining is None:
@@ -110,8 +169,6 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
 
 if __name__ == "__main__":
-    import functools
-
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, required=True, help="Dedicated allowlisted public directory, never the repository")
     parser.add_argument("--port", type=int, default=8780)
