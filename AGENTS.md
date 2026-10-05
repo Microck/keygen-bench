@@ -15,3 +15,5 @@ runs/<model>/
 ```
 
 Never delete attempts; anything not ranked goes in `other/`. Where an attempt ran (Ashburn, Paris, x86, ARM) is noted only inside its own files.
+
+`benchmark/runs/organize/organize.py` builds it (mirror with SHA-256 checks, restore evicted gdrive2 bundles, rebuild `runs/`); `--export DIR` hard-links it into a checkout's `runs/`. `runs/` has no videos and stores WAV as lossless `<name>.wav.flac` (`flac -d --keep-foreign-metadata` restores the exact bytes). The public repo commits it on branch `data/runs` (PR #28), in commits under 2 GB each.
