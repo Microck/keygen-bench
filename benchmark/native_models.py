@@ -10,22 +10,26 @@ No bridge route is ready until its exact protocol and settings pass a real gate.
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import json
 import logging
 import math
 import os
 import re
+import socket
 import threading
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
 LITELLM_VERSION = "1.102.1"
-PROVIDERS = {"go", "vercel", "nim", "google", "devin", "anthropic_oauth", "codex_oauth"}
+PROVIDERS = {"go", "vercel", "nim", "google", "devin", "anthropic_oauth", "codex_oauth", "openai", "anthropic", "custom"}
 BRIDGE_PROVIDERS = {"devin", "anthropic_oauth", "codex_oauth"}
-# Each route runs only its provider's original native protocol(s).
+# Protocol selection controls the native SDK, never a provider-name heuristic.
 PROTOCOLS = {"go": {"chat", "responses", "messages"}, "vercel": {"chat", "responses"}, "nim": {"chat"},
-             "google": {"chat"}, "devin": {"chat"}, "anthropic_oauth": {"messages"}, "codex_oauth": {"responses"}}
+             "google": {"chat"}, "devin": {"chat"}, "anthropic_oauth": {"messages"}, "codex_oauth": {"responses"},
+             "openai": {"chat", "responses"}, "anthropic": {"messages"},
+             "custom": {"chat", "responses", "messages"}}
 # LiteLLM provider prefix per route; Google AI Studio uses LiteLLM's native Gemini provider
 # (generateContent), never an OpenAI-compatible shim.
 SDK_PREFIX = {"google": "gemini"}
@@ -112,15 +116,17 @@ def digest(value: Any) -> str:
 
 
 def validate_url(url: str, provider: str | None = None, api: str | None = None) -> str:
-    """Allow only the approved public endpoints or explicit local credential bridges."""
+    """Validate the declared public route or the user's explicit loopback credential bridge."""
     if not isinstance(url, str):
         raise ValueError("Model base_url must be a string")
+    if re.search(r"[\s\\\x00-\x1f\x7f]", url):
+        raise ValueError("Model base_url must not contain whitespace, control characters or backslashes")
     try:
         u = urlsplit(url)
         port = u.port
     except ValueError:
         raise ValueError("Invalid model base_url") from None
-    if u.username or u.password or u.query or u.fragment:
+    if u.username is not None or u.password is not None or "?" in url or "#" in url:
         raise ValueError("Model base_url must not contain credentials, queries or fragments")
     path = u.path.rstrip("/")
     if provider is None or provider in BRIDGE_PROVIDERS:
@@ -128,21 +134,59 @@ def validate_url(url: str, provider: str | None = None, api: str | None = None) 
             raise ValueError("Credential bridge must use explicit http://127.0.0.1:PORT")
         if path != "/v1":
             raise ValueError("Credential bridge base_url must end in /v1")
-    elif provider == "go":
-        if (u.scheme, u.hostname, port, path) != ("https", "opencode.ai", None, "/zen/go/v1"):
-            raise ValueError("Go requires https://opencode.ai/zen/go/v1")
-    elif provider == "vercel":
-        if (u.scheme, u.hostname, port, path) != ("https", "ai-gateway.vercel.sh", None, "/v1"):
-            raise ValueError("Vercel requires https://ai-gateway.vercel.sh/v1")
-    elif provider == "nim":
-        if (u.scheme, u.hostname, port, path) != ("https", "integrate.api.nvidia.com", None, "/v1"):
-            raise ValueError("NVIDIA NIM requires https://integrate.api.nvidia.com/v1")
-    elif provider == "google":
-        if (u.scheme, u.hostname, port, path) != ("https", "generativelanguage.googleapis.com", None, "/v1beta"):
-            raise ValueError(f"Google AI Studio requires {GOOGLE_BASE}")
+    elif provider in {"go", "vercel", "nim", "google", "openai", "anthropic"}:
+        expected = {
+            "go": ("opencode.ai", "/zen/go/v1"),
+            "vercel": ("ai-gateway.vercel.sh", "/v1"),
+            "nim": ("integrate.api.nvidia.com", "/v1"),
+            "google": ("generativelanguage.googleapis.com", "/v1beta"),
+            "openai": ("api.openai.com", "/v1"),
+            "anthropic": ("api.anthropic.com", "/v1"),
+        }[provider]
+        if (u.scheme, u.hostname, port, path) != ("https", expected[0], None, expected[1]):
+            raise ValueError(f"{provider} requires https://{expected[0]}{expected[1]}")
+    elif provider == "custom":
+        host = u.hostname or ""
+        if (u.scheme != "https" or not host or "%" in url
+                or re.search(r"(?:sk-|oc_sk_)[A-Za-z0-9_-]{12,}", path, re.I)):
+            raise ValueError("Custom base_url must be public HTTPS without encoded or credential-bearing paths")
+        try:
+            address = ipaddress.ip_address(host)
+        except ValueError:
+            if (not re.fullmatch(r"(?=.{1,253}$)(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+"
+                                 r"[A-Za-z](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?", host)
+                    or host.endswith((".local", ".internal", ".localhost", ".test", ".invalid", ".lan",
+                                      ".home", ".localdomain", ".onion"))
+                    or host == "localhost"):
+                raise ValueError("Custom base_url must use a public hostname or public IP address")
+        else:
+            if not public_address(address):
+                raise ValueError("Custom base_url must not use a private or nonpublic IP address")
+        if api == "messages" and not path.endswith("/v1"):
+            raise ValueError("Custom Messages base_url must end in /v1")
     else:
         raise ValueError("Unsupported model provider")
     return url.rstrip("/")
+
+
+def public_address(address) -> bool:
+    """Reject IPv4-mapped private destinations as well as non-global addresses."""
+    if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped is not None:
+        address = address.ipv4_mapped
+    return address.is_global and not address.is_multicast
+
+
+def check_custom_destination(model: dict) -> None:
+    """Check resolved addresses before a custom route receives its controller credential."""
+    if model["provider"] != "custom":
+        return
+    url = urlsplit(validate_url(model["base_url"], "custom", model["api"]))
+    try:
+        addresses = socket.getaddrinfo(url.hostname, url.port or 443, type=socket.SOCK_STREAM)
+    except OSError:
+        raise ValueError("Custom endpoint DNS resolution failed") from None
+    if not addresses or any(not public_address(ipaddress.ip_address(item[4][0])) for item in addresses):
+        raise ValueError("Custom endpoint resolves to a private or nonpublic destination")
 
 
 def _native(config: dict) -> dict:
@@ -336,9 +380,9 @@ def sdk_controls(model: dict) -> dict:
     """SDK-only opt-ins (never wire fields) a declared generation needs to be sent unaltered.
 
     LiteLLM accepts Anthropic thinking only for Claude names unless the caller opts in with
-    its documented allowed_openai_params flag; Go Messages serves non-Claude models.
+    its documented allowed_openai_params flag. Go and custom Messages may serve other models.
     """
-    if model["provider"] == "go" and model["api"] == "messages" and "thinking" in model["generation"]:
+    if model["provider"] in {"go", "custom"} and model["api"] == "messages" and "thinking" in model["generation"]:
         return {"allowed_openai_params": ["thinking"]}
     return {}
 
@@ -432,7 +476,7 @@ def validate_model(config: dict, model: dict) -> dict:
     provider = model.get("provider")
     api = model.get("api")
     if provider not in PROVIDERS:
-        raise ValueError("Only Go, Vercel, NVIDIA NIM, Google AI Studio, Devin and user-authorized Anthropic/Codex OAuth routes are approved")
+        raise ValueError("Unsupported provider; declare a direct API, custom service or user-authorized bridge route")
     if api not in {"chat", "responses", "messages"}:
         raise ValueError("Model api must be chat, responses or messages")
     if api not in PROTOCOLS[provider]:
@@ -661,6 +705,7 @@ def _construct_model(config: dict, model: dict, run_dir: Path, effective: dict):
             or (global_config / ".env").exists()
             or os.environ.get("MSWEA_SILENT_STARTUP") != "1"):
         raise RuntimeError("Native models require isolated HOME and empty mini global config")
+    check_custom_destination(model)
     target = credential_target(model)
     if not os.environ.get(target):
         raise RuntimeError("Native worker lacks its isolated provider credential")

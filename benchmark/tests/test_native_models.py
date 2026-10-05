@@ -1,6 +1,7 @@
 """Synthetic HTTP peers exercise the original native SDK/model history paths."""
 from __future__ import annotations
 
+import ipaddress
 import json
 import os
 import subprocess
@@ -44,7 +45,7 @@ MAX_TIER = {
 
 
 @contextmanager
-def peer(api, error=False, failures=(), truncated=False, refused=0, response_model=None):
+def peer(api, error=False, failures=(), truncated=False, refused=0, response_model=None, base_prefix=""):
     """failures: (status, message) replies sent before the normal reply, one per request.
 
     refused: Messages replies after the failures that Anthropic's content filter blocked
@@ -58,8 +59,8 @@ def peer(api, error=False, failures=(), truncated=False, refused=0, response_mod
         def do_POST(self):
             payload = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
             seen.append((self.path, payload))
-            expected_path = {"chat": "/v1/chat/completions", "messages": "/v1/messages",
-                             "responses": "/v1/responses"}[api]
+            expected_path = base_prefix + {"chat": "/v1/chat/completions", "messages": "/v1/messages",
+                                           "responses": "/v1/responses"}[api]
             if self.path != expected_path:
                 self.send_error(404, "Incorrect native protocol endpoint")
                 return
@@ -122,7 +123,7 @@ def peer(api, error=False, failures=(), truncated=False, refused=0, response_mod
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
-        yield f"http://127.0.0.1:{server.server_port}/v1", seen
+        yield f"http://127.0.0.1:{server.server_port}{base_prefix}/v1", seen
     finally:
         server.shutdown()
         server.server_close()
@@ -158,9 +159,10 @@ class LocalShell:
 
 
 class NativeProtocolTests(unittest.TestCase):
-    def roundtrip(self, api, provider=None, name=None, tier=None, output_limit=4096, response_name=None, cap_key=None):
+    def roundtrip(self, api, provider=None, name=None, tier=None, output_limit=4096, response_name=None, cap_key=None,
+                  base_prefix=""):
         provider = provider or {"chat": "go", "messages": "anthropic_oauth", "responses": "codex_oauth"}[api]
-        with tempfile.TemporaryDirectory() as temporary, peer(api, response_model=response_name) as (base, seen):
+        with tempfile.TemporaryDirectory() as temporary, peer(api, response_model=response_name, base_prefix=base_prefix) as (base, seen):
             root = Path(temporary)
             spec = model_spec(api, provider, base)
             name = name or {"chat": "kimi-k3", "messages": "claude-opus-4-8"}.get(api)
@@ -178,7 +180,7 @@ class NativeProtocolTests(unittest.TestCase):
             # Public endpoints use the synthetic peer; Devin exercises its real loopback URL
             # validation too. SDK, model, parser, serialization and history all execute.
             route = nullcontext() if provider == "devin" else patch.object(native, "validate_url", return_value=base)
-            with route, worker_env(root, spec):
+            with route, patch.object(native, "check_custom_destination"), worker_env(root, spec):
                 model = native.build_probe_model(CONFIG, spec, root)
                 from minisweagent.agents.default import DefaultAgent
                 agent = DefaultAgent(model, LocalShell(root), system_template="Frozen system",
@@ -212,7 +214,7 @@ class NativeProtocolTests(unittest.TestCase):
                     if api == "chat":
                         self.assertEqual(payload["messages"][0]["role"], "system")
                 if api == "responses":
-                    self.assertEqual(seen[1][0], "/v1/responses")
+                    self.assertEqual(seen[1][0], base_prefix + "/v1/responses")
                     history = seen[1][1]["input"]
                     self.assertTrue(any(item.get("encrypted_content") == "preserved-encrypted-state" for item in history))
                     self.assertTrue(any(item.get("type") == "function_call_output"
@@ -220,13 +222,13 @@ class NativeProtocolTests(unittest.TestCase):
                                         for item in history))
                     self.assertEqual(seen[0][1]["max_output_tokens"], output_limit)
                 elif api == "messages":
-                    self.assertEqual(seen[1][0], "/v1/messages")
+                    self.assertEqual(seen[1][0], base_prefix + "/v1/messages")
                     blocks = [block for item in seen[1][1]["messages"] for block in item["content"]]
                     self.assertTrue(any(block.get("signature") == "signed" for block in blocks))
                     self.assertTrue(any(block.get("type") == "tool_result"
                                         and block.get("tool_use_id") == "call-1" for block in blocks))
                 else:
-                    self.assertEqual(seen[1][0], "/v1/chat/completions")
+                    self.assertEqual(seen[1][0], base_prefix + "/v1/chat/completions")
                     history = seen[1][1]["messages"]
                     self.assertEqual(history[-1]["tool_call_id"], "call-1")
                     self.assertIn("<time_left>", history[-1]["content"])
@@ -277,6 +279,18 @@ class NativeProtocolTests(unittest.TestCase):
             self.assertEqual(transport[-1]["response_model"], "other-model")
             self.assertEqual(transport[-1]["identity_status"], "identity_mismatch")
             self.assertEqual(seen[0][1]["model"], "devin/exact-model")
+
+    def test_direct_and_custom_routes_use_native_protocols(self):
+        for provider, api, name, tier in (
+                ("openai", "chat", "gpt-4.1", ("none-available", {})),
+                ("openai", "responses", None, None),
+                ("anthropic", "messages", None, None),
+                ("custom", "chat", "compatible-model", ("none-available", {})),
+                ("custom", "responses", None, None),
+                ("custom", "messages", "compatible-model",
+                 ("thinking-budget", {"thinking": {"type": "enabled", "budget_tokens": 1024}}))):
+            with self.subTest(provider=provider, api=api):
+                self.roundtrip(api, provider, name, tier, base_prefix="/service" if provider == "custom" else "")
 
     def test_go_glm_chat_drops_only_the_sdk_synthesized_assistant_key(self):
         # The SDK wraps its own refusal=None as provider_specific_fields; Go's GLM upstream rejects
@@ -375,14 +389,15 @@ class NativeProtocolTests(unittest.TestCase):
                 self.assertNotIn("BENCHMARK_SYNTHETIC_SECRET", audit)
                 self.assertIn("gateway_error", audit)
 
-    def query_once(self, config, failures=(), truncated=False, api="chat", refused=0, bound=False):
+    def query_once(self, config, failures=(), truncated=False, api="chat", refused=0, bound=False, provider=None):
         """One real SDK query against the peer; returns (outcome, seen, transport events).
 
         bound applies the production content-filter bound (run.bound_content_filter)."""
         with tempfile.TemporaryDirectory() as temporary, \
                 peer(api, failures=failures, truncated=truncated, refused=refused) as (base, seen):
             root = Path(temporary)
-            spec = model_spec(api, {"chat": "go", "messages": "anthropic_oauth", "responses": "codex_oauth"}[api], base)
+            provider = provider or {"chat": "go", "messages": "anthropic_oauth", "responses": "codex_oauth"}[api]
+            spec = model_spec(api, provider, base)
             if api == "chat":
                 spec["model"] = spec["response_model"] = "kimi-k3"
             with patch.object(native, "validate_url", return_value=base), worker_env(root, spec):
@@ -423,11 +438,18 @@ class NativeProtocolTests(unittest.TestCase):
                 self.assertEqual(run.failure_category(outcome), "CONTENT_FILTER")
                 self.assertIn("CONTENT_FILTER", run.SEQUENCE_STOPPING_FAILURES)
 
+    def test_direct_anthropic_content_filter_classification(self):
+        outcome, seen, events = self.query_once(
+            RETRYING, api="messages", provider="anthropic", refused=3, bound=True)
+        self.assertEqual(run.failure_category(outcome), "CONTENT_FILTER")
+        self.assertEqual(len(seen), run.CONTENT_FILTER_SENDS)
+        self.assertEqual(events.count("content_filter_block"), 3)
+
     def test_content_filter_bound_resends_nothing_else(self):
         outcome, seen, _ = self.query_once(RETRYING, [(400, "prompt is too long")], api="messages", bound=True)
         self.assertEqual(run.failure_category(outcome), "PROTOCOL")
         self.assertEqual(len(seen), 1)
-        # The bound covers anthropic_oauth only; other providers send once, unclassified as a block.
+        # The bound covers Anthropic routes; other providers send once, unclassified as a block.
         outcome, seen, _ = self.query_once(RETRYING, failures=[(400, "Output blocked by content filtering policy")],
                                            api="responses", bound=True)
         self.assertNotEqual(run.failure_category(outcome), "CONTENT_FILTER")
@@ -468,6 +490,83 @@ class NativeProtocolTests(unittest.TestCase):
 
 
 class NativePolicyTests(unittest.TestCase):
+    def test_direct_provider_route_and_protocol_restrictions(self):
+        routes = (("openai", "https://api.openai.com/v1", {"chat", "responses"}),
+                  ("anthropic", "https://api.anthropic.com/v1", {"messages"}))
+        for provider, base, allowed in routes:
+            for api in ("chat", "responses", "messages"):
+                with self.subTest(provider=provider, api=api):
+                    spec = model_spec(api, provider, base)
+                    if provider == "openai" and api == "chat":
+                        spec.update(model="gpt-4o", response_model="gpt-4o")
+                    if api in allowed:
+                        effective = native.validate_model(CONFIG, spec)
+                        sdk_base = base.removesuffix("/v1") if api == "messages" else base
+                        self.assertEqual(effective["model_kwargs"]["api_base"], sdk_base)
+                    else:
+                        with self.assertRaisesRegex(ValueError, "native protocol"):
+                            native.validate_model(CONFIG, spec)
+            with self.assertRaises(ValueError):
+                native.validate_url("https://different.example.com/v1", provider)
+
+    def test_custom_public_url_policy(self):
+        for url in ("https://api.example.com/v1", "https://api.example.com/service/v1",
+                    "https://api.example.com:8443/v1", "https://8.8.8.8/v1"):
+            with self.subTest(url=url):
+                self.assertEqual(native.validate_url(url, "custom", "messages"), url)
+        for url in (
+                "http://api.example.com/v1", "https://localhost/v1", "https://127.0.0.1/v1",
+                "https://10.0.0.1/v1", "https://172.16.0.1/v1", "https://192.168.1.1/v1",
+                "https://169.254.169.254/v1", "https://100.64.0.1/v1", "https://0.0.0.0/v1",
+                "https://[::1]/v1", "https://[fd00::1]/v1", "https://[::ffff:127.0.0.1]/v1",
+                "https://224.0.0.1/v1", "https://2130706433/v1", "https://127.1/v1",
+                "https://api.local/v1", "https://api.internal/v1", "https://api.localhost/v1",
+                "https://api.test/v1", "https://api.invalid/v1", "https://intranet/v1",
+                "https://user:password@api.example.com/v1", "https://@api.example.com/v1",
+                "https://api.example.com/v1?key=value", "https://api.example.com/v1?",
+                "https://api.example.com/v1#", "https://api.example.com/v1#fragment",
+                "https://api.example.com/%73k-FAKEONLYFAKEONLY/v1",
+                "https://api.example.com/sk-FAKEONLYFAKEONLY/v1",
+                "https://api.example.com\\@localhost/v1", "https://api.example.com/\nv1"):
+            with self.subTest(url=url), self.assertRaises(ValueError):
+                native.validate_url(url, "custom", "messages")
+        with self.assertRaisesRegex(ValueError, "end in /v1"):
+            native.validate_url("https://api.example.com/service", "custom", "messages")
+
+    def test_custom_dns_guard_rejects_every_nonpublic_answer(self):
+        spec = model_spec("responses", "custom", "https://api.example.com/v1")
+        def answers(*addresses):
+            return [(0, 0, 0, "", (address, 443)) for address in addresses]
+        with patch.object(native.socket, "getaddrinfo", return_value=answers("8.8.8.8", "1.1.1.1")):
+            native.check_custom_destination(spec)
+        for addresses in ((), ("127.0.0.1",), ("8.8.8.8", "10.0.0.1"), ("::ffff:192.168.0.1",)):
+            with (self.subTest(addresses=addresses),
+                  patch.object(native.socket, "getaddrinfo", return_value=answers(*addresses)),
+                  self.assertRaisesRegex(ValueError, "nonpublic")):
+                native.check_custom_destination(spec)
+        with (patch.object(native.socket, "getaddrinfo", side_effect=OSError("synthetic DNS failure")),
+              self.assertRaisesRegex(ValueError, "DNS resolution failed")):
+            native.check_custom_destination(spec)
+        self.assertFalse(native.public_address(ipaddress.ip_address("::ffff:10.0.0.1")))
+
+    def test_custom_worker_blocks_private_dns_before_any_request(self):
+        spec = model_spec("responses", "custom", "https://api.example.com/v1")
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            with (worker_env(root, spec),
+                  patch.object(native.socket, "getaddrinfo", return_value=[(0, 0, 0, "", ("10.0.0.1", 443))]),
+                  self.assertRaisesRegex(ValueError, "nonpublic")):
+                native.build_probe_model(CONFIG, spec, root)
+            self.assertFalse((root / "transport.jsonl").exists())
+
+    def test_custom_key_probe_blocks_private_dns_before_sending(self):
+        spec = model_spec("responses", "custom", "https://api.example.com/v1")
+        with (patch.object(native.socket, "getaddrinfo", return_value=[(0, 0, 0, "", ("127.0.0.1", 443))]),
+              patch("urllib.request.urlopen") as request,
+              self.assertRaisesRegex(ValueError, "nonpublic")):
+            run.probe_provider(spec, "synthetic-only")
+        request.assert_not_called()
+
     def test_production_rejects_unqualified_model(self):
         for status in (None, "pending", "qualification", "blocked"):
             spec = model_spec()

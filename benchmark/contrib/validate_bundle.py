@@ -55,6 +55,9 @@ def public_model(model, bridge_sha256=None):
     if model["provider"] in BRIDGE_PROVIDERS:
         result.pop("base_url", None)
         result["bridge"] = {"transport": "loopback-http", "binary_sha256": bridge_sha256}
+    else:
+        from native_models import validate_url
+        result["base_url"] = validate_url(model["base_url"], model["provider"], model["api"])
     return result
 
 
@@ -162,6 +165,8 @@ def validate(root):
     if set(model) != fields or model["provider"] not in PROVIDERS:
         raise ValueError("Declared provider provenance and model fields required")
     if (model.get("api_key_env") != "KEYGEN_CONTRIB_API_KEY"
+            or not isinstance(model.get("model"), str)
+            or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}", model["model"])
             or model.get("model") != model.get("response_model")):
         raise ValueError("Exact model identity and controller credential name required")
     if bridge:
