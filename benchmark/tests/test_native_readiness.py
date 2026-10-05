@@ -108,6 +108,30 @@ class QualificationBoundaryTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             readiness.normalize_spec(spec, None)
 
+    def test_devin_qualification_requires_matching_bridge_executable(self):
+        spec = pilot_spec()
+        spec["model"].update(provider="devin", api="chat", model="devin/exact-model",
+                             response_model="exact-model", base_url="http://127.0.0.1:8417/v1",
+                             generation={"max_tokens": 64000, "reasoning_effort": "max"},
+                             tier={"level": "max", "reasoning": {"reasoning_effort": "max"},
+                                   "spec_sha256": "0" * 64})
+        with self.assertRaisesRegex(ValueError, "executable provenance"):
+            readiness.normalize_spec(spec, None)
+        with tempfile.TemporaryDirectory() as temporary:
+            executable = Path(temporary) / "bridge"
+            executable.write_bytes(b"synthetic bridge executable")
+            spec["model"]["backend_provenance"]["bridge"] = {
+                "implementation": "CLIProxyAPI", "version": "synthetic",
+                "executable_sha256": readiness.campaign.file_digest(executable)}
+            with self.assertRaisesRegex(ValueError, "does not match"):
+                readiness.normalize_spec(spec, None)
+            normalized = readiness.normalize_spec(spec, executable)
+            self.assertEqual(normalized["model"]["effective_settings"]["expected_transmitted_generation"],
+                             {"max_tokens": 64000, "reasoning_effort": "max"})
+            executable.write_bytes(b"changed executable")
+            with self.assertRaisesRegex(ValueError, "does not match"):
+                readiness.normalize_spec(spec, executable)
+
 
 class ExecutedCallTests(unittest.TestCase):
     def test_one_call_and_multi_call_replies_both_count(self):

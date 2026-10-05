@@ -30,7 +30,7 @@ import wave
 # Explicit project import only; also works with `python -I benchmark/run.py`.
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
-from native_models import build_model, audit_messages, redact_credentials, classify_error, validate_url, _native, PROVIDERS, PROTOCOLS
+from native_models import build_model, audit_messages, redact_credentials, classify_error, validate_url, _native, PROVIDERS, PROTOCOLS, sdk_prefix, credential_target
 import campaign
 
 MINI_VERSION = "2.4.6"
@@ -64,6 +64,15 @@ def docker_command() -> list[str]:
     return [binary, "--host", host]
 
 
+# The calling attempt's CPU pin on a shared Boat VM (None: unpinned, as on a sole VM).
+_ATTEMPT = threading.local()
+
+
+def cpu_flags() -> list[str]:
+    cpuset = getattr(_ATTEMPT, "cpuset", None)
+    return ["--cpus", "2"] + (["--cpuset-cpus", cpuset] if cpuset else [])
+
+
 def start_container(docker: list[str], image: str, name: str) -> str:
     # A private tmpfs-backed Docker volume is held by a read-only export helper.
     # docker cp cannot reliably read tmpfs; this also permits export while the agent is paused.
@@ -78,7 +87,7 @@ def start_container(docker: list[str], image: str, name: str) -> str:
     shell(docker + ["start", name + "-files"])
     cmd = docker + ["create", "--name", name, "--network", "none", "--read-only",
                     "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--pids-limit", "256",
-                    "--cpus", "2", "--memory", "2g", "--memory-swap", "2g", "--user", "10001:10001"]
+                    *cpu_flags(), "--memory", "2g", "--memory-swap", "2g", "--user", "10001:10001"]
     cmd += ["--mount", f"type=volume,source={volume},target=/workspace,volume-nocopy"]
     for path, size in (("/tmp", "256m"), ("/home/agent", "16m")):
         cmd += ["--tmpfs", f"{path}:rw,nosuid,nodev,size={size},uid=10001,gid=10001"]
@@ -314,7 +323,7 @@ def visualize(docker: list[str], image: str, run_dir: Path, config: dict, durati
     name = "keygen-video-" + uuid.uuid4().hex[:16]
     try:
         shell(docker + ["run", "-d", "--name", name, "--network", "none", "--read-only", "--cap-drop", "ALL",
-                        "--security-opt", "no-new-privileges", "--user", "10001:10001", "--cpus", "2", "--memory", "2g",
+                        "--security-opt", "no-new-privileges", "--user", "10001:10001", *cpu_flags(), "--memory", "2g",
                         "--pids-limit", "256", "--tmpfs", "/tmp:rw,nosuid,nodev,size=1g,uid=10001,gid=10001", image])
         shell(docker + ["exec", "-i", name, "sh", "-c", "cat > /tmp/input.xm"],
               input=(run_dir / "submission/tune.xm").read_bytes())
@@ -400,13 +409,12 @@ def worker_credentials(config: dict, model: dict, key_name: str | None = None) -
         raise ValueError("Credential resolution requires validated native constructor metadata")
     native_name = effective["model_name"]
     prefix = native_name.split("/", 1)[0]
-    expected = "anthropic" if api == "messages" else "openai"
-    if prefix != expected or native_name != f"{prefix}/{model.get('model')}":
+    if prefix != sdk_prefix(model) or native_name != f"{prefix}/{model.get('model')}":
         raise ValueError("Credential target differs from the validated native constructor")
     value = os.environ.get(key_name)
     if not value:
         raise ValueError(f"Missing credential environment variable {key_name}")
-    return {f"{prefix.upper()}_API_KEY": value,
+    return {credential_target(model): value,
             "MSWEA_MODEL_RETRY_STOP_AFTER_ATTEMPT": "1",
             "LITELLM_MODE": "PRODUCTION", "LITELLM_LOCAL_MODEL_COST_MAP": "True"}
 
@@ -487,7 +495,7 @@ def worker(spec_path: Path) -> None:
     from minisweagent.agents.default import DefaultAgent
     if __version__ != MINI_VERSION:
         raise RuntimeError("mini-swe-agent version mismatch")
-    target = "ANTHROPIC_API_KEY" if model["api"] == "messages" else "OPENAI_API_KEY"
+    target = credential_target(model)
     secrets = [os.environ[target]]
     agent = None
     try:
@@ -816,6 +824,30 @@ def pace_boat_allocation(root: Path, interval_seconds: int) -> None:
             write_json(path, record)
 
 
+_BOAT_POOLS: dict = {}
+_BOAT_POOLS_LOCK = threading.Lock()
+
+
+def boat_pool(root: Path, config: dict):
+    """This process's shared-VM pool for one campaign root (one VM per attempt unless packed)."""
+    from boat_pool import BoatPool
+    limits = config["limits"]
+    required = limits["wall_seconds"] + 4 * limits["render_seconds"] + limits["video_seconds"] + 600
+    with _BOAT_POOLS_LOCK:
+        if root not in _BOAT_POOLS:
+            _BOAT_POOLS[root] = BoatPool(
+                config["transport"], root, required,
+                lambda: pace_boat_allocation(root, config["transport"]["boat"].get("allocation_interval_seconds", 0)))
+        return _BOAT_POOLS[root]
+
+
+def shutdown_boat_pools() -> None:
+    with _BOAT_POOLS_LOCK:
+        pools = list(_BOAT_POOLS.values())
+    for pool in pools:
+        pool.shutdown()
+
+
 def run_one(root: Path, config: dict, model: dict, docker: list[str] | None, image: str, visualizer_image: str,
             repetition: int, attempt_id: str, store, retry_of=None, key_lease: KeyLease | None = None) -> None:
     run_dir = root / attempt_id
@@ -824,18 +856,28 @@ def run_one(root: Path, config: dict, model: dict, docker: list[str] | None, ima
             if STOP.is_set():
                 raise KeyboardInterrupt()
             with ExitStack() as stack:
+                lease = None
                 if config["transport"]["backend"] == "boat":
-                    from boat import BoatSession
-                    pace_boat_allocation(root, config["transport"]["boat"].get("allocation_interval_seconds", 0))
-                    session = stack.enter_context(BoatSession(config["transport"], audit_dir=run_dir / "transport"))
+                    lease = stack.enter_context(boat_pool(root, config).lease(attempt_id, run_dir))
+                    session = lease.session
                     docker = session.docker_prefix
                     if session.image_id("agent") != image or session.image_id("visualizer") != visualizer_image:
                         raise ValueError("Boat images differ from frozen campaign")
-                    write_json(run_dir / "transport.json", {"boat_id": session.id, "images": {"agent": image, "visualizer": visualizer_image}})
+                    write_json(run_dir / "transport.json", {**lease.record(),
+                                                            "images": {"agent": image, "visualizer": visualizer_image}})
                     required = config["limits"]["wall_seconds"] + 4 * config["limits"]["render_seconds"] + config["limits"]["video_seconds"] + 600
                     if session.archive_deadline - time.time() < required:
                         raise RuntimeError("Boat delivered TTL cannot cover the frozen runtime and export budgets")
-                _run_one(root, config, model, docker, image, visualizer_image, repetition, attempt_id, store, retry_of, key_lease)
+                _ATTEMPT.cpuset = lease.cpuset if lease is not None else None
+                try:
+                    _run_one(root, config, model, docker, image, visualizer_image, repetition, attempt_id, store, retry_of, key_lease)
+                finally:
+                    _ATTEMPT.cpuset = None
+                if lease is not None and (events := lease.host_oom()):
+                    # A neighbour exhausted the shared host: never charge this attempt to its model.
+                    write_json(run_dir / "host-oom.json", {"events": events})
+                    from boat import BoatError
+                    raise BoatError("Host-level OOM on a shared Boat VM during this attempt", code="shared_host_oom")
     except BaseException as exc:
         status = json.loads((run_dir / "status.json").read_text())
         status.update(status="INTERRUPTED" if isinstance(exc, (KeyboardInterrupt, SystemExit)) else "INFRA_ERROR",
@@ -990,6 +1032,8 @@ def probe_provider(model: dict, credential: str, timeout: float = 120) -> dict:
 KEY_GATE_FRESH_SECONDS = 3600
 # A key whose provider reports its weekly usage window spent re-probes only this often.
 WEEKLY_LIMIT_BACKOFF_SECONDS = 6 * 3600
+# Boat credit burn per VM type (credit seconds are 1x seconds): small 0.5x, default 1x, large 2x.
+BOAT_BURN_RATE = {"small": 0.5, "default": 1.0, "large": 2.0}
 
 
 def quota_wait(probe_interval: int, limit_text: str) -> int:
@@ -1258,11 +1302,15 @@ class RerunQueue:
         remaining = self.balance()
         if remaining is None:
             return True
-        ttl = self.config["transport"]["boat"]["ttl_seconds"]
+        boat = self.config["transport"]["boat"]
+        ttl = boat["ttl_seconds"]
+        # Worst case per attempt: its VM runs the whole deadman TTL at the type's burn rate, shared
+        # by attempts_per_vm tenants (credit seconds are 1x-rate seconds; small 0.5x, large 2x).
+        share = ttl * BOAT_BURN_RATE[boat.get("type", "small")] / boat.get("attempts_per_vm", 1)
         now = time.time()
         started = [item[2] for item in self.inflight.values()] + [value for record in others for value in record["inflight_started"]]
-        running = sum(max(0, ttl - (now - value)) for value in started)
-        projected = remaining - running - ttl
+        running = sum(share * max(0, ttl - (now - value)) / ttl for value in started)
+        projected = remaining - running - share
         if projected < self.boat_reserve:
             self.stopped = {"reason": "boat_reserve", "remaining_seconds": remaining, "projected_seconds": projected,
                             "reserve_seconds": self.boat_reserve}
@@ -1467,11 +1515,15 @@ def _run_one(root: Path, config: dict, model: dict, docker: list[str], image: st
                 result["render"] = "ok"
                 if not fault:
                     result.update(status="RENDERED_UNSCORED", failure_category=None, eligible=True)
-                try:
-                    with slot(root, "video", config["concurrency"]["video"]):
-                        result["video"] = visualize(docker, visualizer_image, run_dir, config, result["audio"]["duration_seconds"])
-                except (OSError, ValueError, subprocess.SubprocessError) as exc:
-                    result["video"] = {"error": type(exc).__name__}
+                if (config["transport"].get("boat") or {}).get("record_video", True) is False:
+                    # Presentation only and no longer published; never graded (scores use canonical.wav).
+                    result["video"] = {"skipped": "campaign disables the presentation-only video"}
+                else:
+                    try:
+                        with slot(root, "video", config["concurrency"]["video"]):
+                            result["video"] = visualize(docker, visualizer_image, run_dir, config, result["audio"]["duration_seconds"])
+                    except (OSError, ValueError, subprocess.SubprocessError) as exc:
+                        result["video"] = {"error": type(exc).__name__}
             except (ValueError, wave.Error, EOFError) as exc:
                 result.update(status="MODEL_FAILED" if not fault else result["status"], render="invalid",
                               failure_category=fault or "MODEL", model_failure=not bool(fault), error=str(exc))
@@ -1790,4 +1842,7 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    finally:
+        shutdown_boat_pools()  # never leave a lingering shared VM billing after the campaign

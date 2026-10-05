@@ -94,6 +94,38 @@ class BenchmarkTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "readiness"):
             self.compile()
 
+    def test_devin_compilation_freezes_alias_response_identity_bridge_and_concurrency(self):
+        self.model.update(provider="devin", model="devin/exact-model",
+                          base_url="http://127.0.0.1:8417/v1", api_key_env="DEVIN_BRIDGE_API_KEY")
+        self.model["backend_provenance"]["bridge"] = {
+            "implementation": "CLIProxyAPI", "version": "synthetic", "executable_sha256": "d" * 64}
+        self.inventory["models"][0].update(provider="Devin", proxy_request_model="devin/exact-model")
+        self.tier_spec_path.write_text(json.dumps({"entries": [
+            {"provider": "devin", "api": "chat", "model": "devin/exact-model", "tier": "max",
+             "reasoning": {"reasoning_effort": "max"}}]}))
+        self.model["tier"]["spec_sha256"] = campaign.file_digest(self.tier_spec_path)
+        self.proof["route"] = {key: self.model[key] for key in
+                              ("provider", "api", "base_url", "model", "response_model", "backend_provenance")}
+        self.proof["effective_settings"] = campaign.normalize_native(self.selection, [self.model])[0]
+        self.proof_path.write_text(json.dumps(self.proof))
+        self.model["readiness"]["evidence"]["artifact_sha256"] = campaign.file_digest(self.proof_path)
+        compiled = self.compile()
+        self.assertEqual(compiled["models"][0]["model"], "devin/exact-model")
+        self.assertEqual(compiled["models"][0]["response_model"], "exact-model")
+        for mutation in ("bridge", "request_identity", "response_identity", "concurrency"):
+            changed = copy.deepcopy(compiled)
+            if mutation == "bridge":
+                changed["models"][0]["backend_provenance"]["bridge"] = None
+                expected = "Bridge route"
+            elif mutation == "concurrency":
+                del changed["concurrency"]["providers"]["devin"]
+                expected = "every provider"
+            else:
+                changed["models"][0]["model" if mutation == "request_identity" else "response_model"] = "other-model"
+                expected = "identity differs"
+            with self.subTest(mutation=mutation), self.assertRaisesRegex(ValueError, expected):
+                campaign.validate(changed, check_provenance=False)
+
     def test_claimed_readiness_without_real_proof_file_rejected(self):
         self.proof_path.unlink()
         with self.assertRaisesRegex(ValueError, "existing bounded"):
@@ -226,6 +258,35 @@ class BenchmarkTests(unittest.TestCase):
         self.selection_path.write_text(json.dumps(self.selection))
         plan["models"]["verified"][2]["origin"] = origin(3, "UNATTEMPTED", None, "RESERVED")
         plan_path.write_text(json.dumps(plan))
+        with self.assertRaisesRegex(ValueError, "condition differs"):
+            compile_queue("changed.json")
+
+    def test_cross_environment_queue_links_only_when_declared_and_route_unchanged(self):
+        primary = self.compile()
+        self.selection["campaign_id"] = "fixture-queue"
+        # Another sandbox environment: a different agent image (e.g. a local arm64 build).
+        self.selection["image"] = "sha256:" + "c" * 64
+        self.selection_path.write_text(json.dumps(self.selection))
+        plan = {"max_queue_attempts": 4, "models": {"verified": [
+            {"repetition": n, "origin": {"campaign_id": primary["campaign_id"], "attempt_id": f"verified-rep-{n}",
+                                         "status": "RESERVED", "status_sha256": "a" * 64,
+                                         "outcome": "UNATTEMPTED", "failure_category": None}} for n in (1, 2, 3)]}}
+        plan_path = self.root / "queue-plan.json"
+        compile_queue = lambda out: campaign.compile_campaign(self.inventory_path, self.selection_path, self.root / out,
+                                                              self.tier_spec_path, queue_plan=plan_path,
+                                                              queue_links=[self.root / "campaign.json"])
+        plan_path.write_text(json.dumps(plan))
+        with self.assertRaisesRegex(ValueError, "condition differs"):
+            compile_queue("undeclared.json")
+        plan["cross_environment"] = True
+        plan_path.write_text(json.dumps(plan))
+        queue = compile_queue("cross.json")
+        self.assertTrue(queue["policies"]["cross_environment"])
+        self.assertEqual(queue["policies"]["linked_campaigns"][0]["condition_fingerprints"],
+                         {"verified": campaign.environment_free_fingerprint(primary, primary["models"][0])})
+        # Anything beyond the environment must still match.
+        self.selection["limits"]["command_seconds"] += 60
+        self.selection_path.write_text(json.dumps(self.selection))
         with self.assertRaisesRegex(ValueError, "condition differs"):
             compile_queue("changed.json")
 
@@ -651,12 +712,28 @@ class ModelSequenceTests(unittest.TestCase):
         self.assertEqual(result["status"], "COMPLETED")
 
     def test_rerun_queue_starts_nothing_that_would_breach_the_boat_reserve(self):
-        root, config, snapshot = self.queue_root({"backend": "boat", "boat": {"ttl_seconds": 10800}})
+        boat = {"type": "default", "ttl_seconds": 10800}
+        root, config, snapshot = self.queue_root({"backend": "boat", "boat": boat})
         with patch.object(run, "run_one", side_effect=self.queue_attempt({})), patch.object(run.STOP, "wait"):
             result = run.RerunQueue(root, config, None, snapshot, None, probe_interval=0, retry_interval=0,
                                     boat_reserve=36000, probe=lambda model, key: {"category": "ok"},
                                     balance=lambda: 46799).run()
         self.assertEqual((self.invoked, result["status"], result["stopped"]["reason"]), ([], "STOPPED_BOAT_RESERVE", "boat_reserve"))
+
+    def admits_one_start(self, tenants):
+        boat = {"type": "default", "ttl_seconds": 10800, "attempts_per_vm": tenants}
+        root, config, snapshot = self.queue_root({"backend": "boat", "boat": boat})
+        return run.RerunQueue(root, config, None, snapshot, None, probe_interval=60, retry_interval=60,
+                              boat_reserve=100, probe=lambda model, key: {"category": "ok"},
+                              balance=lambda: 2000).reserve_allows_start()
+
+    def test_boat_reserve_counts_a_shared_vm_once_not_per_tenant(self):
+        # 6 tenants on one default VM: one attempt's worst case is a sixth of the VM's TTL (1800 s),
+        # so 2000 s of credit admits a start.
+        self.assertTrue(self.admits_one_start(6))
+
+    def test_boat_reserve_charges_an_unshared_vm_its_whole_ttl(self):
+        self.assertFalse(self.admits_one_start(1))
 
     def test_rerun_queue_gates_each_model_holds_deferred_ones_and_continues_earlier_reruns(self):
         root, config, snapshot = self.queue_root()
