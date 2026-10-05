@@ -41,6 +41,7 @@ export const DISCLAIMER = {
 export const OVERVIEW = [
   "A score has two parts. First the tune earns up to 100 points for what the music contains. Then four checks look for faults.",
   "Each check is a multiplier from 0 to 1, so it can only take points away. A tune with no faults keeps all its points.",
+  "Best of 3 ranks each model by its highest eligible score from three predetermined attempt ordinals. Ties select the lowest ordinal. Each eligible attempt stays playable with its own score breakdown; infrastructure reruns replace an ordinal rather than add an attempt. Models without an eligible result are pending, not zero-scored.",
 ];
 
 // id, title, max (points or "x1.0" multiplier), plain summary, what earns credit, what loses it, details.
@@ -101,6 +102,7 @@ export const SCORING_NOTES = [
   { id: "judges", title: "No judges", text: "No people and no AI rate the tunes. The same fixed rules score every model, with no special cases." },
   { id: "flags", title: "Flags are notes, not penalties", text: "Flags point out something worth listening for, like a masked melody. Only the checks above change the score." },
   { id: "cost", title: "What cost means", text: "Estimated from the tokens each run used, at the maker's published price. It's what the run would cost at those prices, not what was billed. Models without a published API price show n/a." },
+  { id: "consistency", title: "Consistency marker pending", text: "The best-of-3 score measures the selected attempt, not consistency across attempts. A consistency marker is pending in Microck/keygen-bench#21.", url: "https://github.com/Microck/keygen-bench/issues/21" },
 ];
 
 export const SUPPORT = {

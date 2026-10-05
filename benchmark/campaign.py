@@ -15,14 +15,15 @@ import tempfile
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
-from native_models import MAX_TRANSPORT_RETRIES, REASONING_FIELDS, TIERS, check_tier, declared_reasoning
-from report import NON_MODEL_FAILURES, QUEUE_SELECTION, condition_fingerprint, entry_links, origin_reruns, queue_chain_id
+from native_models import BRIDGE_PROVIDERS, MAX_TRANSPORT_RETRIES, REASONING_FIELDS, TIERS, check_tier, declared_reasoning
+from report import (NON_MODEL_FAILURES, QUEUE_SELECTION, condition_fingerprint, entry_links,
+                    environment_free_fingerprint, link_fingerprint, origin_reruns, queue_chain_id)
 
 SCHEMA = "keygen-native-campaign-3"
 # Cohort label of the frozen prompts/system.txt + prompts/task.txt pair. Campaigns compiled
 # before the label existed (no prompts.version) ran prompt-v1.
 PROMPT_VERSION = "prompt-v2"
-PROVIDERS = {"Codex OAuth": "codex_oauth", "Anthropic OAuth": "anthropic_oauth", "OpenCode Go": "go", "Vercel AI Gateway": "vercel", "NVIDIA NIM": "nim"}
+PROVIDERS = {"Codex OAuth": "codex_oauth", "Anthropic OAuth": "anthropic_oauth", "OpenCode Go": "go", "Vercel AI Gateway": "vercel", "NVIDIA NIM": "nim", "Google AI Studio": "google", "Devin": "devin"}
 LIMIT_KEYS = {"steps", "wall_seconds", "request_seconds", "command_seconds", "render_seconds", "video_seconds", "artifact_bytes"}
 FIRST_SUCCESS = "first_success_up_to_three_attempts"
 # Every predetermined repetition runs regardless of earlier outcomes; only QUOTA/AUTH/CONTENT_FILTER stop
@@ -57,7 +58,7 @@ def file_digest(path: Path) -> str:
 
 
 def source_provenance() -> dict:
-    names = ["run.py", "drive.py", "campaign.py", "native_models.py", "boat.py", "boat_transport.py", "artifacts.py", "bridge.py", "visualize.sh", "Dockerfile", "requirements.txt"]
+    names = ["run.py", "drive.py", "campaign.py", "native_models.py", "boat.py", "boat_pool.py", "boat_transport.py", "artifacts.py", "bridge.py", "visualize.sh", "Dockerfile", "requirements.txt"]
     return {name: file_digest(HERE / name) for name in names if (HERE / name).is_file()}
 
 
@@ -237,7 +238,8 @@ def ordinal_list(values, ordinals: list[int]) -> bool:
 
 def check_queue_policies(config: dict) -> None:
     policies = config["policies"]
-    if (set(policies) != QUEUE_POLICY_KEYS
+    if (set(policies) - {"cross_environment"} != QUEUE_POLICY_KEYS
+            or policies.get("cross_environment", True) is not True
             or {key: policies[key] for key in POLICIES} != {**POLICIES, "attempt_selection": QUEUE}):
         raise ValueError("Campaign failure, selection and authentication policies must be explicit")
     ordinals = list(range(1, config["max_attempts"] + 1))
@@ -289,7 +291,7 @@ def check_queue_policies(config: dict) -> None:
     for campaign_id, link in linked.items():
         fingerprints = link["condition_fingerprints"]
         if (not referenced[campaign_id] or not isinstance(fingerprints, dict) or set(fingerprints) != referenced[campaign_id]
-                or any(fingerprints[model_id] != condition_fingerprint(config, models[model_id]) for model_id in fingerprints)):
+                or any(fingerprints[model_id] != link_fingerprint(config, models[model_id]) for model_id in fingerprints)):
             raise ValueError("Every model must freeze each linked campaign's condition fingerprint it draws on")
 
 
@@ -427,17 +429,18 @@ def validate(config: dict, *, check_provenance=True) -> dict:
         row = entries.get(model["inventory_id"])
         if not row or PROVIDERS.get(row.get("provider")) != model["provider"] or row.get("status", "").startswith(("held", "blocked")):
             raise ValueError("Excluded, held or unmapped inventory route")
-        if model["model"] != row.get("upstream_model") or model["response_model"] != row.get("upstream_model"):
+        request_model = row.get("proxy_request_model") if model["provider"] == "devin" else row.get("upstream_model")
+        if model["model"] != request_model or model["response_model"] != row.get("upstream_model"):
             raise ValueError("Requested or response identity differs from the approved inventory mapping")
         backend = model["backend_provenance"]
         if not isinstance(backend, dict) or set(backend) != {"service_revision", "bridge"}:
-            raise ValueError("Declare provider revision or unknown, plus exact OAuth bridge executable provenance")
+            raise ValueError("Declare provider revision or unknown, plus exact credential bridge executable provenance")
         bridge = backend["bridge"]
-        if model["provider"] in {"codex_oauth", "anthropic_oauth"}:
+        if model["provider"] in BRIDGE_PROVIDERS:
             if (not isinstance(bridge, dict) or set(bridge) != {"implementation", "version", "executable_sha256"}
                     or not bridge["implementation"] or not bridge["version"]
                     or not re.fullmatch(r"[a-f0-9]{64}", bridge["executable_sha256"])):
-                raise ValueError("OAuth route requires frozen bridge implementation/version/executable hash")
+                raise ValueError("Bridge route requires frozen bridge implementation/version/executable hash")
         elif bridge is not None:
             raise ValueError("Direct provider routes must not introduce a bridge")
         readiness = model["readiness"]
@@ -549,7 +552,9 @@ def repetition_policies(ordinals: list[int] | None, linked_path: Path | None,
 def queue_policies(plan_path: Path, linked_paths: list[Path]) -> tuple[dict, dict]:
     """Policies of a rerun queue from its plan ({"max_queue_attempts", "models": {id: entries}})."""
     plan = json.loads(plan_path.read_text())
-    if not isinstance(plan, dict) or set(plan) != {"max_queue_attempts", "models"}:
+    # cross_environment: continue linked ordinals on another sandbox environment (recorded per attempt).
+    if (not isinstance(plan, dict) or not {"max_queue_attempts", "models"} <= set(plan)
+            <= {"max_queue_attempts", "models", "cross_environment"} or plan.get("cross_environment", True) is not True):
         raise ValueError("A queue plan declares max_queue_attempts and every model's ordinal origins")
     linked = {}
     for path in linked_paths:
@@ -563,6 +568,8 @@ def queue_policies(plan_path: Path, linked_paths: list[Path]) -> tuple[dict, dic
                 "max_queue_attempts": plan["max_queue_attempts"],
                 "linked_campaigns": [{"campaign_id": campaign_id, "config_sha256": digest(manifest),
                                       "condition_fingerprints": {}} for campaign_id, manifest in sorted(linked.items())]}
+    if plan.get("cross_environment"):
+        policies["cross_environment"] = True
     return policies, linked
 
 
@@ -612,12 +619,13 @@ def compile_campaign(inventory_path: Path, selection_path: Path, output: Path, t
     if queue_plan is not None:
         links = {link["campaign_id"]: link for link in policies["linked_campaigns"]}
         for model in config["models"]:
-            fingerprint = condition_fingerprint(config, model)
+            fingerprint = link_fingerprint(config, model)
+            compare = environment_free_fingerprint if policies.get("cross_environment") else condition_fingerprint
             for entry in policies["plan"].get(model["id"], []):
                 for link in entry_links(entry) if isinstance(entry, dict) else []:
                     frozen = {item.get("id"): item for item in queue_linked[link["campaign_id"]].get("models", [])}
                     if (model["id"] not in frozen
-                            or condition_fingerprint(queue_linked[link["campaign_id"]], frozen[model["id"]]) != fingerprint):
+                            or compare(queue_linked[link["campaign_id"]], frozen[model["id"]]) != fingerprint):
                         raise ValueError(f"{model['id']}: condition differs from the linked campaign's frozen model")
                     links[link["campaign_id"]]["condition_fingerprints"][model["id"]] = fingerprint
     validate(config)

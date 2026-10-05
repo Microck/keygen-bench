@@ -1,0 +1,16 @@
+{
+  "model": "claude-opus-5 (Anthropic OAuth, highest declared tier: effort max, adaptive thinking, 128k output)",
+  "symptom": "Every qualification send refused before generation: HTTP 200, stop_reason refusal, 0 output tokens; recorded as content_filter_block x3 -> excluded since 2026-10-01.",
+  "auth": "Bridge Claude login had also expired (access token 2026-10-04T01:54Z, refresh rejected); user re-logged in 2026-10-05.",
+  "probes_effort_max": {
+    "benchmark prompt (keygen system + task + bash tool)": "5/5 accepted",
+    "qualification task, old wording + random 32-hex marker": "refused (3/3 in harness, 5/5 direct)",
+    "qualification task, new wording + random 32-hex marker": "refused 6/6",
+    "qualification task, old wording + random word marker": "refused 6/6",
+    "qualification task, new wording + random word marker": "accepted 5/6, then 24/24",
+    "efforts xhigh and high, old wording": "accepted 5/5 each"
+  },
+  "fix": "native_readiness.py only: neutral SYSTEM wording and a six-random-word marker instead of 32 hex. The benchmark prompt every model is scored on is unchanged; Opus 5 stays at effort max.",
+  "result": "Harness qualification verified 2026-10-05 with 0 content_filter_block; campaign next-max-tier-prompt-v2-opus5-arm64-20261005 (Ashburn local arm64, 3 independent attempts) started; attempt 1: 7 requests, 0 blocks after 2.5 min.",
+  "environment_note": "Other Claude models ran on Boat x86; Opus 5 runs on Ashburn arm64 (recorded per attempt)."
+}

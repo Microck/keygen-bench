@@ -75,6 +75,26 @@ def condition_fingerprint(config: dict, model: dict) -> str:
                                  "image_bundle_sha256": (boat.get("image_bundle") or {}).get("sha256")}})
 
 
+def environment_free_fingerprint(config: dict, model: dict) -> str:
+    """The condition without its execution environment (sandbox images and Boat/local transport).
+
+    Used only by a rerun queue that declares `cross_environment`: it continues another campaign's
+    ordinals on a different machine (e.g. local arm64 Docker after Boat x86). Route, settings,
+    readiness, prompts and limits must still match; each attempt keeps its own environment record.
+    """
+    return digest({"schema": config.get("schema"), "max_attempts": config.get("max_attempts"), "model": model,
+                   "inventory": [row for row in (config.get("inventory") or {}).get("entries") or []
+                                 if row.get("model") == model.get("inventory_id")],
+                   "prompts": config.get("prompts"), "limits": config.get("limits"), "native": config.get("native")})
+
+
+def link_fingerprint(config: dict, model: dict) -> str:
+    """The fingerprint a campaign's links compare: environment-free only for a declared cross-environment queue."""
+    if (config.get("policies") or {}).get("cross_environment") is True:
+        return environment_free_fingerprint(config, model)
+    return condition_fingerprint(config, model)
+
+
 def origin_reruns(origin: dict | None) -> bool:
     """Whether a rerun queue runs an ordinal: no origin, an unstarted slot, or a non-model failure."""
     return (origin is None or origin["outcome"] == "UNATTEMPTED"
