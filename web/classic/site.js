@@ -1,0 +1,683 @@
+// PROTOTYPE results site: full screen and chunky. Built from FT2 parts (raised panels,
+// sunken wells, pushbuttons, PATTEXT on black) in FT2 pixel units, laid out on a stage of
+// (viewport / k) and zoomed by an integer k, so text, buttons and logos render at FT2's size x k.
+// Every page fills the viewport; only inner wells scroll.
+import { FB, PAL } from "./core/fb.js";
+import { drawPatternFit, drawScopes } from "./core/pattern.js";
+import { Player } from "./core/player.js";
+import { loadXM, money, usd, tokens, mmss } from "./core/data.js";
+import { h, badge, dropdown, makerItems, modelItems, scoreColor } from "./core/ui.js";
+import { SCORING, SCORING_NOTES, DISCLAIMER, KEYGEN, OVERVIEW, SETUP, PROMPTS, SUPPORT, SITE, PAGES } from "./core/content.js";
+import { fmt } from "./core/xm.js";
+import { slide, TRANSITION_CSS } from "./core/transitions.js";
+import { MARKERS, MARKER_CSS, consistencyTitle } from "./core/consistency.js";
+import { linkIcon } from "./core/logos.js";
+
+const SHORT = { SUSTAINED_NOISE: "NOISE", PHRASE_SAMPLE: "PHRASE", SAMPLE_HEAVY: "SMP", TAIL_SILENCE: "TAIL", MASKED: "MASK", SILENCE: "SIL" };
+
+const CSS = `
+.vb { position: fixed; left: 0; top: 0; transform-origin: 0 0; display: flex; flex-direction: column; gap: 1px; padding: 1px; background: var(--desktop); overflow: hidden; }
+.vb .bar { flex: none; display: flex; align-items: center; height: 24px; padding: 0 3px; gap: 2px; }
+.vb .logo { display: flex; align-items: center; gap: 6px; padding-left: 3px; min-width: 0; overflow: hidden; }
+.vb .logo b { font-family: "FT2 Big"; font-size: 20px; line-height: 20px; font-weight: normal; color: #fff; text-shadow: 1px 1px 0 var(--dsktop2); white-space: nowrap; position: relative; top: 2px; }
+.vb .links { display: flex; gap: 3px; align-items: center; position: relative; top: 2px; }
+.vb .links a { display: block; width: 12px; height: 12px; outline-offset: 1px; }
+.vb .links a:hover img { filter: brightness(1.3); }
+.vb .links img { display: block; width: 12px; height: 12px; image-rendering: pixelated; }
+.vb table.lb .try { color: var(--dim); flex: none; }
+.vb .attempts { display: grid; grid-template-columns: auto 1fr auto; gap: 1px 6px; padding: 3px 4px; align-items: center; }
+.vb .attempts .on { color: #fff; }
+.vb .attempts button { height: 12px; min-width: 0; padding: 0 3px; }
+.vb pre.prompt { margin: 0 0 7px; padding: 3px 4px; font: inherit; color: #fff; white-space: pre-wrap; max-width: 96ch; }
+.vb .embed { display: grid; gap: 3px; padding: 4px 5px; margin: 0 0 7px; max-width: 86ch; color: #fff; }
+.vb .embed .row { height: 16px; }
+.vb .dist { position: relative; height: 9px; }
+.vb .dist i { position: absolute; top: 1px; bottom: 0; width: 2px; margin-left: -1px; cursor: pointer; }
+.vb .dist i::before { content: ""; position: absolute; inset: -2px -2px; }
+.vb .dist i:hover { background: #fff !important; }
+.vb .tabs { display: flex; gap: 1px; margin-left: auto; }
+.vb .tabs .btn { height: 18px; min-width: 62px; }
+.vb .page { flex: 1; min-height: 0; display: grid; gap: 1px; }
+.vb .panel { padding: 3px; min-width: 0; min-height: 0; display: flex; flex-direction: column; gap: 2px; }
+.vb .panel > h2 { margin: 0; padding: 1px 1px 0; font-size: 10px; line-height: 11px; font-weight: normal; color: #fff; text-shadow: 1px 1px 0 var(--dsktop2); white-space: nowrap; overflow: hidden; }
+.vb .well { padding: 3px 4px; color: #fff; overflow: auto; min-height: 0; }
+.vb .well p { margin: 0 0 7px; max-width: 86ch; }
+.vb .row { display: flex; gap: 3px; align-items: center; min-width: 0; }
+.vb .grow { flex: 1; min-width: 0; }
+.vb .kv { display: grid; grid-template-columns: auto 1fr; gap: 1px 8px; margin: 0; padding: 3px 4px; align-content: start; }
+.vb .kv dt { color: var(--pattext); white-space: nowrap; }
+.vb .kv dd { margin: 0; color: #fff; text-align: right; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.vb .meter { height: 7px; position: relative; }
+.vb .meter i { position: absolute; left: 1px; top: 1px; bottom: 0; background: var(--pattext); }
+.vb canvas.px { display: block; image-rendering: pixelated; }
+.vb .fill { position: relative; flex: 1; min-height: 0; min-width: 0; }
+.vb .fill > canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+.vb table.lb { width: 100%; border-collapse: collapse; table-layout: fixed; }
+.vb table.lb td.nm { overflow: hidden; }
+.vb table.lb .nmc { display: flex; gap: 4px; align-items: center; min-width: 0; }
+.vb table.lb .nmt { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 0 1 auto; }
+.vb table.lb .flag { flex: none; }
+.vb table.lb col.c-rank { width: 28px; } .vb table.lb col.c-score { width: 72px; } .vb table.lb col.c-cost { width: 52px; } .vb table.lb col.c-out { width: 50px; } .vb table.lb col.c-min { width: 34px; }
+.vb table.lb td.num, .vb table.lb th.num { padding-right: 6px; }
+.vb table.lb th { position: sticky; top: 0; z-index: 1; background: var(--desktop); color: #fff; text-shadow: 1px 1px 0 var(--dsktop2); font-weight: normal; text-align: left; padding: 2px 4px; cursor: pointer; white-space: nowrap; box-shadow: inset 0 -1px 0 var(--dsktop2); }
+.vb table.lb th.num, .vb table.lb td.num { text-align: right; }
+.vb table.lb th[aria-sort] { color: var(--pattext); }
+.vb table.lb td { padding: 0 4px; height: 18px; color: var(--pattext); white-space: nowrap; }
+.vb table.lb td .badge { vertical-align: -4px; }
+.vb table.lb tbody tr { cursor: pointer; }
+.vb table.lb tbody tr:hover td { background: var(--blckmrk); }
+.vb table.lb tbody tr.sel td { background: var(--desktop); color: #fff; }
+.vb table.lb tr.exh td { color: var(--dim); }
+.vb .sbar { display: inline-block; height: 7px; vertical-align: 0; margin-right: 4px; }
+.vb .flag { color: #FFAA00; cursor: help; }
+.vb .flag:hover { color: #FFFF55; text-decoration: underline; }
+.vb .big { font-family: "FT2 Big"; font-size: 20px; line-height: 20px; color: #fff; text-shadow: 1px 1px 0 var(--looppin); }
+.vb .toc .btn { justify-content: flex-start; height: 24px; width: 100%; padding-left: 5px; }
+.vb .toc { gap: 2px; }
+.vb pre.formula { margin: 0 0 7px; color: var(--pattext); font: inherit; }
+.vb table.plain { border-collapse: collapse; margin-bottom: 7px; }
+.vb table.plain td { padding: 0 10px 0 0; color: var(--pattext); }
+.vb table.plain tr:first-child td { color: #fff; }
+.vb .cta { height: 22px; min-width: 120px; }
+.vb .dd { height: 14px; }
+.vb .dd-pop { max-height: 60vh; }
+.vb .dd-pop .list-row { height: 17px; line-height: 17px; }
+.vb .dd-face .badge, .vb .dd-pop .badge { width: 12px !important; height: 12px !important; }
+.vb .list-row { height: 10px; line-height: 10px; }
+.vb .tbtn { height: 16px; }
+.vb .detail > section { flex: none; }
+.vb .note { margin: 0; padding: 0 2px; color: var(--dim); white-space: normal; }
+.vb .card-name { white-space: normal; overflow-wrap: anywhere; }
+.vb .kv dd.wrap { white-space: normal; }
+.vb .pod-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.vb .seek > i::after { content: ""; position: absolute; right: -1px; top: -1px; bottom: 0; width: 2px; background: #fff; }
+.vb .seek:hover { box-shadow: inset 1px 1px 0 var(--dsktop2), inset -1px -1px 0 var(--dsktop1), inset 0 0 0 1px var(--looppin); }
+/* Fixed-width readouts: font1 digits are 7px, ':' 3px; min-width in ch + tabular glyphs => no jitter. */
+.vb .lcd { flex: none; height: 14px; padding: 2px 0 0; white-space: nowrap; color: #fff; display: inline-flex; justify-content: center; overflow: hidden; }
+.vb .lcd .c { display: inline-block; width: 8px; text-align: center; }
+.vb .lcd .c.n { width: 4px; }
+.vb .page { position: relative; }
+
+/* Hover note: anchored to its row (position: relative) so it spans the row and stays inside the well. */
+.vb .hint { color: #FFFF55; cursor: help; padding: 0 2px; outline: none; }
+/* Wanted table: one grid for header and rows so the columns line up. Each model is two lines:
+   logo, name, price, estimate; then a full-width funding bar under the name. */
+.vb .wanted { display: grid; grid-template-columns: 16px minmax(0, 1fr) 72px 44px; gap: 1px 4px; align-items: center; position: relative; }
+.vb .wanted + .wanted { margin-top: 5px; }
+.vb .wanted > .badge { grid-row: span 2; align-self: start; margin-top: 1px; }
+.vb .wanted .wn { white-space: nowrap; line-height: 14px; }
+.vb .wanted .we { text-align: right; }
+.vb .wanted .fund { grid-column: 2 / -1; }
+/* Funding bar: sunken well, PATTEXT fill, amount printed on top (like FT2's sample-editor readouts). */
+.vb .fund { position: relative; height: 12px; overflow: hidden; }
+.vb .fund i { position: absolute; left: 1px; top: 1px; bottom: 1px; background: var(--pattext); max-width: calc(100% - 2px); }
+.vb .fund b { position: relative; display: block; font-weight: normal; line-height: 12px; text-align: center; color: #fff; text-shadow: 1px 1px 0 #000; white-space: nowrap; overflow: hidden; }
+/* Fold-out note: summary is a pushbutton with a play-arrow; body text white, headings PATTEXT blue. */
+.vb .fold { margin-top: 8px; }
+.vb .fold > summary { list-style: none; display: inline-flex; height: 16px; padding: 0 5px; gap: 4px; }
+.vb .fold > summary::-webkit-details-marker { display: none; }
+.vb .fold > summary::before { content: "\\25B6"; font-size: 7px; }
+.vb .fold[open] > summary::before { content: "\\25BC"; }
+.vb .fold[open] > summary { box-shadow: inset 1px 1px 0 var(--button2); padding: 1px 4px 0 6px; }
+.vb .fold-h { color: var(--pattext); margin: 8px 0 2px; }
+.vb .fold p { margin: 0 0 4px; }
+/* Last rows: open the note upward so the well's bottom edge doesn't cut it off. */
+.vb .wanted:nth-last-of-type(-n+2) .hint:hover::after, .vb .wanted:nth-last-of-type(-n+2) .hint:focus::after { top: auto; bottom: 17px; }
+.vb .hint.goal { color: #fff; padding: 0; text-decoration: underline dotted; text-underline-offset: 2px; }
+.vb .hint:hover::after, .vb .hint:focus::after { content: attr(data-tip); position: absolute; left: 18px; right: 0; top: 17px; z-index: 60; white-space: pre-line; padding: 4px 6px; background: var(--buttons); color: #000; text-shadow: none; text-decoration: none; font-weight: normal; box-shadow: inset 1px 1px 0 var(--btnlght, #fff), inset -1px -1px 0 var(--btnshdw, #000), 0 0 0 1px #000; line-height: 12px; text-align: left; }
+.vb .tabs .btn[aria-current="page"] { animation: vb-tab 260ms steps(4, end); }
+@keyframes vb-tab { 0% { background: #fff; } 50% { background: var(--dsktop1); } 100% { background: var(--buttons); } }
+`;
+
+// Integer zoom (the FT2 screen is 632x400 at k x). A 1280x640 laptop viewport still gets 2x (640x320 FT2 px stage).
+function pickScale() {
+  return Math.max(1, Math.floor(Math.min(innerWidth / 600, innerHeight / 320)));
+}
+
+export async function mount(root, ctx) {
+  const { data } = ctx;
+  let { page, run: slug } = ctx;
+  root.append(h("style", {}, CSS + TRANSITION_CSS + MARKER_CSS));
+  const main = h("main", { class: "page" });
+  const tabs = h("nav", { class: "tabs", "aria-label": "Pages" });
+  const bar = h("header", { class: "bar raised" },
+    h("div", { class: "logo" }, h("b", {}, "KEYGEN BENCH"),
+      h("nav", { class: "links", "aria-label": "Links" },
+        h("a", { href: SITE.twitter, target: "_blank", rel: "noopener", title: "@JustMicrock on X", "aria-label": "@JustMicrock on X" }, h("img", { src: linkIcon("x"), alt: "" })),
+        h("a", { href: SITE.repo, target: "_blank", rel: "noopener", title: "Microck/keygen-bench on GitHub", "aria-label": "Source on GitHub" }, h("img", { src: linkIcon("github"), alt: "" })))), tabs);
+  const shell = h("div", { class: "ft2 vb" }, bar, main);
+  root.append(shell);
+  let raf = 0, k = 1;
+  const cmParam = new URLSearchParams(location.search).get("cm");
+  const S = { sort: "score", asc: false, maker: "All", sel: slug, exh: true, scoringTab: "keygen", view: "best", cm: MARKERS.some((m) => m.id === cmParam) ? cmParam : MARKERS[0].id };
+  const ranked = () => data.runs.filter((x) => x.rank).length;
+  const rankText = (r) => r.rank ? `${r.rank} of ${ranked()}` : r.failed ? "failed" : r.exhibition ? "exhibition" : `ranked by #${r.model.best.attempt}`;
+  const nameOf = (r) => r.label + (r.model.declared > 1 ? ` #${r.attempt}` : "");
+
+  const fit = () => {
+    k = pickScale();
+    shell.style.zoom = k;
+    shell.style.width = innerWidth / k + "px";
+    shell.style.height = innerHeight / k + "px";
+    shell.dataset.scale = k;
+  };
+  fit();
+  addEventListener("resize", fit);
+
+  function renderTabs() {
+    tabs.replaceChildren(...PAGES.map((p) => h("button", { class: "btn", "aria-current": p.id === page ? "page" : null, onclick: () => ctx.go({ page: p.id }) }, p.label)));
+  }
+  const meter = (v, max, color) => h("div", { class: "meter sunken" }, h("i", { style: { width: `calc(${Math.max(0, Math.min(1, v / max)) * 100}% - 1px)`, background: color ?? "var(--pattext)" } }));
+
+  function scoreCard(r, { compact = false } = {}) {
+    const parts = [["Tonal", r.parts.tonal_organization, 50], ["Develop.", r.parts.development, 40], ["Dynamics", r.parts.dynamics, 10]];
+    const f = r.factors;
+    return [
+      h("div", { class: "row", style: { gap: "4px", padding: "1px 1px 0" } },
+        badge(r.maker), h("span", { class: "grow" }), h("span", { class: "big" }, r.score.toFixed(1))),
+      h("div", { class: "shadow-text card-name", style: { padding: "0 1px" } }, nameOf(r)),
+      h("div", { class: "sunken", style: { padding: "3px 4px", display: "grid", gridTemplateColumns: "auto 1fr auto", gap: "2px 6px", alignItems: "center" } },
+        ...parts.flatMap(([kk, v, m]) => [h("span", { class: "muted" }, kk), meter(v, m), h("span", { style: { textAlign: "right" } }, `${v.toFixed(1)}/${m}`)]),
+        ...[["Signal", f.signal_integrity], ["Noise", f.noise_integrity], ["Loop", f.loop_continuity], ["Duration", f.duration_sufficiency]]
+          .flatMap(([kk, v]) => [h("span", { class: "muted" }, kk), meter(v, 1, v < 0.8 ? "#FFAA00" : null), h("span", { style: { textAlign: "right" } }, "x" + v.toFixed(3))])),
+      compact ? null : h("dl", { class: "kv sunken" },
+        h("dt", {}, "Rank"), h("dd", {}, rankText(r)),
+        h("dt", {}, "Est. cost"), h("dd", {}, money(r.cost_usd)),
+        h("dt", {}, "Wall time"), h("dd", {}, r.usage.wall_minutes + " min"),
+        h("dt", {}, "Flags"), h("dd", { style: { color: r.flags.length ? "#FFAA00" : "#fff" } }, r.flags.length ? r.flags.map((x) => SHORT[x.id] ?? x.id).join(" ") : "none")),
+    ];
+  }
+
+  // ---------------- Tracker ----------------
+  // Built once; switching tunes swaps data in place (no DOM teardown, no blank frame).
+  let V = null;
+  function buildViewer() {
+    const playBtn = h("button", { class: "btn tbtn", style: { width: "44px" } }, "Play");
+    const stopBtn = h("button", { class: "btn tbtn", style: { width: "40px" } }, "Stop");
+    const loopBtn = h("button", { class: "btn tbtn", style: { width: "40px" }, "aria-pressed": "false", title: "Loop: play the restart seamlessly, forever, the way a keygen does" }, "Loop");
+    const time = h("span", { class: "sunken lcd", style: { width: "44px" } });
+    const pos = h("span", { class: "sunken lcd", title: "Position : pattern : row", style: { width: "64px" } });
+    const seek = h("div", { class: "sunken seek", style: { flex: "1", minWidth: "40px", height: "14px", position: "relative", cursor: "pointer", touchAction: "none" } });
+    const seekFill = h("i", { style: { position: "absolute", left: "1px", top: "1px", bottom: "0", width: "0", background: "var(--pattext)" } });
+    seek.append(seekFill);
+    const chL = h("button", { class: "btn tbtn", style: { width: "18px" }, "aria-label": "Scroll channels left" }, "<");
+    const chR = h("button", { class: "btn tbtn", style: { width: "18px" }, "aria-label": "Scroll channels right" }, ">");
+    const chLbl = h("span", { class: "sunken lcd", style: { width: "72px" } });
+    const scopeC = h("canvas", { class: "px", "aria-label": "Channel scopes" });
+    const patC = h("canvas", { class: "px", "aria-label": "Pattern editor" });
+    const orderList = h("div", { class: "sunken ft2-scroll", style: { flex: "1", minHeight: "0", overflowY: "auto", padding: "1px" } });
+    const insList = h("div", { class: "sunken ft2-scroll", style: { flex: "1", minHeight: "0", overflowY: "auto", padding: "1px" } });
+    const pickHost = h("div", { class: "row", style: { gap: "4px" } });
+    const infoHost = h("div", { class: "sunken", style: { width: "clamp(120px, 34%, 200px)", padding: "3px 4px", display: "grid", alignContent: "center", gap: "2px", whiteSpace: "nowrap", overflow: "hidden" } });
+    const cardHost = h("section", { class: "panel raised" });
+    const side = h("div", { style: { gridColumn: "2", gridRow: "1 / span 3", display: "grid", gridTemplateRows: "auto minmax(0,1fr) minmax(0,1fr)", gap: "1px", minHeight: "0" } },
+      cardHost,
+      h("section", { class: "panel raised" }, h("h2", {}, "Instruments"), insList),
+      h("section", { class: "panel raised" }, h("h2", {}, "Order list"), orderList));
+    const nodes = [
+      h("section", { class: "panel raised", style: { gridColumn: "1" } }, pickHost),
+      h("section", { class: "panel raised", style: { gridColumn: "1" } },
+        h("div", { class: "row" }, playBtn, stopBtn, loopBtn, time, pos, seek, chL, chLbl, chR),
+        h("div", { class: "row", style: { alignItems: "stretch", gap: "3px" } }, h("div", { class: "fill", style: { height: "64px" } }, scopeC), infoHost)),
+      h("section", { class: "panel raised", style: { gridColumn: "1", padding: "0" } }, h("div", { class: "fill" }, patC)),
+      side,
+    ];
+    const v = { nodes, playBtn, stopBtn, loopBtn, time, pos, seek, seekFill, chL, chR, chLbl, scopeC, patC, orderList, insList, pickHost, infoHost, cardHost,
+      first: 0, shown: 0, patFB: null, scopeFB: null, lastOrder: -1, lastLbl: "", lastTime: "", lastPos: "", run: null, song: null, player: null, loadToken: 0, loop: false };
+    playBtn.onclick = () => v.player?.toggle();
+    stopBtn.onclick = () => v.player?.stop();
+    // The button shows the requested state at once; the player catches up (first time: WAV download).
+    loopBtn.onclick = () => {
+      if (!v.player?.canLoop) return;
+      v.loop = !v.loop;
+      syncLoop();
+      v.player.setLoop(v.loop);
+    };
+    chL.onclick = () => { v.first = Math.max(0, v.first - 1); };
+    chR.onclick = () => { v.first = Math.min((v.song?.channels ?? 1) - v.shown, v.first + 1); };
+    // Click or drag anywhere on the timeline to jump there (works paused or playing).
+    const seekTo = (e) => {
+      if (!v.player) return;
+      const b = seek.getBoundingClientRect();
+      const dur = v.player.audio.duration || v.run.audio.duration || 0;
+      const t = Math.max(0, Math.min(dur - 0.05, ((e.clientX - b.left) / b.width) * dur));
+      v.player.audio.currentTime = t;
+      v.seekT = t; // show the target immediately, before the media element reports seeked
+    };
+    seek.addEventListener("pointerdown", (e) => { seek.setPointerCapture(e.pointerId); v.seeking = true; seekTo(e); });
+    seek.addEventListener("pointermove", (e) => { if (v.seeking) seekTo(e); });
+    const endSeek = () => { v.seeking = false; };
+    seek.addEventListener("pointerup", endSeek); seek.addEventListener("pointercancel", endSeek);
+    seek.setAttribute("role", "slider"); seek.setAttribute("aria-label", "Playback position"); seek.tabIndex = 0;
+    seek.addEventListener("keydown", (e) => { if (!v.player) return; const d = e.key === "ArrowRight" ? 5 : e.key === "ArrowLeft" ? -5 : 0; if (d) { e.preventDefault(); e.stopPropagation(); v.player.audio.currentTime = Math.max(0, v.player.audio.currentTime + d); } });
+    patC.addEventListener("wheel", (e) => {
+      const song = v.song; if (!song) return; e.preventDefault();
+      const d = Math.sign(e.deltaX || (e.shiftKey ? e.deltaY : 0));
+      if (d) v.first = Math.max(0, Math.min(song.channels - v.shown, v.first + d));
+      else if (e.deltaY) v.player.seekOrder(Math.max(0, Math.min(song.songLength - 1, v.player.state().order + Math.sign(e.deltaY))));
+    }, { passive: false });
+    return v;
+  }
+  const sized = (fbo, c) => { const w = Math.max(40, Math.floor(c.parentElement.clientWidth)), hh = Math.max(20, Math.floor(c.parentElement.clientHeight)); return fbo && fbo.w === w && fbo.h === hh ? fbo : new FB(c, w, hh); };
+  // Readouts: one fixed 8px cell per glyph (font1 digits are 7px, A-F 8px), ':'/'-'/'/' get 4px. Box width is
+  // fixed too, so nothing next to it moves when the numbers change.
+  function setText(el, key, val) {
+    if (V[key] === val) return;
+    V[key] = val;
+    el.replaceChildren(...[...val].map((ch) => h("span", { class: /[:\-/ ]/.test(ch) ? "c n" : "c" }, ch)));
+  }
+  function drawViewer() {
+    const v = V, player = v.player, song = v.song;
+    const st = player ? player.state() : { time: 0, duration: v.run?.audio.duration ?? 0, playing: false, order: 0, pattern: song?.orders[0] ?? 0, row: 0, traceIndex: -1 };
+    v.playBtn.textContent = st.playing ? "Pause" : "Play";
+    v.playBtn.classList.toggle("pressed", st.playing);
+    setText(v.time, "lastTime", mmss(st.time));
+    v.time.title = mmss(st.time) + " / " + mmss(st.duration);
+    setText(v.pos, "lastPos", `${fmt.hex2(st.order)}:${fmt.hex2(st.pattern)}:${fmt.hex2(st.row)}`);
+    const shownT = v.seeking && v.seekT != null ? v.seekT : st.time;
+    if (!v.seeking) v.seekT = null;
+    v.seekFill.style.width = `calc(${(shownT / (st.duration || 1)) * 100}% - 1px)`;
+    if (st.order !== v.lastOrder) {
+      v.orderList.querySelector(".sel")?.classList.remove("sel");
+      const el = v.orderList.querySelector(`[data-o="${st.order}"]`);
+      el?.classList.add("sel"); el?.scrollIntoView({ block: "nearest" });
+      v.lastOrder = st.order;
+    }
+    v.scopeFB = sized(v.scopeFB, v.scopeC);
+    v.scopeFB.fill(0, 0, v.scopeFB.w, v.scopeFB.h, PAL.desktop);
+    if (player) drawScopes(v.scopeFB, player, st, 0, 0, v.scopeFB.w, v.scopeFB.h); else v.scopeFB.frame(0, 0, v.scopeFB.w - 1, v.scopeFB.h - 1, 1);
+    v.scopeFB.flush();
+    v.patFB = sized(v.patFB, v.patC);
+    if (song) {
+      const out = drawPatternFit(v.patFB, song, st.pattern, st.row, v.patFB.w, v.patFB.h, { firstChannel: v.first });
+      v.first = out.first; v.shown = out.chans;
+      setText(v.chLbl, "lastLbl", out.chans >= song.channels ? `${song.channels}ch` : `${out.first + 1}-${out.first + out.chans}/${song.channels}`);
+      v.chL.disabled = out.first <= 0; v.chR.disabled = out.first + out.chans >= song.channels;
+    } else if (v.run && !v.run.media.xm) {
+      v.patFB.fill(0, 0, v.patFB.w, v.patFB.h, PAL.desktop);
+      v.patFB.frame(0, 0, v.patFB.w - 1, v.patFB.h - 1, 1);
+      v.patFB.text(20, v.patFB.h >> 1, "No module: this run failed to produce one.", PAL.forgrnd);
+      setText(v.chLbl, "lastLbl", "--"); v.chL.disabled = v.chR.disabled = true;
+    }
+    v.patFB.flush();
+  }
+  function viewerChrome(r) {
+    const m = r.module;
+    V.pickHost.replaceChildren(
+      h("span", { class: "shadow-text" }, "Company"),
+      dropdown({ label: "Company", items: makerItems(data), value: r.maker, width: 120, onChange: (mk) => ctx.go({ run: data.makers.find((x) => x.name === mk).runs.find((x) => x.isBest).slug }) }),
+      h("span", { class: "shadow-text" }, "Model"),
+      dropdown({ label: "Model", items: modelItems(data, r.maker, r.slug), value: r.slug, width: 170, onChange: (s2) => ctx.go({ run: s2 }) }),
+      h("span", { class: "grow" }),
+      r.media.xm ? h("a", { class: "btn", href: data.base + r.media.xm, download: r.slug + ".xm", style: { height: "14px" } }, ".XM") : null,
+      r.media.audio ? h("a", { class: "btn", href: data.base + r.media.audio, download: r.slug + ".mp3", style: { height: "14px" } }, ".MP3") : null);
+    V.infoHost.replaceChildren(
+      h("div", { style: { color: "#fff", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, `"${m.name || "untitled"}"`),
+      h("div", { class: "muted" }, `${m.channels ?? "-"} ch | ${m.bpm ?? "-"} bpm | spd ${m.speed ?? "-"}`),
+      h("div", { class: "muted" }, `${m.song_length ?? "-"} pos | ${(r.audio.duration ?? 0).toFixed(1)}s | ${r.audio.lufs ?? "-"} LU`),
+      h("div", { class: "muted" }, `${r.maker} | effort ${effort(r)}`));
+    V.cardHost.replaceChildren(...scoreCard(r));
+  }
+  // "highest declared tier: max, 128k output" -> "max".
+  const effort = (r) => String(r.tier ?? "-").replace(/^.*tier:\s*/i, "").split(",")[0].trim();
+  // Switch the viewer to run `s`. Keeps the old tune on screen until the new module is parsed, then swaps
+  // everything in the same frame. If the old tune was playing, the new one starts playing.
+  async function loadRun(s2) {
+    const r = data.bySlug[s2];
+    const tok = ++V.loadToken;
+    const wasPlaying = !!V.player?.playing;
+    const song = r.media.xm ? await loadXM(data, r).catch(() => null) : null;
+    const next = new Player(data, r, song ?? { channels: 0, instruments: [], patterns: [], orders: [0] });
+    if (tok !== V.loadToken) { next.destroy(); return; }
+    if (V.loop && next.canLoop) await next.setLoop(true);
+    else if (wasPlaying && r.media.audio) await new Promise((ok) => { if (next.audio.readyState >= 2) ok(); else { next.audio.addEventListener("canplay", ok, { once: true }); setTimeout(ok, 1500); } });
+    if (tok !== V.loadToken) { next.destroy(); return; }
+    V.player?.destroy();
+    V.player = next; V.song = song; V.run = r; V.first = 0; V.lastOrder = -1;
+    viewerChrome(r);
+    syncLoop();
+    const orders = song ? song.orders.slice(0, song.songLength) : [];
+    V.orderList.replaceChildren(...orders.map((p, i) => h("div", { class: "list-row", "data-o": i, onclick: () => V.player.seekOrder(i) }, fmt.hex2(i) + "  " + fmt.hex2(p))));
+    V.insList.replaceChildren(...(song?.instruments ?? []).map((ins, i) => h("div", { class: "list-row", style: { color: "var(--pattext)" } }, fmt.hex2(i + 1) + " " + (ins.name || ""))));
+    drawViewer();
+    if (wasPlaying) next.play().catch(() => {});
+  }
+  // Loop button: pressed while looping; disabled when the run has no WAV or never reaches its restart position.
+  function syncLoop() {
+    const p = V.player, ok = !!p?.canLoop;
+    V.loopBtn.disabled = !ok;
+    V.loopBtn.title = ok ? "Loop: play the restart seamlessly, forever, the way a keygen does" : "This tune has no restart point to loop";
+    V.loopBtn.setAttribute("aria-pressed", String(ok && V.loop));
+    V.loopBtn.classList.toggle("pressed", ok && V.loop);
+  }
+  function viewer() {
+    main.style.gridTemplateColumns = "minmax(0,1fr) clamp(150px, 28%, 220px)";
+    main.style.gridTemplateRows = "auto auto minmax(0,1fr)";
+    if (!V) V = buildViewer();
+    main.replaceChildren(...V.nodes);
+    if (V.run?.slug !== slug) {
+      if (!V.run) { V.run = data.bySlug[slug]; viewerChrome(V.run); }
+      loadRun(slug);
+    }
+    const loop = () => { drawViewer(); raf = requestAnimationFrame(loop); };
+    cancelAnimationFrame(raf);
+    loop();
+  }
+
+  // ---------------- Rankings ----------------
+  const marker = () => MARKERS.find((m) => m.id === S.cm);
+  const COLS = [
+    { k: "rank", l: "#", num: true, v: (r) => r.model.best.rank ?? 999, cell: (r) => (r.rank ?? (r.failed ? "--" : r.exhibition ? "EX" : "")), cls: "rk" },
+    { k: "name", l: "Model", v: (r) => r.label, cls: "nm", cell: (r) => h("div", { class: "nmc", title: nameOf(r) }, badge(r.maker), h("span", { class: "nmt" }, r.label + (r.exhibition ? " *" : "")),
+      S.view !== "best" && r.model.declared > 1 ? h("span", { class: "try" }, "#" + r.attempt) : null) },
+    { k: "score", l: "Score", num: true, v: (r) => r.score, cell: (r) => [h("span", { class: "sbar", style: { width: Math.round(r.score * 0.34) + "px", background: scoreColor(r.score) } }), r.score.toFixed(1)] },
+    { k: "cons", l: "Cons.", v: (r) => (r.model.n > 1 ? r.model.max - r.model.min : 1e9), cell: (r) => h("span", { title: consistencyTitle(r.model) }, marker().render(r.model)) },
+    { k: "cost", l: "Cost", num: true, v: (r) => r.cost_usd ?? 1e9, cell: (r) => money(r.cost_usd) },
+    { k: "out", l: "Out tok", num: true, v: (r) => r.usage.completion_tokens ?? 1e12, cell: (r) => (r.usage.completion_tokens == null ? "n/a" : tokens(r.usage.completion_tokens)) },
+    { k: "min", l: "Min", num: true, v: (r) => r.usage.wall_minutes ?? 1e9, cell: (r) => Math.round(r.usage.wall_minutes ?? 0) },
+  ];
+  const VIEWS = [
+    { value: "best", label: "Best attempt", keep: (r) => r.isBest },
+    { value: "first", label: "First attempt", keep: (r) => r.attempt === Math.min(...r.model.runs.map((x) => x.attempt)) },
+    { value: "all", label: "All attempts", keep: () => true },
+  ];
+  function ranking() {
+    main.style.gridTemplateColumns = "minmax(0,1fr) clamp(160px, 27%, 200px)";
+    main.style.gridTemplateRows = "auto auto minmax(0,1fr)";
+    const makerDD = dropdown({ label: "Maker", items: [{ value: "All", label: "All makers" }, ...makerItems(data)], value: S.maker, width: 100, onChange: (mk) => { S.maker = mk; renderTable(); } });
+    const viewDD = dropdown({ label: "Show", items: VIEWS, value: S.view, width: 102, onChange: (v) => { S.view = v; renderTable(); } });
+    const cmDD = dropdown({ label: "Marker", items: MARKERS.map((m) => ({ value: m.id, label: m.label })), value: S.cm, width: 84, onChange: (v) => { S.cm = v; renderTable(); } });
+    const tbody = h("tbody"), thead = h("thead");
+    const detail = h("div", { class: "ft2-scroll detail", style: { gridColumn: "2", gridRow: "1 / span 3", display: "flex", flexDirection: "column", gap: "1px", minHeight: "0", overflowY: "auto" } });
+    const top3 = h("section", { style: { gridColumn: "1", display: "grid", gridTemplateColumns: "repeat(3, minmax(0,1fr))", gap: "1px" } });
+    main.replaceChildren(
+      h("section", { class: "panel raised", style: { gridColumn: "1" } },
+        h("div", { class: "row", style: { gap: "4px" } }, h("span", { class: "shadow-text" }, "Maker"), makerDD, h("span", { class: "shadow-text" }, "Show"), viewDD,
+          h("span", { class: "shadow-text" }, "Marker"), cmDD, h("span", { class: "grow" }),
+          h("span", { class: "shadow-text", style: { whiteSpace: "nowrap" }, title: "Each model is ranked by its best-scoring attempt (up to 3). Cons. shows how much its attempts agree." }, `${ranked()} ranked`))),
+      top3,
+      h("section", { class: "panel raised", style: { gridColumn: "1" } }, h("div", { class: "sunken ft2-scroll", style: { flex: "1", minHeight: "0", overflow: "auto" } }, h("table", { class: "lb" }, h("colgroup", {}, ...COLS.map((c) => h("col", { class: "c-" + c.k }))), thead, tbody))),
+      detail);
+    function renderTable() {
+      const col = COLS.find((c) => c.k === S.sort);
+      const keep = VIEWS.find((v) => v.value === S.view).keep;
+      const list = data.runs.filter((r) => (S.maker === "All" || r.maker === S.maker) && (S.exh || !r.exhibition) && keep(r))
+        .slice().sort((a, b) => { const x = col.v(a), y = col.v(b); const d = x < y ? -1 : x > y ? 1 : 0; return (S.asc ? d : -d) || b.score - a.score; });
+      if (!list.some((r) => r.slug === S.sel) && list.length) S.sel = list.find((r) => r.model === data.bySlug[S.sel]?.model)?.slug ?? S.sel;
+      thead.replaceChildren(h("tr", {}, ...COLS.map((c) => h("th", {
+        class: c.num ? "num" : null, "aria-sort": c.k === S.sort ? (S.asc ? "ascending" : "descending") : null,
+        onclick: () => { if (S.sort === c.k) S.asc = !S.asc; else { S.sort = c.k; S.asc = ["rank", "name", "cons", "cost", "min", "out"].includes(c.k); } renderTable(); },
+      }, c.l + (c.k === S.sort ? (S.asc ? " \u25B2" : " \u25BC") : "")))));
+      tbody.replaceChildren(...list.map((r) => h("tr", { class: (r.slug === S.sel ? "sel " : "") + (r.exhibition ? "exh" : ""), onclick: () => { select(r.slug); renderTable(); renderDetail(); }, ondblclick: () => ctx.go({ page: "viewer", run: r.slug }) },
+        ...COLS.map((c) => h("td", { class: [c.num ? "num" : "", c.cls ?? ""].join(" ") }, c.cell ? c.cell(r) : c.v(r))))));
+      const podium = data.runs.filter((r) => r.rank && (S.maker === "All" || r.maker === S.maker)).sort((a, b) => a.rank - b.rank);
+      top3.replaceChildren(...podium.slice(0, 3).map((r) => h("div", { class: "panel raised", style: { flexDirection: "row", alignItems: "center", gap: "5px", cursor: "pointer" }, onclick: () => { select(r.slug); renderTable(); renderDetail(); } },
+        h("div", { class: "grow", style: { display: "grid", gap: "2px", minWidth: "0" } },
+          h("div", { class: "row", style: { gap: "4px" } },
+            h("span", { class: "big" }, String(r.rank)),
+            h("img", { class: "badge", src: badge(r.maker).src, style: { width: "20px", height: "20px" }, alt: "" }),
+            h("span", { class: "grow" }), h("span", { class: "big" }, r.score.toFixed(1))),
+          h("div", { class: "shadow-text pod-name" }, r.label),
+          h("div", { style: { color: "var(--dim)", whiteSpace: "nowrap" } }, `${money(r.cost_usd)} | ${Math.round(r.usage.wall_minutes)} min`)))));
+    }
+    function renderDetail() {
+      const r = data.bySlug[S.sel];
+      const kv = (pairs) => h("dl", { class: "kv sunken" }, ...pairs.flatMap(([a, b]) => [h("dt", {}, a), h("dd", {}, b ?? "-")]));
+      const nf = (v) => (v == null ? "n/a" : "$" + v);
+      const m = r.model;
+      detail.replaceChildren(
+        h("section", { class: "panel raised" }, ...scoreCard(r, { compact: true }),
+          h("button", { class: "btn", style: { height: "16px" }, onclick: () => ctx.go({ page: "viewer", run: r.slug }) }, "Open in tracker")),
+        m.declared > 1 ? h("section", { class: "panel raised" }, h("h2", {}, "Attempts"),
+          h("div", { class: "attempts sunken", title: consistencyTitle(m) },
+            ...m.slots.flatMap((s) => [
+              s.slug ? h("button", { class: "btn", "aria-pressed": String(s.slug === r.slug), onclick: () => { select(s.slug); if (S.view === "best" && !data.bySlug[s.slug].isBest) S.view = "all"; ranking(); } }, "#" + s.ordinal) : h("span", { class: "muted" }, "#" + s.ordinal),
+              h("span", { class: s.state === "ok" ? "on" : "muted" }, s.state === "ok" ? (s.slug === m.best.slug ? "best" : "") : s.state === "failed" ? `failed (${s.status.toLowerCase().replaceAll("_", " ")})` : s.state),
+              h("span", { class: "on", style: { textAlign: "right" } }, s.state === "ok" ? s.score.toFixed(1) : "")])),
+          h("div", { class: "row", style: { padding: "0 2px" } }, h("span", { class: "muted grow" }, "Consistency"), marker().render(m))) : null,
+        h("section", { class: "panel raised" }, h("h2", {}, "Run"),
+          kv([
+            ["Rank", rankText(r)],
+            ["Maker", r.maker], ["Effort", effort(r)], ["Wall time", r.usage.wall_minutes + " min"],
+            ...(r.exhibition ? [["Chat turns", r.usage.turns], ["Commands", r.usage.commands]] : [["Requests", r.usage.requests], ["Commands", r.usage.commands]]),
+            ["In tokens", tokens(r.usage.prompt_tokens)], ["- cached", tokens(r.usage.cached_tokens)],
+            ["Out tokens", tokens(r.usage.completion_tokens)], ["- reasoning", tokens(r.usage.reasoning_tokens)],
+            ["Est. cost", money(r.cost_usd)],
+          ]),
+          r.exhibition ? h("p", { class: "note" }, "Run by hand in the chat app: it reports no token counts and has no per-token price. Not ranked.") : null),
+        h("section", { class: "panel raised" }, h("h2", {}, "Price"),
+          kv([
+            ["$/M in", nf(r.price.input_usd_per_m)], ["$/M cached", nf(r.price.cached_input_usd_per_m)], ["$/M out", nf(r.price.output_usd_per_m)],
+          ]),
+          r.price.source_url ? h("a", { href: r.price.source_url, target: "_blank", rel: "noopener", style: { color: "#fff", padding: "0 2px" } }, "Price source") : null));
+    }
+    renderTable(); renderDetail();
+    tbody.querySelector("tr.sel")?.scrollIntoView({ block: "nearest" });
+  }
+
+  // ---------------- Scoring ----------------
+  // Help-screen layout (like FT2's Help): a few big subject buttons on the left; the right well shows
+  // only the chosen subject.
+  function scoring() {
+    main.style.gridTemplateColumns = "150px minmax(0,1fr)";
+    main.style.gridTemplateRows = "minmax(0,1fr)";
+    const body = h("div", { class: "well sunken ft2-scroll", style: { flex: "1" } });
+    const title = h("h2", {}, "");
+    const head = (text) => h("h2", { class: "big", style: { fontSize: "20px", margin: "8px 0 6px", fontWeight: "normal" } }, text);
+    const para = (t) => h("p", {}, t);
+    const measure = (m) => [head(m.kind === "points" ? `${m.title} (${m.max} points)` : m.title), para(m.plain),
+      h("table", { class: "plain" },
+        h("tr", {}, h("td", { style: { color: "#55FF55", whiteSpace: "nowrap", verticalAlign: "top" } }, "Scores well"), h("td", { style: { color: "#fff" } }, m.good)),
+        h("tr", {}, h("td", { style: { color: "#FFAA00", whiteSpace: "nowrap", verticalAlign: "top" } }, "Loses points"), h("td", { style: { color: "#fff" } }, m.bad))),
+      embed(m),
+      h("p", { class: "muted" }, m.details)];
+    // Live embed under each measure: where every ranked model lands on it, plus the extremes to listen to.
+    const MEASURE = {
+      tonal: (r) => r.parts.tonal_organization, development: (r) => r.parts.development, dynamics: (r) => r.parts.dynamics,
+      integrity: (r) => r.factors.signal_integrity, noise: (r) => r.factors.noise_integrity,
+      loop: (r) => r.factors.loop_continuity, duration: (r) => r.factors.duration_sufficiency,
+    };
+    function embed(m) {
+      const pool = data.runs.filter((r) => r.rank);
+      if (m.id === "caps") {
+        const capped = data.runs.filter((r) => r.caps?.length);
+        return h("div", { class: "embed sunken" }, h("div", { class: "muted" }, capped.length ? `Capped runs in this snapshot (${capped.length}):` : `No run in this snapshot was capped (${data.runs.length} runs).`),
+          ...capped.map((r) => h("div", { class: "row" }, badge(r.maker), h("span", { class: "grow" }, nameOf(r)), h("span", {}, `${r.uncapped?.toFixed(1)} > ${r.score.toFixed(1)}`), listen(r))));
+      }
+      const get = MEASURE[m.id];
+      if (!get || !pool.length) return null;
+      const max = m.kind === "points" ? m.max : 1;
+      const fmtV = (v) => (m.kind === "points" ? `${v.toFixed(1)}/${m.max}` : "x" + v.toFixed(2));
+      const sorted = pool.slice().sort((a, b) => get(b) - get(a));
+      const hi = sorted[0], lo = sorted.at(-1);
+      const full = pool.filter((r) => get(r) >= max - 1e-9).length;
+      const pct = (v) => `${(Math.max(0, Math.min(1, v / max)) * 100).toFixed(1)}%`;
+      // Hovering a tick names the model(s) at that value in the scale row; clicking opens it in the tracker.
+      const readout = h("span", { style: { color: "#fff", minWidth: "0", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", padding: "0 6px" } });
+      const at = (r) => pool.filter((x) => Math.abs(get(x) - get(r)) < 1e-9);
+      const names = (xs) => xs.length > 2 ? `${xs.slice(0, 2).map((x) => x.label).join(", ")} +${xs.length - 2} more` : xs.map((x) => x.label).join(", ");
+      const show = (r) => readout.replaceChildren(...(r ? [`${names(at(r))} ${fmtV(get(r))}`] : []));
+      return h("div", { class: "embed sunken" },
+        h("div", { class: "dist sunken", onmouseleave: () => show(null) },
+          ...pool.map((r) => h("i", { style: { left: pct(get(r)), background: scoreColor((get(r) / max) * 100) }, "aria-label": `${r.label}: ${fmtV(get(r))}`,
+            onmouseenter: () => show(r), onclick: () => ctx.go({ page: "viewer", run: r.slug }) }))),
+        h("div", { class: "row muted", style: { justifyContent: "space-between" } }, h("span", {}, m.kind === "points" ? "0" : "x0"), readout, h("span", {}, m.kind === "points" ? String(m.max) : "x1")),
+        ...(get(hi) === get(lo) ? [h("div", { class: "muted" }, `Every ranked model gets ${fmtV(get(hi))} here.`)] : [["Highest", hi], ["Lowest", lo]].map(([k, r]) => h("div", { class: "row" }, h("span", { class: "muted", style: { width: "44px" } }, k), badge(r.maker), h("span", { class: "grow" }, r.label), h("span", {}, fmtV(get(r))), listen(r)))));
+    }
+    const listen = (r) => h("button", { class: "btn", style: { height: "14px" }, title: "Open in the tracker", onclick: () => ctx.go({ page: "viewer", run: r.slug }) }, "Listen");
+    const exampleRun = () => (data.bySlug[slug].failed ? data.runs.find((r) => r.name === "minimax-m3") ?? data.runs[0] : data.bySlug[slug]);
+    const subjects = [
+      { id: "keygen", label: "What is a keygen?", render: () => [head(KEYGEN.title), ...KEYGEN.lines.map(para), head(DISCLAIMER.title), ...DISCLAIMER.lines.map(para)] },
+      { id: "setup", label: "Setup", render: () => SETUP.flatMap((s) => [head(s.title), ...(s.lines ?? []).map(para),
+        s.table ? h("table", { class: "plain" }, ...s.table.map(([a, b]) => h("tr", {}, h("td", { style: { whiteSpace: "nowrap", verticalAlign: "top" } }, a), h("td", { style: { color: "#fff" } }, b)))) : null]) },
+      { id: "prompts", label: "Prompts", render: () => [head("Prompts"), para("Every model gets exactly these two prompts, word for word, with this campaign's limits filled in."),
+        ...PROMPTS.flatMap((p) => [head(p.title), h("pre", { class: "prompt sunken" }, p.text)])] },
+      { id: "overview", label: "How it works", render: () => [head("How it works"), ...OVERVIEW.map(para),
+        h("pre", { class: "formula" }, ["score = music points (up to 100)", "        x clean sound", "        x no broken samples", "        x clean loop", "        x long enough", "        then caps, rounded to 0.1"].join("\n"))] },
+      { id: "points", label: "Music points", render: () => SCORING.filter((m) => m.kind === "points").flatMap(measure) },
+      { id: "checks", label: "Checks", render: () => SCORING.filter((m) => m.kind !== "points").flatMap(measure) },
+      { id: "example", label: "Worked example", render: () => [head("Worked example"), para("Every run's score, step by step. Pick any run."), worked(exampleRun())] },
+      { id: "notes", label: "Fine print", render: () => SCORING_NOTES.flatMap((n) => [head(n.title), para(n.text),
+        n.id === "flags" ? h("table", { class: "plain" }, ...Object.entries(data.flag_rules).filter(([kk]) => kk !== "RAW_XM").map(([kk, v]) => h("tr", {}, h("td", { style: { color: "#FFAA00", whiteSpace: "nowrap", verticalAlign: "top" } }, SHORT[kk] ?? kk), h("td", { style: { color: "#fff" } }, v)))) : null]) },
+    ];
+    const toc = h("nav", { class: "panel raised toc", "aria-label": "Sections" }, h("h2", {}, "Help subjects"));
+    const show = (id) => {
+      const sub = subjects.find((x) => x.id === id) ?? subjects[0];
+      S.scoringTab = sub.id;
+      title.textContent = sub.label;
+      body.replaceChildren(...sub.render().filter(Boolean));
+      body.scrollTop = 0;
+      toc.querySelectorAll(".btn").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.s === sub.id)));
+    };
+    toc.append(...subjects.map((t) => h("button", { class: "btn", "data-s": t.id, onclick: () => show(t.id) }, t.label)));
+    main.replaceChildren(toc, h("section", { class: "panel raised" }, title, body));
+    show(S.scoringTab);
+  }
+  function worked(r0) {
+    const holder = h("div", { style: { marginBottom: "8px" } });
+    const render = (run) => {
+      const f = run.factors;
+      const rows = [
+        ["Tonal structure", `${run.parts.tonal_organization.toFixed(1)} / 50`],
+        ["Development", `${run.parts.development.toFixed(1)} / 40`],
+        ["Dynamics", `${run.parts.dynamics.toFixed(1)} / 10`],
+        ["= music points", `${run.content.toFixed(1)} / 100`],
+        ["Clean sound", "x" + f.signal_integrity.toFixed(2)],
+        ["No broken samples", "x" + f.noise_integrity.toFixed(2)],
+        ["Clean loop", "x" + f.loop_continuity.toFixed(2)],
+        ["Long enough", "x" + f.duration_sufficiency.toFixed(2) + ` (${(run.audio.duration ?? 0).toFixed(0)} s)`],
+        ...(run.caps.length && run.uncapped != null ? [["Before caps", run.uncapped.toFixed(1)]] : []),
+        ["= score", run.score.toFixed(1) + (run.caps.length ? " (capped)" : "")],
+      ];
+      holder.replaceChildren(
+        h("div", { class: "row", style: { gap: "4px", margin: "2px 0 6px" } }, h("span", {}, "Pick a run:"),
+          dropdown({ label: "Example run", items: data.runs.filter((x) => !x.failed).map((x) => ({ value: x.slug, label: nameOf(x), badge: x.maker, right: x.score.toFixed(1) })), value: run.slug, width: 220, onChange: (s2) => render(data.bySlug[s2]) })),
+        h("table", { class: "plain" }, ...rows.map(([a, b]) => h("tr", {},
+          h("td", { style: { color: a.startsWith("=") ? "#fff" : null } }, a),
+          h("td", { style: { color: "#fff", textAlign: "right" } }, b)))));
+    };
+    render(r0);
+    return holder;
+  }
+
+  // ---------------- Support ----------------
+  // Hover note for the spend total: short lines instead of one paragraph.
+  const spendTip = (l) => [
+    `Every run I've paid for: ${l.runs} in total.`,
+    "That includes failed, retried, unpublished and older runs, not just the ones on the board.",
+    "",
+    "Cost = tokens used x published API price.",
+    "Some runs went through subscriptions (OAuth) instead of the paid API, so they cost me less than this. A subscription still costs money, though.",
+    "",
+    "An estimate at list price, not an actual bill.",
+  ].join("\n");
+  function support() {
+    main.style.gridTemplateColumns = "minmax(0,1fr) minmax(0,1fr)";
+    main.style.gridTemplateRows = "auto auto minmax(0,1fr)";
+    // Ledger of every run ever executed (dist/spend.json, built by build_spend.py); without one, the published runs.
+    const ledger = data.spend ?? (() => {
+      const by = new Map();
+      for (const r of data.runs) {
+        const m = by.get(r.model) ?? { name: r.label, maker: r.maker, runs: 0, usd: null, unpriced_runs: 0 };
+        m.runs++; if (r.cost_usd == null) m.unpriced_runs++; else m.usd = (m.usd ?? 0) + r.cost_usd;
+        by.set(r.model, m);
+      }
+      const models = [...by.values()].sort((a, b) => (b.usd ?? -1) - (a.usd ?? -1));
+      return { models, runs: data.runs.length, total_usd: models.reduce((s, m) => s + (m.usd ?? 0), 0), basis: "Published runs only." };
+    })();
+    main.replaceChildren(
+      h("section", { class: "panel raised", style: { gridColumn: "1 / -1" } },
+        h("div", { class: "big", style: { textAlign: "center", padding: "6px 0 4px" } }, SUPPORT.heading.toUpperCase()),
+        h("div", { class: "well sunken" }, ...SUPPORT.paragraphs.map((p) => h("p", { style: { margin: "0 auto 7px" } }, p)))),
+      h("section", { class: "panel raised" }, h("h2", {}, "Fund a specific model"),
+        h("div", { class: "well sunken" }, h("p", {}, "Pick a model from the wanted list and name it in your donation note."),
+          h("div", { class: "row" }, h("a", { class: "btn cta", href: SITE.sponsors, target: "_blank", rel: "noopener" }, "GitHub Sponsors"), h("a", { class: "btn cta", href: SITE.kofi, target: "_blank", rel: "noopener" }, "Ko-fi")))),
+      h("section", { class: "panel raised" }, h("h2", {}, "Keep future runs going"),
+        h("div", { class: "well sunken" }, h("p", {}, "Monthly support pays for testing each new release as it ships."),
+          h("div", { class: "row" }, h("a", { class: "btn cta", href: SITE.sponsors, target: "_blank", rel: "noopener" }, "Sponsor monthly"), h("a", { class: "btn cta", href: SITE.kofi, target: "_blank", rel: "noopener" }, "One-off on Ko-fi")))),
+      h("section", { class: "panel raised" }, h("h2", {}, "Wanted: untested models"),
+        h("div", { class: "sunken ft2-scroll", style: { flex: "1", padding: "2px", overflow: "auto" } },
+          h("div", { class: "muted wanted" }, h("span", { style: { gridColumn: "1 / span 2" } }, "Model"), h("span", {}, "Price in/out"), h("span", { class: "we" }, "Est.")),
+          ...SUPPORT.wanted.map((w) => {
+            const range = `3 typical runs ${usd(w.typical)}. 3 long runs ${usd(w.est)} (the estimate). 3 heavy runs ${usd(w.heavy)}.`;
+            const pct = Math.min(100, (w.raised / w.est) * 100);
+            const raised = `${usd(w.raised)} of ${usd(w.est)} raised`;
+            return h("div", { class: "wanted" },
+              badge(w.maker),
+              h("span", { class: "wn" }, w.model,
+                w.tip ? h("span", { class: "hint", tabindex: "0", "aria-label": w.tip, "data-tip": w.tip }, "*") : null),
+              h("span", { class: "muted" }, w.price),
+              h("span", { class: "hint goal we", tabindex: "0", "aria-label": range, "data-tip": range }, usd(w.est)),
+              h("span", { class: "fund sunken", role: "progressbar", "aria-label": raised, "aria-valuemin": "0", "aria-valuemax": String(w.est), "aria-valuenow": String(w.raised), title: raised },
+                h("i", { style: { width: pct + "%" } }),
+                h("b", {}, raised)));
+          }),
+          h("details", { class: "fold" },
+            h("summary", { class: "btn" }, SUPPORT.costHelp.summary),
+            ...SUPPORT.costHelp.sections.flatMap((g) => [
+              h("div", { class: "fold-h" }, g.title),
+              ...g.lines.map((l) => h("p", {}, l)),
+            ])))),
+      h("section", { class: "panel raised" }, h("h2", { style: { position: "relative", overflow: "visible" } },
+        h("span", { class: "hint goal", tabindex: "0", style: { color: "#fff" }, "data-tip": spendTip(ledger), "aria-label": spendTip(ledger) }, `Spent so far: ${money(ledger.total_usd)}`)),
+        h("div", { class: "sunken ft2-scroll", style: { flex: "1", overflow: "auto", padding: "2px" } },
+          ...ledger.models.map((m) => h("div", { class: "row", style: { height: "18px" }, title: m.unpriced_runs ? `${m.unpriced_runs} of its runs have no published price` : null },
+            badge(m.maker), h("span", { class: "grow muted" }, m.name), h("span", { class: "muted", style: { width: "48px", textAlign: "right" } }, `${m.runs} run${m.runs === 1 ? "" : "s"}`),
+            h("span", { style: { width: "56px", textAlign: "right" } }, m.usd == null ? "n/a" : money(m.usd) + (m.unpriced_runs ? "+" : "")))))));
+  }
+
+  // Rankings selection is part of the URL (/rankings/<model>[/<attempt>]) without re-rendering the page.
+  function select(s2) {
+    S.sel = slug = s2;
+    ctx.go({ page: "ranking", run: s2 }, { replace: true, silent: true });
+  }
+  const favicon = document.querySelector("link[rel=icon]");
+  function renderPage() {
+    cancelAnimationFrame(raf);
+    renderTabs();
+    if (favicon) favicon.href = page === "support" ? "/core/icons/smiley.png" : "/core/icons/keys.png";
+    if (page === "ranking") { S.sel = slug; if (S.view === "best" && !data.bySlug[slug].isBest) S.view = "all"; }
+    if (page === "viewer") viewer();
+    else if (page === "ranking") ranking();
+    else if (page === "scoring") scoring();
+    else support();
+  }
+  // Page change: freeze the old page as a ghost over the new one, then run the slide-deck transition
+  // (core/transitions.js) on both panel lists. A new change mid-transition cancels the old one.
+  let lastPage = page, fxRun = 0;
+  const topPanels = (root) => [...root.querySelectorAll(".panel, .toc")].filter((el) => !el.parentElement.closest(".panel, .toc"))
+    .map((el) => ({ el, r: el.getBoundingClientRect() }))
+    .sort((a, b) => (Math.abs(a.r.top - b.r.top) < 4 ? a.r.left - b.r.left : a.r.top - b.r.top)).map((x) => x.el);
+  function transition(forceDir) {
+    const dir = forceDir ?? (PAGES.findIndex((p) => p.id === page) >= PAGES.findIndex((p) => p.id === lastPage) ? 1 : -1);
+    lastPage = page;
+    const my = ++fxRun;
+    shell.querySelectorAll(".ghost").forEach((g) => g.remove());
+    main.querySelectorAll("[class*=' t-'], [class^='t-']").forEach((el) => [...el.classList].filter((c) => c.startsWith("t-")).forEach((c) => el.classList.remove(c)));
+    if (matchMedia("(prefers-reduced-motion: reduce)").matches) { renderPage(); return; }
+    const ghost = main.cloneNode(true);
+    ghost.classList.add("ghost");
+    const srcC = main.querySelectorAll("canvas");
+    ghost.querySelectorAll("canvas").forEach((c, i) => { const s2 = srcC[i]; if (s2?.width) { c.width = s2.width; c.height = s2.height; c.getContext("2d").drawImage(s2, 0, 0); } });
+    ghost.style.cssText = main.style.cssText + `;position:absolute;left:${main.offsetLeft}px;top:${main.offsetTop}px;width:${main.offsetWidth}px;height:${main.offsetHeight}px;`;
+    shell.append(ghost);
+    renderPage();
+    const total = slide({ outs: topPanels(ghost), ins: topPanels(main), dir, root: main });
+    setTimeout(() => {
+      if (my !== fxRun) return;
+      ghost.remove();
+      for (const el of main.querySelectorAll("*")) for (const c of [...el.classList]) if (c.startsWith("t-")) el.classList.remove(c);
+    }, total);
+  }
+  renderPage();
+  return {
+    update(p) {
+      const pageChanged = p.page !== page, runChanged = p.run !== slug;
+      page = p.page; slug = p.run;
+      if (pageChanged) transition();
+      else if (runChanged && page === "viewer") loadRun(slug);
+      else if (runChanged) renderPage();
+    },
+    destroy() { cancelAnimationFrame(raf); V?.player?.destroy(); removeEventListener("resize", fit); },
+  };
+}
