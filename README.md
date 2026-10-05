@@ -41,6 +41,7 @@ Use the pinned requirements and build instructions in the benchmark guide. Tests
 ```sh
 python -m unittest discover -s benchmark/tests
 python -m unittest discover -s tests
+node --test tests/test_classic_player.mjs tests/test_classic_rankings.mjs
 ```
 
 Some integration tests require the pinned dependencies or a native FT2 build. Passing offline tests does not establish provider access, musical quality or production readiness.

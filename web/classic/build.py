@@ -4,6 +4,7 @@ Use collect_public.py to export a local campaign, then pass its sanitized output
 with --snapshot. No campaign data or deployment location is implicit.
 """
 from datetime import datetime, timezone
+from decimal import Decimal, ROUND_CEILING, ROUND_FLOOR
 import hashlib
 import gzip
 import json
@@ -11,6 +12,7 @@ import re
 import shutil
 import sys
 from pathlib import Path
+from urllib.parse import urlsplit
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
@@ -48,8 +50,10 @@ PROVIDER_PREFIX = r"^(devin/|go-|vercel-[a-z]+/)"
 PUBLIC_PRICE_HOSTS = (  # maker-published pricing pages only; third-party/proxy tables are not shown
     "developers.openai.com", "openai.com", "platform.claude.com", "ai.google.dev", "docs.x.ai", "api-docs.deepseek.com",
     "docs.z.ai", "platform.kimi.ai", "alibabacloud.com", "mimo.mi.com", "platform.minimax.io",
-    "dev.meta.ai", "docs.mistral.ai",
+    "dev.meta.ai", "docs.mistral.ai", "docs.devin.ai", "tencentcloud.com",
+    "longcat.chat", "cohere.com", "api.inceptionlabs.ai", "platform.stepfun.ai", "docs.arcee.ai",
 )
+PUBLIC_FREE_PRICES = {"space-bunny-free": "https://opencode.ai/docs/go/"}
 
 
 def price_id(model: str) -> str:
@@ -77,28 +81,124 @@ def public_maker(model: str, price: dict) -> str:
 
 
 def public_price(price: dict) -> dict:
-    """Maker list price, or all-null when the only source is a proxy/aggregator."""
-    keys = ("input_usd_per_m", "cached_input_usd_per_m", "output_usd_per_m")
+    """Maker list prices and documented public free models, never proxy rate tables."""
+    keys = ("input_usd_per_m", "cached_input_usd_per_m", "output_usd_per_m",
+            "cache_write_usd_per_m", "cache_write_1h_usd_per_m")
     url = price.get("source_url") or ""
-    if not any(host in url for host in PUBLIC_PRICE_HOSTS):
-        return {**{k: None for k in keys}, "source_url": None}
-    return {**{k: price.get(k) for k in keys}, "source_url": url}
+    host = (urlsplit(url).hostname or "").lower()
+    documented_free = (PUBLIC_FREE_PRICES.get(price.get("id")) == url
+                       and all(price.get(key) == 0 for key in keys[:3]))
+    maker_source = any(host == allowed or host.endswith("." + allowed) for allowed in PUBLIC_PRICE_HOSTS)
+    if host == "docs.devin.ai" and not (price.get("maker") == "Cognition" and price_id(price.get("id", "")).startswith("swe-")):
+        maker_source = False
+    if not documented_free and not maker_source:
+        return {**{k: None for k in keys[:3]}, "source_url": None}
+    result = {**{k: price.get(k) for k in keys if k in price or k in keys[:3]}, "source_url": url}
+    if price.get("tiers"):
+        result["tiers"] = [
+            {"min_prompt_tokens": tier["min_prompt_tokens"],
+             **{key: tier.get(key) for key in keys if key in tier or key in keys[:3]}}
+            for tier in price["tiers"]
+        ]
+    return result
 
 
 def slug(model: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", price_id(model).lower()).strip("-") + ("-exh" if "exhibition" in model else "")
 
 
-def estimate_cost(totals: dict, price: dict) -> float | None:
-    if not totals or price.get("input_usd_per_m") is None:
+def estimate_cost(totals: dict, price: dict, *, round_digits: int | None = 4) -> float | None:
+    """Estimate aggregate usage only when request-dependent pricing is established."""
+    if not totals or price.get("input_usd_per_m") is None or price.get("output_usd_per_m") is None:
         return None
+    if any((totals.get("prompt_tokens") or 0) >= tier["min_prompt_tokens"] for tier in price.get("tiers", [])):
+        return None
+    for token_field, rate_field in (("cache_write_tokens", "cache_write_usd_per_m"),
+                                   ("cache_write_1h_tokens", "cache_write_1h_usd_per_m")):
+        if price.get(rate_field) and token_field not in totals:
+            return None
     cached = totals.get("cached_tokens") or 0
-    fresh = max(0, (totals.get("prompt_tokens") or 0) - cached)
-    cached_rate = price["cached_input_usd_per_m"]
+    writes = totals.get("cache_write_tokens") or 0
+    writes_1h = totals.get("cache_write_1h_tokens") or 0
+    if writes and price.get("cache_write_usd_per_m") is None:
+        return None
+    if writes_1h and price.get("cache_write_1h_usd_per_m") is None:
+        return None
+    fresh = max(0, (totals.get("prompt_tokens") or 0) - cached - writes - writes_1h)
+    cached_rate = price.get("cached_input_usd_per_m")
     if cached_rate is None:
         cached_rate = price["input_usd_per_m"]
-    return round((fresh * price["input_usd_per_m"] + cached * cached_rate
-                  + (totals.get("completion_tokens") or 0) * price["output_usd_per_m"]) / 1e6, 4)
+    cost = (fresh * price["input_usd_per_m"] + cached * cached_rate
+            + writes * (price.get("cache_write_usd_per_m") or 0)
+            + writes_1h * (price.get("cache_write_1h_usd_per_m") or 0)
+            + (totals.get("completion_tokens") or 0) * price["output_usd_per_m"]) / 1e6
+    return cost if round_digits is None else round(cost, round_digits)
+
+
+def estimate_request_cost(totals: dict, price: dict) -> float | None:
+    """Price one recorded response, selecting context tiers before summing attempts."""
+    selected = price
+    for tier in sorted(price.get("tiers", []), key=lambda row: row["min_prompt_tokens"]):
+        if totals["prompt_tokens"] >= tier["min_prompt_tokens"]:
+            selected = {**price, **tier}
+    selected = {key: value for key, value in selected.items() if key != "tiers"}
+    return estimate_cost(totals, selected, round_digits=None)
+
+
+def estimate_cost_range(totals: dict, price: dict, *, per_request: bool = False) -> dict | None:
+    """Bound recorded usage across documented tiers and unrecorded cache writes.
+
+    Bounds are conservative, not necessarily attainable. Each token category
+    uses the lowest/highest applicable documented rate independently, so mixed
+    request tiers cannot escape the interval. Missing usage or rates stay unknown.
+    """
+    fields = ("prompt_tokens", "cached_tokens", "completion_tokens")
+    if not totals or any(isinstance(totals.get(key), bool) or not isinstance(totals.get(key), int)
+                         or totals[key] < 0 for key in fields):
+        return None
+    rows = [{key: value for key, value in price.items() if key != "tiers"}]
+    for tier in sorted(price.get("tiers", []), key=lambda row: row["min_prompt_tokens"]):
+        if totals["prompt_tokens"] >= tier["min_prompt_tokens"]:
+            selected = {**price, **tier}
+            rows = [selected] if per_request else [*rows, selected]
+    if any(row.get("input_usd_per_m") is None or row.get("output_usd_per_m") is None for row in rows):
+        return None
+    writes = ("cache_write_tokens", "cache_write_1h_tokens")
+    rates = ("cache_write_usd_per_m", "cache_write_1h_usd_per_m")
+    if any(key in totals and (isinstance(totals[key], bool) or not isinstance(totals[key], int)
+                              or totals[key] < 0) for key in writes):
+        return None
+    remaining = totals["prompt_tokens"] - totals["cached_tokens"] - sum(totals.get(key, 0) for key in writes)
+    if remaining < 0:
+        return None
+    components = [(totals["completion_tokens"], [row["output_usd_per_m"] for row in rows]),
+                  (totals["cached_tokens"], [row.get("cached_input_usd_per_m")
+                   if row.get("cached_input_usd_per_m") is not None else row["input_usd_per_m"] for row in rows])]
+    input_rates = [row["input_usd_per_m"] for row in rows]
+    cache_unknown = False
+    for key, rate in zip(writes, rates):
+        count = totals.get(key)
+        if count is not None:
+            if count and any(row.get(rate) is None for row in rows):
+                return None
+            components.append((count, [row.get(rate) or 0 for row in rows]))
+        else:
+            allowed = [row[rate] for row in rows if row.get(rate) is not None]
+            input_rates.extend(allowed)
+            cache_unknown |= bool(remaining and allowed)
+    components.append((remaining, input_rates))
+    lower = sum(Decimal(count) * min(Decimal(str(rate)) for rate in values) for count, values in components) / 1000000
+    upper = sum(Decimal(count) * max(Decimal(str(rate)) for rate in values) for count, values in components) / 1000000
+    reasons = []
+    if len(rows) > 1:
+        reasons.append("unrecorded per-request context sizes")
+    if cache_unknown:
+        reasons.append("unrecorded fresh-input and cache-write splits")
+    reason = ("Recorded token usage at documented maker list prices. Bounds account for " + " and ".join(reasons)
+              + "; they are not a provider bill.") if reasons else "Recorded token usage at documented maker list prices; not a provider bill."
+    unit = Decimal("0.0001")
+    return {"min": float(lower.quantize(unit, rounding=ROUND_FLOOR)),
+            "max": float(upper.quantize(unit, rounding=ROUND_CEILING)), "reason": reason}
 
 
 def compact_trace(path: Path, max_frame: int) -> list[list[int]]:
@@ -360,7 +460,7 @@ def build_snapshots(sources: list[Path], publish_root: Path, excluded: list[tupl
                 target = dist / path
                 target.parent.mkdir(parents=True, exist_ok=True)
                 if key == "evaluation":
-                    evaluation = {key: value for key, value in run.items() if key not in {"trace", "media", "price", "cost_usd"}}
+                    evaluation = {key: value for key, value in run.items() if key not in {"trace", "media", "price", "cost_usd", "cost_range_usd"}}
                     target.write_text(json.dumps(evaluation, separators=(",", ":"), allow_nan=False) + "\n")
                 else:
                     shutil.copyfile(source / path, target)
