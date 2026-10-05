@@ -9,6 +9,7 @@ import platform
 import re
 import shutil
 import sys
+import subprocess
 import time
 
 from validate_bundle import (ATTEMPTS, BRIDGE_PROVIDERS, LIMITS, contract,
@@ -22,8 +23,18 @@ import run
 from artifacts import ArtifactStore
 from native_models import PROVIDERS, PROTOCOLS, declared_reasoning, check_tier, validate_url
 
+def generation_json(text):
+    try:
+        value = json.loads(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError("Generation must be valid JSON without credentials") from None
+    if not isinstance(value, dict):
+        raise argparse.ArgumentTypeError("Generation must be a JSON object")
+    return value
 
-def main():
+
+
+def argument_parser():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--model", required=True, help="Exact upstream model identifier")
     parser.add_argument("--provider", required=True, choices=sorted(PROVIDERS))
@@ -32,40 +43,36 @@ def main():
     parser.add_argument("--api", choices=["chat", "responses", "messages"], required=True)
     parser.add_argument("--reasoning-tier", required=True)
     parser.add_argument("--tier-source", required=True, help="HTTPS documentation of highest available tier")
-    parser.add_argument("--generation", required=True, type=json.loads, help="Native generation JSON including output cap and reasoning control")
+    parser.add_argument("--generation", required=True, type=generation_json, help="Native generation JSON including output cap and reasoning control")
     parser.add_argument("--attempts", type=int, choices=[3], default=3)
     parser.add_argument("--handle", required=True)
     parser.add_argument("--out", required=True, type=Path, help="New submission bundle directory")
     parser.add_argument("--work", required=True, type=Path, help="New private working directory, never commit")
     parser.add_argument("--agent-image", default="keygen-ft2-benchmark:local")
     parser.add_argument("--visualizer-image", default="keygen-ft2-visualizer:local")
-    args = parser.parse_args()
+    return parser
+
+
+def validate_inputs(args):
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9-]{0,38}", args.handle):
-        parser.error("Use a GitHub handle without personal information")
+        raise ValueError("Use a GitHub handle without personal information")
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}", args.model):
+        raise ValueError("Declare an exact upstream model identifier")
     try:
         public_documentation_url(args.tier_source)
-    except ValueError as exc:
-        parser.error(str(exc))
+    except ValueError:
+        raise ValueError("Use a public HTTPS tier-documentation URL without credentials, queries or custom ports") from None
     validate_url(args.base_url, args.provider, args.api)
     if args.api not in PROTOCOLS[args.provider]:
-        parser.error("Protocol is not supported by this route")
+        raise ValueError("Protocol is not supported by this route")
     bridge_sha256 = None
     if args.provider in BRIDGE_PROVIDERS:
-        if args.bridge_binary is None or not args.bridge_binary.is_file():
-            parser.error("OAuth routes require --bridge-binary pointing to the bridge executable")
+        if (args.bridge_binary is None or not args.bridge_binary.is_file()
+                or not os.access(args.bridge_binary, os.X_OK)):
+            raise ValueError("OAuth requires --bridge-binary for your own authorized executable bridge")
         bridge_sha256 = sha(args.bridge_binary)
     elif args.bridge_binary is not None:
-        parser.error("--bridge-binary is only for OAuth routes")
-    try:
-        if importlib.metadata.version("mini-swe-agent") != "2.4.6":
-            parser.error("Install benchmark/requirements.txt in a fresh virtual environment")
-    except importlib.metadata.PackageNotFoundError:
-        parser.error("Install benchmark/requirements.txt in a fresh virtual environment")
-    if not os.environ.get("KEYGEN_CONTRIB_API_KEY"):
-        parser.error("Set KEYGEN_CONTRIB_API_KEY in the controller environment")
-    output, work = args.out.resolve(), args.work.resolve()
-    if output == work or output.exists() or work.exists() or output in work.parents or work in output.parents:
-        parser.error("Use separate new bundle and private work directories")
+        raise ValueError("--bridge-binary is only for OAuth routes")
     model = {"id": "community-model", "model": args.model, "response_model": args.model,
              "provider": args.provider, "base_url": args.base_url, "api": args.api,
              "api_key_env": "KEYGEN_CONTRIB_API_KEY", "generation": args.generation}
@@ -73,38 +80,91 @@ def main():
     model["tier"] = {"level": args.reasoning_tier, "reasoning": declared_reasoning(model),
                      "spec_sha256": campaign.digest(tier_spec)}
     check_tier(model)
-    from score_playback import renderer_identity
-    renderer_identity()  # Do not spend on inference if trusted scoring cannot run.
-    docker = run.docker_command()
-    images = {}
-    image_details = {}
-    base = json.loads(run.shell(docker + ["image", "inspect", contract()["base_image"]]).stdout)[0]
+    return model, bridge_sha256
+
+
+def frozen_configuration():
+    return {"limits": dict(LIMITS), "native": contract()["native"],
+            "prompts": campaign.prompt_manifest(LIMITS), "transport": {"backend": "local"},
+            "concurrency": {"workers": 1, "render": 1, "video": 1, "key_pools": {},
+                            "providers": {provider: 1 for provider in PROVIDERS}},
+            "storage": {"reserve_bytes": 1024**3, "peak_bytes_per_attempt": 2 * 1024**3},
+            "max_attempts": 3, "policies": {"attempt_selection": campaign.INDEPENDENT}}
+
+
+def inspect_images(docker, agent_image, visualizer_image):
+    images, image_details = {}, {}
+    base_name = contract()["base_image"]
+    try:
+        base = json.loads(run.shell(docker + ["image", "inspect", base_name]).stdout)[0]
+    except subprocess.CalledProcessError as exc:
+        if b"no such image" in (exc.stderr or b"").lower():
+            raise ValueError(f"Pinned Debian base image is missing; ancestry cannot be verified. Run: docker pull {base_name}") from None
+        raise ValueError("Docker could not inspect the pinned Debian base; check local daemon access") from None
     base_layers = base["RootFS"]["Layers"]
-    for key, name in (("agent", args.agent_image), ("visualizer", args.visualizer_image)):
-        details = json.loads(run.shell(docker + ["image", "inspect", name]).stdout)[0]
+    for key, name in (("agent", agent_image), ("visualizer", visualizer_image)):
+        try:
+            details = json.loads(run.shell(docker + ["image", "inspect", name]).stdout)[0]
+        except subprocess.CalledProcessError as exc:
+            if b"no such image" in (exc.stderr or b"").lower():
+                raise ValueError(f"Configured {key} image is missing. Run setup or build its target from benchmark/Dockerfile") from None
+            raise ValueError(f"Docker could not inspect the configured {key} image; check local daemon access") from None
         if details["RootFS"]["Layers"][:len(base_layers)] != base_layers:
-            parser.error("Build images from the pinned Debian base in benchmark/Dockerfile")
+            raise ValueError(f"Configured {key} image does not descend from the pinned Debian base. Rebuild its target from benchmark/Dockerfile")
         images[key] = details["Id"]
         image_details[key] = {"architecture": details["Architecture"],
                               "os": details["Os"], "layers": details["RootFS"]["Layers"]}
-    config = {"limits": dict(LIMITS), "native": contract()["native"],
-              "prompts": campaign.prompt_manifest(LIMITS), "transport": {"backend": "local"},
-              "concurrency": {"workers": 1, "render": 1, "video": 1, "key_pools": {},
-                              "providers": {provider: 1 for provider in PROVIDERS}},
-              "storage": {"reserve_bytes": 1024**3, "peak_bytes_per_attempt": 2 * 1024**3}}
+    return images, image_details, base_layers
+
+
+def prepare_run(args, *, require_key=True):
+    model, bridge_sha256 = validate_inputs(args)
+    try:
+        if importlib.metadata.version("mini-swe-agent") != "2.4.6":
+            raise ValueError("Install benchmark/requirements.txt in a fresh virtual environment")
+    except importlib.metadata.PackageNotFoundError:
+        raise ValueError("Install benchmark/requirements.txt in a fresh virtual environment") from None
+    if require_key and not os.environ.get("KEYGEN_CONTRIB_API_KEY"):
+        raise ValueError("Set KEYGEN_CONTRIB_API_KEY in the controller environment")
+    config = frozen_configuration()
     model["effective_settings"] = campaign.normalize_native(config, [model])[0]
-    config.update(image=images["agent"], visualizer_image=images["visualizer"],
-                  max_attempts=3, policies={"attempt_selection": campaign.INDEPENDENT})
+    from score_playback import renderer_identity
+    renderer_identity()  # Never spend if trusted scoring cannot run.
+    docker = run.docker_command()
+    images, image_details, base_layers = inspect_images(docker, args.agent_image, args.visualizer_image)
+    config.update(image=images["agent"], visualizer_image=images["visualizer"])
     environment = {"contract": contract(), "images": images, "image_details": image_details,
-                   "base_layers": base_layers,
-                   "model": public_model(model, bridge_sha256),
+                   "base_layers": base_layers, "model": public_model(model, bridge_sha256),
                    "tier_source": args.tier_source, "handle": args.handle,
                    "runtime": {"system": platform.system(), "architecture": platform.machine(),
                                "python": platform.python_version(),
                                "docker": run.shell(docker + ["version", "--format", "{{.Server.Version}}"]).stdout.decode().strip()},
                    "packages": [[name, importlib.metadata.version(name)] for name in required_packages()]}
+    return config, model, docker, images, environment
+
+
+def private_work_path(path):
+    if not path.is_absolute():
+        raise ValueError("Use an absolute private work directory outside the checkout")
+    if any(parent.is_symlink() for parent in (path, *path.parents)):
+        raise ValueError("Private work directories must not contain symlinks")
+    resolved = run.artifact_root(path)
+    if HERE.parent == resolved or HERE.parent in resolved.parents:
+        raise ValueError("Keep private work outside the checkout")
+    return resolved
+
+
+def execute(args):
+    output, work = args.out.resolve(), private_work_path(args.work)
+    if output == work or output.exists() or work.exists() or output in work.parents or work in output.parents:
+        raise ValueError("Use separate new bundle and private work directories")
+    if any(parent.is_symlink() for parent in (args.out, *args.out.parents)):
+        raise ValueError("Bundle directories must not contain symlinks")
+    config, model, docker, images, environment = prepare_run(args)
     work.mkdir(parents=True, mode=0o700)
     output.mkdir(parents=True, mode=0o700)
+    os.chmod(work, 0o700)
+    os.chmod(output, 0o700)
     write_json(work / "community-config.json", {"config": config, "environment": environment})
     store = ArtifactStore(config["storage"])
     # Reserve every slot before inference. No best-of selection or retry path.
@@ -152,5 +212,24 @@ def main():
     print(f"Bundle ready: {output}. Keep {work} private.")
 
 
+def main(argv=None):
+    parser = argument_parser()
+    args = parser.parse_args(argv)
+    try:
+        execute(args)
+    except KeyboardInterrupt:
+        print("Interrupted. Keep the private work and report the interruption before spending again.", file=sys.stderr)
+        return 130
+    except Exception as exc:
+        # Provider/controller exceptions can include credentials or response bodies.
+        message = str(exc) if isinstance(exc, ValueError) else type(exc).__name__
+        secret = os.environ.get("KEYGEN_CONTRIB_API_KEY")
+        if secret:
+            message = message.replace(secret, "[redacted]")
+        print(f"error: {message}", file=sys.stderr)
+        return 1
+    return 0
+
+
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

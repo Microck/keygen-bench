@@ -80,6 +80,33 @@ class BenchmarkTests(unittest.TestCase):
         self.selection_path.write_text(json.dumps(self.selection))
         return campaign.compile_campaign(self.inventory_path, self.selection_path, self.root / "campaign.json", self.tier_spec_path)
 
+    def test_new_selected_provider_requires_bound_without_migrating_legacy_maps(self):
+        legacy = set(self.selection["concurrency"]["providers"])
+        self.assertEqual(set(self.compile()["concurrency"]["providers"]), legacy)
+        for provider, label, base in (("openai", "OpenAI", "https://api.openai.com/v1"),
+                                      ("custom", "Custom", "https://api.example.com/v1")):
+            with self.subTest(provider=provider):
+                (self.root / "campaign.json").unlink()
+                self.model.update(provider=provider, base_url=base)
+                self.inventory["models"][0]["provider"] = label
+                self.tier_spec_path.write_text(json.dumps({"entries": [
+                    {"provider": provider, "api": "chat", "model": "exact-model", "tier": "max",
+                     "reasoning": {"reasoning_effort": "max"}}]}))
+                self.model["tier"]["spec_sha256"] = campaign.file_digest(self.tier_spec_path)
+                effective = campaign.normalize_native(self.selection, [self.model])[0]
+                self.proof["route"] = {key: self.model[key] for key in
+                                       ("provider", "api", "base_url", "model", "response_model", "backend_provenance")}
+                self.proof["effective_settings"] = effective
+                self.proof_path.write_text(json.dumps(self.proof))
+                self.model["readiness"]["evidence"]["artifact_sha256"] = campaign.file_digest(self.proof_path)
+                self.selection["concurrency"]["providers"] = {key: 1 for key in legacy}
+                with self.assertRaisesRegex(ValueError, "concurrency bounds"):
+                    self.compile()
+                self.selection["concurrency"]["providers"][provider] = 1
+                compiled = self.compile()
+                self.assertEqual(compiled["models"][0]["provider"], provider)
+                self.assertEqual(set(compiled["concurrency"]["providers"]), legacy | {provider})
+
     def test_held_and_excluded_routes_rejected_without_credentials(self):
         for provider, status in [("Devin", "held-until-devin-renewal"), ("OpenCode Zen", "ready"), ("OpenCode Go", "blocked-original-checkpoint-unproven")]:
             with self.subTest(provider=provider, status=status):
@@ -118,7 +145,7 @@ class BenchmarkTests(unittest.TestCase):
                 expected = "Bridge route"
             elif mutation == "concurrency":
                 del changed["concurrency"]["providers"]["devin"]
-                expected = "every provider"
+                expected = "selected provider concurrency bounds"
             else:
                 changed["models"][0]["model" if mutation == "request_identity" else "response_model"] = "other-model"
                 expected = "identity differs"

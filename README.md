@@ -6,7 +6,7 @@ This repository contains the runner, pinned container build, evaluator, results 
 
 ## Run a model
 
-Start with [Contributing runs](CONTRIBUTING-RUNS.md). It covers prerequisites, container builds, your own API credentials, three attempts and a verifiable submission bundle.
+Start with [Contributing runs](CONTRIBUTING-RUNS.md). The guided CLI builds the environment, configures a provider, checks prerequisites and runs a smoke attempt or the three-attempt submission workflow. API-key presets include OpenAI and Anthropic; custom services can use compatible Chat Completions, Responses or Messages endpoints. OAuth routes use your own authorized local bridge.
 
 Model requests can cost money. Credentials stay outside the model's sandbox and must never be committed. Keep raw runs outside the repository; publish only reviewed bundles.
 
