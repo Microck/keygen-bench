@@ -35,7 +35,7 @@
 - Wrap narrow Scoring example rows without overlapping model names, values or Listen controls.
 - Align tracker trace lookup to captured samples so rounded media-clock seeks highlight the requested order and row.
 - Keep the spending tooltip compact, with attempt counts and short coverage caveats instead of raw ledger metadata.
-- Switch the Tracker's Company and Model pickers, info and score card at once, showing "Loading module..." while the module downloads alongside its MP3, instead of keeping the previous model until the module arrives.
+- Switch the Tracker's Company and Model pickers, info and score card at once. While a module downloads the pattern editor shows the run's empty channels instead of a "Loading module..." message, and modules one click away (hovered picker entries, neighbouring models, the model's other attempts, the run selected in Rankings) are prefetched at low priority so they usually open already parsed.
 - Serve JSON, JavaScript, CSS and XM files gzip-compressed when the browser accepts it, with `If-Modified-Since` revalidation; audio stays uncompressed for byte-range seeking.
 
 - Omit absent attempt panels and download links instead of rendering literal `null` text.
