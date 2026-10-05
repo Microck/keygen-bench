@@ -56,18 +56,35 @@ def request(model, key, prompt, max_tokens):
                     "completion_tokens": usage.get("completion_tokens"), "seconds": round(time.time() - started, 1)}
     except urllib.error.HTTPError as exc:
         text = exc.read(4096).decode("utf-8", "replace")
-        return {"ok": False, "status": exc.code, "quota": exc.code == 429 or "limit" in text.lower(),
+        return {"ok": False, "status": exc.code, "quota": exc.code == 429 or "usage limit" in text.lower(),
                 "body_bytes": len(text), "seconds": round(time.time() - started, 1)}
     except Exception as exc:
         return {"ok": False, "status": None, "error": type(exc).__name__, "seconds": round(time.time() - started, 1)}
 
 
-def measure(env, record):
+def measure(env, record, wait=1800, attempts=48):
+    """Measure, waiting out Go usage windows: a quota refusal is never a measurement result.
+
+    The 5-hour rolling window can be spent when this step starts (2026-10-05: key 4 at 97%); each
+    quota refusal waits `wait` seconds and measures again from scratch, up to `attempts` times.
+    """
+    for round_ in range(1, attempts + 1):
+        outcome = _measure_once(env, record)
+        record.setdefault("rounds", []).append({"at": time.time(), "outcome": outcome})
+        if outcome != "QUOTA":
+            return outcome
+        time.sleep(wait)
+    return "QUOTA"
+
+
+def _measure_once(env, record):
     _, model = frozen_model()
     key = env["OPENCODE_GO_API_KEY_4"]
     unit = "pattern row 00 C-4 01 .. 000 | "
     calibration = request(model, key, unit * 2000, 16)
     record["calibration"] = calibration
+    if calibration.get("quota"):
+        return "QUOTA"
     if not calibration["ok"] or not calibration.get("prompt_tokens"):
         return "PROBE_FAILED"
     repeats = int(2000 * TARGET_PROMPT / calibration["prompt_tokens"])
