@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Unattended Go run on Paris after the key-3 weekly reset (user 2026-10-04, asleep overnight).
 
-1. Wait until START, then send one tiny request on OPENCODE_GO_API_KEY_3 every 10 minutes until it
+1. Wait until START, then send one tiny request on the Go key (KEY; key 4 since 2026-10-05) every 30 minutes until it
    answers (give up after 12 h, recorded).
 2. Phase A: the main arm64 queue with every Devin-available model and Hy4 Preview held, so only the
    OpenCode-Go-exclusive models run (user priority). It exits once nothing more can start.
@@ -26,8 +26,10 @@ DEVIN_AVAILABLE = ["go-deepseek-v4-pro", "go-deepseek-v4.1-flash", "go-glm-5.3-f
                    "go-grok-4.7", "go-kimi-k3"]
 HELD_ALWAYS = ["go-hy4-preview"]
 LAST = ["go-qwen3.8-max-messages"]  # smallest monthly allowance ($15), most attempts left: runs last
-RUNS = {"main": ("repo-main", "next-max-tier-prompt-v2-go-arm64-20261005"),
-        "addon": ("repo-addon", "next-max-tier-prompt-v2-paris-addon-go-arm64-20261005")}
+# User 2026-10-05: key 3 hit its monthly limit; continue on key 4 (follow-up go-key4 queues).
+KEY = "OPENCODE_GO_API_KEY_4"
+RUNS = {"main": ("repo-main", "next-max-tier-prompt-v2-go-key4-20261005"),
+        "addon": ("repo-addon", "next-max-tier-prompt-v2-paris-addon-go-key4-20261005")}
 STATE = CONTROL / "chain-state.json"
 state = {"status": "WAITING", "pid": os.getpid(), "start_at": START, "steps": []}
 
@@ -51,16 +53,16 @@ def environment():
 
 
 def probe(env):
-    selection = json.loads((CONTROL / "go-arm64-main-selection.json").read_text())
+    selection = json.loads((CONTROL / "go-key4-main-selection.json").read_text())
     model = next(m for m in selection["models"] if m["id"] == "go-qwen3.7-plus-messages")
     sys.path.insert(0, str(ROOT / "repo-main/benchmark"))
     import run  # frozen engine's own probe: same request shape, headers and classification
-    return run.probe_provider(model, env["OPENCODE_GO_API_KEY_3"])
+    return run.probe_provider(model, env[KEY])
 
 
 def queue(name, holds, env):
     repo, campaign_id = RUNS[name]
-    command = [PYTHON, "-I", "benchmark/run.py", "queue", "--campaign", str(CONTROL / f"go-arm64-{name}-campaign.json"),
+    command = [PYTHON, "-I", "benchmark/run.py", "queue", "--campaign", str(CONTROL / f"go-key4-{name}-campaign.json"),
                "--out", str(ROOT / "results" / campaign_id)]
     for model_id in holds:
         command += ["--hold", model_id]

@@ -1,4 +1,4 @@
-"""Hy4 Preview: measure Go's real context limit on key 3, then apply the matching fix (user 2026-10-04).
+"""Hy4 Preview: measure Go's real context limit on key 4 (key 3 hit its monthly limit), then apply the matching fix (user 2026-10-04).
 
 Evidence: go-hy4-preview-rep-1-retry-1 got 58 good responses, the last at prompt 142,030 tokens with
 max_tokens 64,000 (~206k total); the next request (~144.3k prompt + 64,000) was rejected with an
@@ -37,7 +37,7 @@ CAMPAIGN_ID = "next-max-tier-prompt-v2-go-hy4-cap32k-20261005"
 
 
 def frozen_model():
-    selection = json.loads((CONTROL / "go-arm64-main-selection.json").read_text())
+    selection = json.loads((CONTROL / "go-key4-main-selection.json").read_text())
     return selection, next(m for m in selection["models"] if m["id"] == "go-hy4-preview")
 
 
@@ -64,7 +64,7 @@ def request(model, key, prompt, max_tokens):
 
 def measure(env, record):
     _, model = frozen_model()
-    key = env["OPENCODE_GO_API_KEY_3"]
+    key = env["OPENCODE_GO_API_KEY_4"]
     unit = "pattern row 00 C-4 01 .. 000 | "
     calibration = request(model, key, unit * 2000, 16)
     record["calibration"] = calibration
@@ -114,7 +114,7 @@ def capped_campaign(env, record):
     pilot.write_text(json.dumps({"model": capped, "config": {"native": selection["native"]}, "image": selection["image"],
                                  "limits": {"steps": 5, "wall_seconds": 1800, "command_seconds": 15}}, indent=2) + "\n")
     out = HY4 / "qualification"
-    qualify_env = {**env, "OPENCODE_GO_API_KEY": env["OPENCODE_GO_API_KEY_3"]}
+    qualify_env = {**env, "OPENCODE_GO_API_KEY": env["OPENCODE_GO_API_KEY_4"]}
     run([PYTHON, "-I", "benchmark/native_readiness.py", "--spec", str(pilot), "--out", str(out)],
         "qualification.private.log", qualify_env, timeout=2400)
     readiness = json.loads((out / "readiness.json").read_text())
