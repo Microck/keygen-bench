@@ -1,4 +1,4 @@
-// PROTOTYPE: plays the canonical FT2 render (mp3) and maps audio time -> executed order/row using the
+// Plays the canonical FT2 render (mp3) and maps audio time -> executed order/row using the
 // FT2 row trace captured during scoring. Scopes are emulated from pattern data + sample PCM (visual only).
 // Loop mode switches to the lossless WAV through Web Audio and repeats from the module's restart
 // position to the end of the first pass, sample-accurately, the way the tune loops in a keygen.

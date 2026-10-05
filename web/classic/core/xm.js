@@ -1,4 +1,4 @@
-// PROTOTYPE: minimal FastTracker II .xm reader (patterns, instruments, samples, envelopes).
+// Minimal FastTracker II .xm reader (patterns, instruments, samples, envelopes).
 // Layout per the XM 1.04 spec as loaded by FT2; enough for display and scope emulation, not playback.
 
 export function parseXM(buf) {

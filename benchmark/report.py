@@ -1,4 +1,4 @@
-"""Publish one explicit cohort from retained metadata, without rescoring or archive restore."""
+"""Publish one explicit cohort from local metadata, without rescoring."""
 from __future__ import annotations
 
 import argparse
@@ -29,12 +29,10 @@ NON_MODEL_FAILURES = {"INFRA", "AUTH", "QUOTA", "CONTENT_FILTER", "TRANSPORT", "
 PENDING_STATUSES = {"MISSING", "RESERVED", "RUNNING"}
 SCORE_ROLE = "Auxiliary tonal-development diagnostic, not a musical-quality ranking."
 ROUTE_KEYS = ("provider", "api", "base_url", "response_model")
-DEFAULT_PROMPT_VERSION = "prompt-v1"  # frozen campaigns compiled before prompts carried a version
-MAX_TIER_PREFIX = "next-max-tier-"
-TIER_NOTE = ("'Highest declared tier' means the highest documented reasoning control on that exact route "
-             "(for example max, xhigh, high, thinking-on or none-available), not equal compute: levels are "
-             "vendor-specific and not comparable across providers. 'Provider default effort' means no reasoning "
-             "control was sent. Each cohort is published in its own table and never ranked with another cohort.")
+TIER_NOTE = ("A declared tier records the reasoning control on an exact route "
+             "(for example max, xhigh, high, thinking-on or none-available), not equal compute. "
+             "Levels are vendor-specific and not comparable across providers. "
+             "Each cohort is published in its own table and never ranked with another cohort.")
 SAMPLE_NOTE = ("Each published score is one quality sample: the first valid attempt among up to three sequential "
                "attempts. Later attempts are not run after it, so no median, range or variance exists. Validity "
                "and attempts-to-valid are shown next to each score; quota, funds, rate-limit and auth stops are "
@@ -64,15 +62,12 @@ def condition_fingerprint(config: dict, model: dict) -> str:
     operational and recorded separately.
     """
     transport = config.get("transport") or {}
-    boat = transport.get("boat") or {}
     entries = (config.get("inventory") or {}).get("entries") or []
     return digest({"schema": config.get("schema"), "max_attempts": config.get("max_attempts"),
                    "model": model, "inventory": [row for row in entries if row.get("model") == model.get("inventory_id")],
                    "prompts": config.get("prompts"), "limits": config.get("limits"), "native": config.get("native"),
                    "image": config.get("image"), "visualizer_image": config.get("visualizer_image"),
-                   "transport": {"backend": transport.get("backend"), "type": boat.get("type"),
-                                 "ttl_seconds": boat.get("ttl_seconds"), "images": boat.get("images"),
-                                 "image_bundle_sha256": (boat.get("image_bundle") or {}).get("sha256")}})
+                   "transport": {"backend": transport.get("backend")}})
 
 
 def environment_free_fingerprint(config: dict, model: dict) -> str:
@@ -160,32 +155,22 @@ def output_cap(value) -> str:
 
 def campaign_cohort(config: dict) -> dict:
     """Experimental condition of one frozen campaign; distinct keys are never ranked together."""
-    version = (config.get("prompts") or {}).get("version") or DEFAULT_PROMPT_VERSION
+    version = (config.get("prompts") or {}).get("version") or "unversioned"
     schema = config.get("schema")
-    if schema == "keygen-native-campaign-2":
-        # Revision 2 models carry no tier and send no reasoning control.
-        condition, text = "provider-default", "provider default effort"
-    elif schema != "keygen-native-campaign-3":
+    if schema != "keygen-native-campaign-3":
         return {**UNIDENTIFIED_COHORT, "label": f"unidentified cohort (unsupported campaign schema {schema})"}
-    elif str(config.get("campaign_id") or "").startswith(MAX_TIER_PREFIX):
-        return {"key": f"highest-declared-tier/{version}", "condition": "highest-declared-tier", "prompt_version": version,
-                "label": f"Max-tier, {version.replace('-', ' ')} (highest declared tier per exact route)"}
-    else:
-        condition, text = "declared-tier", "declared tier per exact route"
+    condition, text = "declared-tier", "declared tier per exact route"
     return {"key": f"{condition}/{version}", "condition": condition, "prompt_version": version,
             "label": f"{text}, {version}"}
 
 
 def tier_label(model: dict, condition: str) -> str:
     cap = output_cap((model.get("effective_settings") or {}).get("output_limit"))
-    if condition == "provider-default":
-        return f"provider default effort, {cap} output"
     if condition == "unidentified":
         return f"unidentified condition, {cap} output"
     tier = model.get("tier")
     level = tier.get("level") if isinstance(tier, dict) else None
-    prefix = "highest declared tier" if condition == "highest-declared-tier" else "declared tier"
-    return f"{prefix}: {level or 'undeclared'}, {cap} output"
+    return f"declared tier: {level or 'undeclared'}, {cap} output"
 
 
 def metadata(path: Path) -> tuple[dict, str | None]:
@@ -222,45 +207,6 @@ def cached_profile(directory: Path, status: dict, status_sha256: str | None = No
     return profile, None
 
 
-def evaluated_status(status: dict, profile: dict) -> tuple[dict, str] | None:
-    """The status a completed evaluation pinned, when a later FINALIZATION_ERROR overwrote it.
-
-    Runners before the archive/evaluation split rewrote status.json after any finalization
-    failure, including an artifact upload that failed after profile.json was written. The
-    profile pins the SHA-256 of the status it evaluated; rebuilding exactly that status from
-    the overwritten one proves the evaluation finished first, so the failure is post-evaluation.
-    """
-    if status.get("status") != "FINALIZATION_ERROR" or not isinstance(status.get("finalization_error"), dict):
-        return None
-    candidate = {key: value for key, value in status.items() if key != "finalization_error"}
-    candidate.update(status=profile.get("status"), eligible=profile.get("eligible"),
-                     failure_category=profile.get("run_failure_category"))
-    payload = (json.dumps(candidate, indent=2, allow_nan=False) + "\n").encode()
-    sha256 = hashlib.sha256(payload).hexdigest()
-    expected = ((profile.get("inputs") or {}).get("artifacts") or {}).get("status.json")
-    return (candidate, sha256) if sha256 == expected else None
-
-
-def operator_cancellation(directory: Path, attempt_id: str, status: dict) -> tuple[dict | None, str | None]:
-    """An operator cancellation recorded beside an attempt, with its true failure category.
-
-    The frozen runner stops a model's sequence only on QUOTA/AUTH/CONTENT_FILTER, so an operator
-    cancellation that had to stop the sequence is carried by one of those categories; the
-    record names that vehicle and the real (INFRA) category reported instead.
-    """
-    path = directory / "operator-cancellation.json"
-    if not path.exists():
-        return None, None
-    record, error = metadata(path)
-    if error:
-        return None, error
-    if (record.get("action") != "operator_cancelled" or record.get("attempt_id") != attempt_id
-            or record.get("true_failure_category") != "INFRA" or record.get("model_failure") is not False
-            or record.get("recorded_failure_category_vehicle") != status.get("failure_category")):
-        return None, "operator cancellation record does not match this attempt"
-    return record, None
-
-
 def attempt_row(root: Path, attempt_id: str, declared: tuple[dict, int] | None,
                 selected_fingerprint: str, selected_hash: str, selected_cohort: dict, retry_of: str | None = None) -> dict:
     directory = root / attempt_id
@@ -295,24 +241,14 @@ def attempt_row(root: Path, attempt_id: str, declared: tuple[dict, int] | None,
     skipped = status.get("status") == "SKIPPED_AFTER_SUCCESS"
     profile, profile_error = ({}, None) if skipped else cached_profile(directory, status)
     recorded_status = status.get("status", "MISSING")
-    post_evaluation_error = None
-    if profile_error and (recovered := evaluated_status(status, profile)):
-        post_evaluation_error = status["finalization_error"]
-        status, status_sha256 = recovered
-        profile, profile_error = cached_profile(directory, status, status_sha256)
     if profile_error:
         errors.append(profile_error)
     finalization_error = status.get("finalization_error")
     if (directory / "finalization-error.json").exists():
         marker, marker_error = metadata(directory / "finalization-error.json")
         finalization_error = marker or marker_error or "finalization failed"
-    if post_evaluation_error is not None:
-        post_evaluation_error, finalization_error = finalization_error, None
     if finalization_error:
         errors.append(f"finalization error: {finalization_error}")
-    cancellation, cancellation_error = operator_cancellation(directory, attempt_id, status)
-    if cancellation_error:
-        errors.append(cancellation_error)
     declared_match = bool(declared and model == declared[0] and config_hash == selected_hash
                           and fingerprint == selected_fingerprint and kind == "native"
                           and status.get("repetition", declared[1]) == declared[1]
@@ -327,10 +263,6 @@ def attempt_row(root: Path, attempt_id: str, declared: tuple[dict, int] | None,
     usage = totals or {}
     category = status.get("failure_category") or profile.get("run_failure_category")
     evaluation_category = (profile.get("evaluation_error") or {}).get("category")
-    if cancellation:
-        vehicle = cancellation["recorded_failure_category_vehicle"]
-        category = cancellation["true_failure_category"]
-        evaluation_category = category if evaluation_category == vehicle else evaluation_category
     if evaluation_category in NON_MODEL_FAILURES:
         category = category or evaluation_category
     if finalization_error:
@@ -357,8 +289,6 @@ def attempt_row(root: Path, attempt_id: str, declared: tuple[dict, int] | None,
                          or usage.get("in_flight_usage_unknown") or status.get("status") == "RUNNING"))
     model_failure = profile.get("model_failure") if not profile_error else status.get("model_failure")
     model_failure = model_failure if type(model_failure) is bool and attempted else None
-    if cancellation:
-        model_failure = False
     evaluation_identity = {key: (profile.get("inputs") or {}).get(key) for key in
                            ("scorer", "references", "analysis_renderer", "preview_encoder", "numerical")}
     evaluation_fingerprint = digest({"score_version": profile.get("score_version"),
@@ -373,15 +303,13 @@ def attempt_row(root: Path, attempt_id: str, declared: tuple[dict, int] | None,
             "repetition": status.get("repetition", declared[1] if declared else None),
             "retry_of": status.get("retry_of"), "predeclared": declared is not None,
             "declared_condition_match": declared_match,
-            "status": "OPERATOR_CANCELLED" if cancellation else status.get("status", "MISSING"),
+            "status": status.get("status", "MISSING"),
             "recorded_status": recorded_status,
-            "operator_cancellation": cancellation["reason"] if cancellation else None,
             "attempted": attempted, "terminal": terminal, "outcome": outcome,
             "selected_attempt_id": status.get("selected_attempt_id"), "selected": False,
             "eligible": eligible, "failure_category": category, "model_failure": model_failure,
             "evaluation_error_category": evaluation_category,
             "finalization_error": finalization_error,
-            "post_evaluation_finalization_error": post_evaluation_error,
             "craft": (profile.get("craft") or {}).get("craft_score") if eligible else None,
             "score_version": profile.get("score_version"), "evaluation_fingerprint": evaluation_fingerprint,
             "evaluation_status": "not_attempted" if skipped else profile.get("evaluation_status") if not profile_error else "unavailable_cache",
@@ -415,8 +343,7 @@ def open_cohort(root: Path, cohort: Path) -> tuple[dict, str, str]:
     if not root.is_dir():
         raise ValueError(f"{root}: input root is not a directory")
     config, config_hash, snapshot_hash = read_cohort(cohort)
-    # Revision 2 cohorts are historical; revision 3 adds declared tiers and key pools.
-    if (config.get("schema") not in {"keygen-native-campaign-2", "keygen-native-campaign-3"}
+    if (config.get("schema") != "keygen-native-campaign-3"
             or type(config.get("max_attempts")) is not int or config["max_attempts"] != 3):
         raise ValueError("Publication requires a frozen native campaign with at most three sequential attempts")
     lock = root / "campaign.lock.json"
@@ -612,8 +539,7 @@ def repetition_report(root: Path, cohort: Path, config: dict, config_hash: str, 
                                                                  "outcome", "eligible", "craft", "failure_category", "model_failure")}
                                        for row in repetitions],
                        "outside_condition_attempts": [{key: row[key] for key in ("attempt_id", "source_campaign_id", "status",
-                                                                                 "repetition", "retry_of", "failure_category",
-                                                                                 "operator_cancellation")} for row in others],
+                                                                                 "repetition", "retry_of", "failure_category")} for row in others],
                        "declared_repetitions": len(repetitions), "eligible_repetitions": len(scores),
                        "pending_repetitions": pending, "scores": scores,
                        "median_craft": statistics.median(scores) if scores else None,
@@ -795,8 +721,7 @@ def queue_report(root: Path, cohort: Path, config: dict, config_hash: str, finge
                                                                  "retry_of", "superseded_attempts", "queue_pending")}
                                        for row in samples],
                        "outside_condition_attempts": [{key: row[key] for key in ("attempt_id", "source_campaign_id", "status",
-                                                                                 "repetition", "retry_of", "failure_category",
-                                                                                 "operator_cancellation")} for row in others],
+                                                                                 "repetition", "retry_of", "failure_category")} for row in others],
                        "declared_repetitions": len(samples), "eligible_repetitions": len(scores),
                        "pending_repetitions": pending, "scores": scores,
                        "median_craft": statistics.median(scores) if scores else None,
@@ -853,9 +778,6 @@ def page_rows(report: dict, output: Path) -> list[dict]:
         submission = directory / "submission"
         scripts = [url for path in sorted(submission.iterdir()) if path.suffix in (".py", ".sh", ".txt", ".md", ".json")
                    and (url := artifact_url(root, directory, f"submission/{path.name}", output))] if submission.is_dir() else []
-        archive, _ = metadata(directory / "archive.json")
-        archived = sorted(name for name in (archive.get("files") or {})
-                          if not (directory / name).is_file()) if archive.get("verified") is True else []
         structure, audio = profile.get("structure") or {}, profile.get("audio") or {}
         craft = (profile.get("craft") or {}) if row["eligible"] else {}
         process = profile.get("process") or {}
@@ -870,8 +792,8 @@ def page_rows(report: dict, output: Path) -> list[dict]:
                      "instr": structure.get("instruments_used"), "samples": structure.get("samples"),
                      "steps": (row["totals"] or {}).get("requests"), "min": row["wall_s"] / 60 if finite_number(row["wall_s"]) else None,
                      "attempts": int(row["attempted"]), "ft2": process.get("used_ft2_tools"), "raw_xm": process.get("wrote_xm_directly"),
-                     "files": files, "scripts": scripts, "archived_artifacts": archived,
-                     "artifact_note": "Archived artifacts are not restored for publication; unavailable local files have no playback/download link." if archived else "Links include only local files that exist."})
+                     "files": files, "scripts": scripts,
+                     "artifact_note": "Links include only local files that exist."})
     return rows
 
 
@@ -886,9 +808,6 @@ def finite_json(value):
 
 
 def write_output(path: Path, content: str) -> None:
-    legacy = Path(__file__).resolve().parents[1] / "legacy"
-    if path.resolve().is_relative_to(legacy):
-        raise ValueError("Legacy publication assets are read-only")
     path.parent.mkdir(parents=True, exist_ok=True)
     pending = path.with_name(path.name + "." + uuid.uuid4().hex + ".tmp")
     try:

@@ -3,11 +3,13 @@
 import argparse
 import hashlib
 import json
+import ipaddress
 import math
 from pathlib import Path
 import re
 import shutil
 import sys
+from urllib.parse import urlsplit
 
 HERE = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(HERE))
@@ -20,6 +22,47 @@ ATTEMPTS = ["attempt-1", "attempt-2", "attempt-3"]
 DIGEST = re.compile(r"sha256:[a-f0-9]{64}")
 # Scan binary artifacts too: sample names can carry secrets. Chunk overlap catches splits.
 SECRET = re.compile(rb"(?:(?:sk-|oc_sk_)[A-Za-z0-9_-]{12,}|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|AKIA[A-Z0-9]{16}|-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY|(?:authorization|x-api-key)\s*[\"']?\s*[:=]|(?:api[_-]?key|access[_-]?token|secret[_-]?key)\s*[\"']?\s*[:=]\s*[\"']?(?!\[REDACTED\])[A-Za-z0-9_/-]{12,}|(?:OPENAI|ANTHROPIC|AWS|KEYGEN|OPENCODE)[A-Z0-9_]*(?:KEY|TOKEN|SECRET)\s*[\"']?\s*[:=]|(?:declare -x |os\.environ|printenv|env dump|[\"'](?:PATH|HOME|USER)[\"']\s*:))", re.I)
+PRIVATE = re.compile(rb"""(?:/(?:home|Users)/[^/\s"'\\]+|[A-Z]:\\+(?:Users|Documents and Settings)\\+|["'](?:hostname|username|user_name|home_directory|repo_digests)["']\s*:)""", re.I)
+BRIDGE_PROVIDERS = frozenset({"codex_oauth", "anthropic_oauth"})
+MODEL_FIELDS = frozenset({"id", "model", "response_model", "provider", "api", "base_url",
+                          "api_key_env", "generation", "tier", "bridge"})
+STATUS_FIELDS = frozenset({"status", "attempt_id", "repetition", "model", "started_at",
+                           "finished_at", "wall_seconds", "totals", "eligible",
+                           "failure_category", "model_failure", "tune_present"})
+
+
+def public_documentation_url(value):
+    """Reject credentials, local hosts and query strings in published tier evidence."""
+    url = urlsplit(value)
+    host = url.hostname or ""
+    if (url.scheme != "https" or url.username or url.password or url.port
+            or url.query or url.fragment or "." not in host
+            or host.endswith((".local", ".internal", ".localhost", ".test", ".invalid"))
+            or host == "localhost"):
+        raise ValueError("Use a public HTTPS documentation URL without credentials or query parameters")
+    try:
+        ipaddress.ip_address(host)
+    except ValueError:
+        return value
+    raise ValueError("Documentation URL must use a public hostname, not an IP address")
+
+
+def required_packages():
+    return sorted(re.findall(r"^([A-Za-z0-9_.-]+)==", (HERE / "requirements.txt").read_text(), re.M))
+
+def public_model(model, bridge_sha256=None):
+    result = {key: value for key, value in model.items() if key in MODEL_FIELDS}
+    if model["provider"] in BRIDGE_PROVIDERS:
+        result.pop("base_url", None)
+        result["bridge"] = {"transport": "loopback-http", "binary_sha256": bridge_sha256}
+    return result
+
+
+
+def public_status(status):
+    result = {key: value for key, value in status.items() if key in STATUS_FIELDS}
+    result["model"] = {key: value for key, value in status["model"].items() if key in MODEL_FIELDS}
+    return result
 
 
 def sha(path):
@@ -80,6 +123,8 @@ def validate(root):
             while chunk := stream.read(65536):
                 if SECRET.search(tail + chunk):
                     raise ValueError("Secret or environment dump detected; content withheld")
+                if PRIVATE.search(tail + chunk):
+                    raise ValueError("Private host metadata or home path detected; content withheld")
                 tail = (tail + chunk)[-4096:]
     manifest = json.loads((root / "manifest.json").read_text())
     if manifest.get("schema") != "keygen-community-1" or manifest.get("attempts") != ATTEMPTS:
@@ -88,34 +133,63 @@ def validate(root):
     if manifest.get("files") != expected:
         raise ValueError("File inventory or SHA-256 mismatch")
     environment = manifest["environment"]
+    if set(manifest) != {"schema", "attempts", "environment", "files"}:
+        raise ValueError("Unexpected manifest fields")
+    if set(environment) != {"contract", "images", "image_details", "base_layers", "model",
+                            "tier_source", "handle", "runtime", "packages"}:
+        raise ValueError("Unexpected environment fields")
     if environment["contract"] != contract():
         raise ValueError("Frozen prompt, pins or limits mismatch")
     base_layers = environment["base_layers"]
+    if set(environment["images"]) != {"agent", "visualizer"} or set(environment["image_details"]) != {"agent", "visualizer"}:
+        raise ValueError("Unexpected image metadata")
     if not isinstance(base_layers, list) or not base_layers or any(not DIGEST.fullmatch(x) for x in base_layers):
         raise ValueError("Pinned base layer evidence required")
     for key in ("agent", "visualizer"):
         if not DIGEST.fullmatch(environment["images"][key]):
             raise ValueError("Immutable built image ID required")
         details = environment["image_details"][key]
+        if set(details) != {"architecture", "os", "layers"}:
+            raise ValueError("Unexpected image details")
         if (details["layers"][:len(base_layers)] != base_layers or details["os"] != "linux"
                 or not details["architecture"]
                 or any(not DIGEST.fullmatch(x) for x in details["layers"])):
             raise ValueError("Image does not declare the pinned base layers")
     model = environment["model"]
+    from native_models import check_tier, validate_url, PROVIDERS, PROTOCOLS
+    bridge = model["provider"] in BRIDGE_PROVIDERS
+    fields = MODEL_FIELDS - ({"base_url"} if bridge else {"bridge"})
+    if set(model) != fields or model["provider"] not in PROVIDERS:
+        raise ValueError("Declared provider provenance and model fields required")
     if (model.get("api_key_env") != "KEYGEN_CONTRIB_API_KEY"
             or model.get("model") != model.get("response_model")):
         raise ValueError("Exact model identity and controller credential name required")
-    from native_models import check_tier, validate_url, PROTOCOLS
-    validate_url(model["base_url"], model["provider"], model["api"])
+    if bridge:
+        if (set(model["bridge"]) != {"transport", "binary_sha256"}
+                or model["bridge"]["transport"] != "loopback-http"
+                or not isinstance(model["bridge"]["binary_sha256"], str)
+                or not re.fullmatch(r"[a-f0-9]{64}", model["bridge"]["binary_sha256"])):
+            raise ValueError("OAuth bridge transport and binary digest required")
+    else:
+        validate_url(model["base_url"], model["provider"], model["api"])
     if model["api"] not in PROTOCOLS[model["provider"]]:
         raise ValueError("Unsupported protocol")
     check_tier(model)
-    if (not environment["tier_source"].startswith("https://")
-            or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9-]{0,38}", environment["handle"])
-            or any(not isinstance(environment["host"].get(key), str) or not environment["host"][key]
-                   for key in ("system", "release", "architecture", "python", "docker"))
+    public_documentation_url(environment["tier_source"])
+    runtime = environment["runtime"]
+    package_names = required_packages()
+    if (not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9-]{0,38}", environment["handle"])
+            or set(runtime) != {"system", "architecture", "python", "docker"}
+            or any(not isinstance(value, str) or not re.fullmatch(r"[A-Za-z0-9_.+-]{1,80}", value)
+                   for value in runtime.values())
+            or any(not isinstance(package, list) or len(package) != 2
+                   or package[0] not in package_names
+                   or not isinstance(package[1], str)
+                   or not re.fullmatch(r"[A-Za-z0-9_.+-]{1,80}", package[1])
+                   for package in environment["packages"])
+            or len({package[0] for package in environment["packages"]}) != len(environment["packages"])
             or ["mini-swe-agent", "2.4.6"] not in environment["packages"]):
-        raise ValueError("Tier documentation and host information required")
+        raise ValueError("Public handle, runtime versions and benchmark package versions required")
     if campaign.digest({"source": environment["tier_source"], "level": model["tier"]["level"],
                         "generation": model["generation"]}) != model["tier"]["spec_sha256"]:
         raise ValueError("Tier evidence digest mismatch")
@@ -130,6 +204,8 @@ def validate(root):
         if json.loads((directory / "environment.json").read_text()) != environment:
             raise ValueError("Attempt environment differs")
         status = json.loads((directory / "status.json").read_text())
+        if set(status) - STATUS_FIELDS:
+            raise ValueError("Unexpected status fields")
         if status["attempt_id"] != attempt or status["repetition"] != ordinal or status["model"] != model:
             raise ValueError("Attempt identity differs")
         final_states = {"RENDERED_UNSCORED", "MODEL_FAILED", "INFRA_ERROR", "INTERRUPTED",
@@ -148,7 +224,14 @@ def validate(root):
         for field in ("prompt_tokens", "completion_tokens", "reasoning_tokens", "usage_unknown"):
             if type(status["totals"][field]) is not int or status["totals"][field] < 0:
                 raise ValueError("Missing or invalid usage totals")
+        if (type(status["totals"].get("requests")) is not int or status["totals"]["requests"] < 0
+                or any(type(value) not in (bool, int, float) or not math.isfinite(value) or value < 0
+                       for key, value in status["totals"].items()
+                       if not (key == "model_seconds" and value is None))):
+            raise ValueError("Usage totals must contain nonnegative counts, timings or flags")
         trajectory = json.loads((directory / "trajectory.json").read_text())
+        if set(trajectory) - {"messages", "evidence_unavailable"}:
+            raise ValueError("Trajectory must not include controller configuration")
         if not isinstance(trajectory.get("messages"), list):
             raise ValueError("Trajectory messages required")
         if trajectory.get("evidence_unavailable") and (status["totals"].get("requests", 0)
@@ -157,9 +240,15 @@ def validate(root):
         records = [json.loads(line) for line in (directory / "transport.jsonl").read_text().splitlines()]
         if any(not isinstance(record, dict) for record in records):
             raise ValueError("Transport records must be objects")
+        if trajectory.get("evidence_unavailable") and (trajectory["messages"] or records):
+            raise ValueError("Unavailable trajectory contradicts recorded evidence")
+        if status["totals"]["requests"] and not trajectory["messages"]:
+            raise ValueError("Requested attempts must retain their trajectory")
         if type(status.get("eligible")) is not bool:
             raise ValueError("Explicit eligibility required")
         if status.get("eligible"):
+            if status["status"] != "RENDERED_UNSCORED" or status.get("failure_category"):
+                raise ValueError("Failed attempts cannot be eligible")
             from native_models import transmitted_reasoning
             sent = [record for record in records if record.get("event") == "request"]
             required = transmitted_reasoning(model)

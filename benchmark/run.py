@@ -64,15 +64,6 @@ def docker_command() -> list[str]:
     return [binary, "--host", host]
 
 
-# The calling attempt's CPU pin on a shared Boat VM (None: unpinned, as on a sole VM).
-_ATTEMPT = threading.local()
-
-
-def cpu_flags() -> list[str]:
-    cpuset = getattr(_ATTEMPT, "cpuset", None)
-    return ["--cpus", "2"] + (["--cpuset-cpus", cpuset] if cpuset else [])
-
-
 def start_container(docker: list[str], image: str, name: str) -> str:
     # A private tmpfs-backed Docker volume is held by a read-only export helper.
     # docker cp cannot reliably read tmpfs; this also permits export while the agent is paused.
@@ -87,7 +78,7 @@ def start_container(docker: list[str], image: str, name: str) -> str:
     shell(docker + ["start", name + "-files"])
     cmd = docker + ["create", "--name", name, "--network", "none", "--read-only",
                     "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--pids-limit", "256",
-                    *cpu_flags(), "--memory", "2g", "--memory-swap", "2g", "--user", "10001:10001"]
+                    "--cpus", "2", "--memory", "2g", "--memory-swap", "2g", "--user", "10001:10001"]
     cmd += ["--mount", f"type=volume,source={volume},target=/workspace,volume-nocopy"]
     for path, size in (("/tmp", "256m"), ("/home/agent", "16m")):
         cmd += ["--tmpfs", f"{path}:rw,nosuid,nodev,size={size},uid=10001,gid=10001"]
@@ -211,11 +202,23 @@ def collect_submission(docker: list[str], name: str, run_dir: Path, max_bytes: i
         shutil.rmtree(staging, ignore_errors=True)
 
 
+def workspace_export_command(docker: list[str], container: str, source_absolute: str) -> list[str]:
+    """Read artifacts through the helper's read-only workspace volume."""
+    if not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}", container):
+        raise ValueError("Invalid container identifier")
+    source = PurePosixPath(source_absolute)
+    if not source.is_absolute() or ".." in source.parts or not source.is_relative_to("/workspace"):
+        raise ValueError("Collection source must be under /workspace")
+    relative = source.relative_to("/workspace")
+    parent, leaf = (relative, ".") if source_absolute.endswith("/.") or not relative.parts else (relative.parent, relative.name)
+    return [*docker, "exec", container + "-files", "/bin/tar", "-C",
+            str(PurePosixPath("/export") / parent), "-cf", "-", "--", leaf]
+
+
 def collect(docker: list[str], name: str, source: str, destination: Path, max_bytes: int) -> None:
     destination.mkdir(parents=True)
     with tempfile.TemporaryFile() as errors, tempfile.NamedTemporaryFile() as archive:
         # Stream with an explicit cap rather than trusting a tar's advertised size.
-        from boat import workspace_export_command
         proc = subprocess.Popen(workspace_export_command(docker, name, source),
                                 stdout=subprocess.PIPE, stderr=errors)
         total = 0
@@ -323,7 +326,7 @@ def visualize(docker: list[str], image: str, run_dir: Path, config: dict, durati
     name = "keygen-video-" + uuid.uuid4().hex[:16]
     try:
         shell(docker + ["run", "-d", "--name", name, "--network", "none", "--read-only", "--cap-drop", "ALL",
-                        "--security-opt", "no-new-privileges", "--user", "10001:10001", *cpu_flags(), "--memory", "2g",
+                        "--security-opt", "no-new-privileges", "--user", "10001:10001", "--cpus", "2", "--memory", "2g",
                         "--pids-limit", "256", "--tmpfs", "/tmp:rw,nosuid,nodev,size=1g,uid=10001,gid=10001", image])
         shell(docker + ["exec", "-i", name, "sh", "-c", "cat > /tmp/input.xm"],
               input=(run_dir / "submission/tune.xm").read_bytes())
@@ -648,9 +651,6 @@ def artifact_root(path: Path) -> Path:
     if not path.is_absolute():
         raise ValueError("Artifact root must be explicitly absolute")
     root = path.resolve()
-    legacy = (HERE.parent / "legacy").resolve()
-    if root == legacy or legacy in root.parents:
-        raise ValueError("Preserved legacy directories are never writable artifact roots")
     selected = ("", "")
     for line in Path("/proc/self/mountinfo").read_text().splitlines():
         left, right = line.split(" - ", 1)
@@ -799,55 +799,6 @@ def credential_lease(config: dict, model: dict, held: KeyLease | None = None):
 
 
 
-def pace_boat_allocation(root: Path, interval_seconds: int) -> None:
-    """Serialize this controller's starts before the VM startup deadline begins.
-
-    The lock and the last start are controller-wide, so campaigns running side by side on one
-    controller share the interval; the campaign root keeps its own record of its latest start.
-    """
-    if not interval_seconds:
-        return
-    shared = controller_resource_dir()
-    with (shared / "boat-allocation.lock").open("a") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
-        paths = (root / "boat-allocation.json", shared / "boat-allocation.json")
-        last = max([json.loads(path.read_text())["last_start_at"] for path in paths if path.exists()], default=0)
-        while True:
-            if STOP.is_set():
-                raise KeyboardInterrupt()
-            delay = last + interval_seconds - time.time()
-            if delay <= 0:
-                break
-            STOP.wait(min(delay, 0.25))
-        record = {"last_start_at": time.time(), "interval_seconds": interval_seconds}
-        for path in paths:
-            write_json(path, record)
-
-
-_BOAT_POOLS: dict = {}
-_BOAT_POOLS_LOCK = threading.Lock()
-
-
-def boat_pool(root: Path, config: dict):
-    """This process's shared-VM pool for one campaign root (one VM per attempt unless packed)."""
-    from boat_pool import BoatPool
-    limits = config["limits"]
-    required = limits["wall_seconds"] + 4 * limits["render_seconds"] + limits["video_seconds"] + 600
-    with _BOAT_POOLS_LOCK:
-        if root not in _BOAT_POOLS:
-            _BOAT_POOLS[root] = BoatPool(
-                config["transport"], root, required,
-                lambda: pace_boat_allocation(root, config["transport"]["boat"].get("allocation_interval_seconds", 0)))
-        return _BOAT_POOLS[root]
-
-
-def shutdown_boat_pools() -> None:
-    with _BOAT_POOLS_LOCK:
-        pools = list(_BOAT_POOLS.values())
-    for pool in pools:
-        pool.shutdown()
-
-
 def run_one(root: Path, config: dict, model: dict, docker: list[str] | None, image: str, visualizer_image: str,
             repetition: int, attempt_id: str, store, retry_of=None, key_lease: KeyLease | None = None) -> None:
     run_dir = root / attempt_id
@@ -855,29 +806,7 @@ def run_one(root: Path, config: dict, model: dict, docker: list[str] | None, ima
         with slot(root, model["provider"], config["concurrency"]["providers"][model["provider"]]):
             if STOP.is_set():
                 raise KeyboardInterrupt()
-            with ExitStack() as stack:
-                lease = None
-                if config["transport"]["backend"] == "boat":
-                    lease = stack.enter_context(boat_pool(root, config).lease(attempt_id, run_dir))
-                    session = lease.session
-                    docker = session.docker_prefix
-                    if session.image_id("agent") != image or session.image_id("visualizer") != visualizer_image:
-                        raise ValueError("Boat images differ from frozen campaign")
-                    write_json(run_dir / "transport.json", {**lease.record(),
-                                                            "images": {"agent": image, "visualizer": visualizer_image}})
-                    required = config["limits"]["wall_seconds"] + 4 * config["limits"]["render_seconds"] + config["limits"]["video_seconds"] + 600
-                    if session.archive_deadline - time.time() < required:
-                        raise RuntimeError("Boat delivered TTL cannot cover the frozen runtime and export budgets")
-                _ATTEMPT.cpuset = lease.cpuset if lease is not None else None
-                try:
-                    _run_one(root, config, model, docker, image, visualizer_image, repetition, attempt_id, store, retry_of, key_lease)
-                finally:
-                    _ATTEMPT.cpuset = None
-                if lease is not None and (events := lease.host_oom()):
-                    # A neighbour exhausted the shared host: never charge this attempt to its model.
-                    write_json(run_dir / "host-oom.json", {"events": events})
-                    from boat import BoatError
-                    raise BoatError("Host-level OOM on a shared Boat VM during this attempt", code="shared_host_oom")
+            _run_one(root, config, model, docker, image, visualizer_image, repetition, attempt_id, store, retry_of, key_lease)
     except BaseException as exc:
         status = json.loads((run_dir / "status.json").read_text())
         status.update(status="INTERRUPTED" if isinstance(exc, (KeyboardInterrupt, SystemExit)) else "INFRA_ERROR",
@@ -886,7 +815,7 @@ def run_one(root: Path, config: dict, model: dict, docker: list[str] | None, ima
         write_json(run_dir / "status.json", status)
         raise
     finally:
-        finalize_attempt(run_dir, store)
+        finalize_attempt(run_dir)
 
 
 def attempt_succeeded(status: dict, profile: dict | None, *, finalization_error=False) -> bool:
@@ -1032,8 +961,6 @@ def probe_provider(model: dict, credential: str, timeout: float = 120) -> dict:
 KEY_GATE_FRESH_SECONDS = 3600
 # A key whose provider reports its weekly usage window spent re-probes only this often.
 WEEKLY_LIMIT_BACKOFF_SECONDS = 6 * 3600
-# Boat credit burn per VM type (credit seconds are 1x seconds): small 0.5x, default 1x, large 2x.
-BOAT_BURN_RATE = {"small": 0.5, "default": 1.0, "large": 2.0}
 
 
 def quota_wait(probe_interval: int, limit_text: str) -> int:
@@ -1098,9 +1025,7 @@ class RerunQueue:
     the same provider. A usage-limit reply re-probes after `probe_interval` seconds, any other probe
     failure after `retry_interval`; no attempt is spent while the gate is closed. Models in `holds`
     (operator deferral) are never probed or started; their ordinals stay pending ("held"), and a
-    later `run.py queue` without the hold resumes them. Before each start the Boat balance must keep
-    `boat_reserve` seconds after the worst case (frozen TTL) of every running attempt and the new
-    one; otherwise the queue starts nothing more, lets running attempts finish and stops.
+    later `run.py queue` without the hold resumes them.
 
     A plan entry may carry frozen `reruns` an earlier queue campaign ran after the origin; the chain
     then continues after the last of them (report.entry_next_index).
@@ -1113,20 +1038,18 @@ class RerunQueue:
 
     Queues running side by side on one controller publish their waiting ordinals and running
     attempts (queue-demand-<campaign>.json beside the key gates): a queue never starts a provider's
-    repetition while another live queue still waits to start a lower repetition on that provider,
-    and the Boat reserve counts every live queue's running attempts.
+    repetition while another live queue still waits to start a lower repetition on that provider.
     """
 
     def __init__(self, root: Path, config: dict, docker, snapshot: dict, store, *,
-                 probe_interval: int, retry_interval: int, boat_reserve: int, probe=probe_provider, balance=None,
+                 probe_interval: int, retry_interval: int, probe=probe_provider,
                  holds=(), key_gate_fresh: int = KEY_GATE_FRESH_SECONDS):
         import report
         self.report = report
         self.root, self.config, self.docker, self.snapshot, self.store = root, config, docker, snapshot, store
-        self.probe_interval, self.retry_interval, self.boat_reserve = probe_interval, retry_interval, boat_reserve
+        self.probe_interval, self.retry_interval = probe_interval, retry_interval
         self.key_gate_fresh = key_gate_fresh
         self.probe = probe
-        self.balance = balance or self.boat_balance
         self.policies = config["policies"]
         self.cap = self.policies["max_queue_attempts"]
         self.models = {model["id"]: model for model in config["models"]}
@@ -1146,7 +1069,6 @@ class RerunQueue:
         self.demand_path = controller_resource_dir() / f"queue-demand-{config['campaign_id']}.json"
         self.inflight = {}
         self.leases = {}
-        self.stopped = None
 
     def pooled(self, model: dict) -> bool:
         return credential_pool(self.config, model) != {model["api_key_env"]: None}
@@ -1154,16 +1076,6 @@ class RerunQueue:
     def event(self, **record) -> None:
         with (self.root / "queue-events.jsonl").open("a", encoding="utf-8") as stream:
             stream.write(json.dumps({"at": time.time(), **record}, allow_nan=False) + "\n")
-
-    def boat_balance(self) -> int | None:
-        if self.config["transport"]["backend"] != "boat":
-            return None
-        from boat import doctor
-        try:
-            return doctor(self.config["transport"])["remaining_seconds"]
-        except Exception as exc:
-            self.event(event="boat_balance_error", error=type(exc).__name__)
-            return 0
 
     def chain(self, model_id: str, repetition: int, entry: dict) -> dict:
         """Where one ordinal stands: next attempt to start, held, in flight, done or exhausted."""
@@ -1203,8 +1115,8 @@ class RerunQueue:
                   for model_id, repetition, entry in self.ordinals]
         state = {"status": status, "updated_at": time.time(), "campaign_sha256": self.config_hash,
                  "gates": self.gates, "key_gates": self.key_gates.read(),
-                 "inflight": {attempt_id: item[3] for attempt_id, item in sorted(self.inflight.items())},
-                 "stopped": self.stopped, "ordinals": chains}
+                 "inflight": {attempt_id: item[2] for attempt_id, item in sorted(self.inflight.items())},
+                 "ordinals": chains}
         write_json(self.root / "queue-state.json", state)
         return state
 
@@ -1291,32 +1203,11 @@ class RerunQueue:
 
     def publish_demand(self, waiting: list) -> None:
         lowest = {}
-        if not self.stopped:
-            for model, repetition, _ in waiting:
-                lowest[model["provider"]] = min(repetition, lowest.get(model["provider"], repetition))
+        for model, repetition, _ in waiting:
+            lowest[model["provider"]] = min(repetition, lowest.get(model["provider"], repetition))
         write_json(self.demand_path, {"pid": os.getpid(), "start_ticks": process_start_ticks(os.getpid()),
                                       "campaign_id": self.config["campaign_id"], "updated_at": time.time(),
-                                      "waiting": lowest, "inflight_started": [item[2] for item in self.inflight.values()]})
-
-    def reserve_allows_start(self, others: list[dict] = ()) -> bool:
-        remaining = self.balance()
-        if remaining is None:
-            return True
-        boat = self.config["transport"]["boat"]
-        ttl = boat["ttl_seconds"]
-        # Worst case per attempt: its VM runs the whole deadman TTL at the type's burn rate, shared
-        # by attempts_per_vm tenants (credit seconds are 1x-rate seconds; small 0.5x, large 2x).
-        share = ttl * BOAT_BURN_RATE[boat.get("type", "small")] / boat.get("attempts_per_vm", 1)
-        now = time.time()
-        started = [item[2] for item in self.inflight.values()] + [value for record in others for value in record["inflight_started"]]
-        running = sum(share * max(0, ttl - (now - value)) / ttl for value in started)
-        projected = remaining - running - share
-        if projected < self.boat_reserve:
-            self.stopped = {"reason": "boat_reserve", "remaining_seconds": remaining, "projected_seconds": projected,
-                            "reserve_seconds": self.boat_reserve}
-            self.event(event="stop_starting", **self.stopped)
-            return False
-        return True
+                                      "waiting": lowest})
 
     def start(self, pool, model: dict, repetition: int, step: dict, key_lease: KeyLease | None = None) -> None:
         attempt_id, previous = step["attempt_id"], step["retry_of"]
@@ -1337,12 +1228,12 @@ class RerunQueue:
         key = None if key_lease is None else key_lease.name
         if key_lease is not None:
             self.leases[attempt_id] = key_lease  # held until reap() has classified the outcome
-        self.inflight[attempt_id] = (future, model["provider"], time.time(), key)
+        self.inflight[attempt_id] = (future, model["provider"], key)
         self.event(event="start", attempt_id=attempt_id, kind=step["kind"], retry_of=previous, key=key)
 
     def reap(self) -> list[str]:
         errors = []
-        for attempt_id, (future, provider, _, key) in list(self.inflight.items()):
+        for attempt_id, (future, provider, key) in list(self.inflight.items()):
             if not future.done():
                 continue
             del self.inflight[attempt_id]
@@ -1375,13 +1266,13 @@ class RerunQueue:
                     step = self.chain(model_id, repetition, entry)
                     if step["state"] == "next":
                         waiting.append((self.models[model_id], repetition, step))
-                if (not waiting or self.stopped) and not self.inflight:
+                if not waiting and not self.inflight:
                     break
                 self.publish_demand(waiting)
                 others = self.others()
                 closed = set()  # one gate decision per provider or model per pass keeps admission in ordinal order
                 for model, repetition, step in waiting:
-                    if self.stopped or len(self.inflight) >= concurrency["workers"]:
+                    if len(self.inflight) >= concurrency["workers"]:
                         break
                     provider = model["provider"]
                     if (provider in closed or model["id"] in closed
@@ -1399,10 +1290,6 @@ class RerunQueue:
                     elif not self.open_gate(model):
                         closed.add(model["id"])  # a closed model gate never blocks another model
                         continue
-                    if not self.reserve_allows_start(others):
-                        if key_lease is not None:
-                            key_lease.release()
-                        break
                     self.start(pool, model, repetition, step, key_lease)
                 self.publish_demand(waiting)
                 self.snapshot_state("RUNNING")
@@ -1416,8 +1303,8 @@ class RerunQueue:
             for lease in self.leases.values():
                 lease.release()  # only interrupted or failed runs leave leases here
         errors.extend(self.reap())
-        final = self.snapshot_state("STOPPED_BOAT_RESERVE" if self.stopped else "COMPLETED")
-        if not self.stopped and any(item["state"] == "held" for item in final["ordinals"]):
+        final = self.snapshot_state("COMPLETED")
+        if any(item["state"] == "held" for item in final["ordinals"]):
             final = self.snapshot_state("COMPLETED_WITH_HOLDS")
         return {**final, "errors": errors}
 
@@ -1515,15 +1402,11 @@ def _run_one(root: Path, config: dict, model: dict, docker: list[str], image: st
                 result["render"] = "ok"
                 if not fault:
                     result.update(status="RENDERED_UNSCORED", failure_category=None, eligible=True)
-                if (config["transport"].get("boat") or {}).get("record_video", True) is False:
-                    # Presentation only and no longer published; never graded (scores use canonical.wav).
-                    result["video"] = {"skipped": "campaign disables the presentation-only video"}
-                else:
-                    try:
-                        with slot(root, "video", config["concurrency"]["video"]):
-                            result["video"] = visualize(docker, visualizer_image, run_dir, config, result["audio"]["duration_seconds"])
-                    except (OSError, ValueError, subprocess.SubprocessError) as exc:
-                        result["video"] = {"error": type(exc).__name__}
+                try:
+                    with slot(root, "video", config["concurrency"]["video"]):
+                        result["video"] = visualize(docker, visualizer_image, run_dir, config, result["audio"]["duration_seconds"])
+                except (OSError, ValueError, subprocess.SubprocessError) as exc:
+                    result["video"] = {"error": type(exc).__name__}
             except (ValueError, wave.Error, EOFError) as exc:
                 result.update(status="MODEL_FAILED" if not fault else result["status"], render="invalid",
                               failure_category=fault or "MODEL", model_failure=not bool(fault), error=str(exc))
@@ -1566,7 +1449,7 @@ def _run_one(root: Path, config: dict, model: dict, docker: list[str], image: st
             write_json(run_dir / "status.json", result)
 
 
-def finalize_attempt(run_dir: Path, store) -> None:
+def finalize_attempt(run_dir: Path) -> None:
     from score import profile_attempt
     try:
         with slot(run_dir.parent, "scoring", 1):
@@ -1580,34 +1463,6 @@ def finalize_attempt(run_dir: Path, store) -> None:
                       failure_category=error["failure_category"], eligible=False, finalization_error=error)
         write_json(run_dir / "status.json", status)
         raise
-    export_attempt(run_dir, store)
-
-
-def export_attempt(run_dir: Path, store) -> bool:
-    """Export an evaluated attempt; an export failure never changes the attempt's outcome.
-
-    status.json and profile.json stay as evaluated, local files are kept, and the failure is
-    recorded in archive-error.json so `export_deferred` can retry the export later.
-    """
-    try:
-        metadata = store.archive_attempt(run_dir)
-        write_json(run_dir / "archive.json", metadata)
-        if store.evict_after_archive:
-            store.evict(run_dir, metadata)
-    except BaseException as exc:
-        write_json(run_dir / "archive-error.json", {"error": type(exc).__name__, "local_files_retained": True,
-                                                    "recorded_at": time.time()})
-        if not isinstance(exc, Exception):
-            raise
-        return False
-    return True
-
-
-def export_deferred(root: Path, store) -> list[str]:
-    """Retry every export that failed after evaluation; return the attempts still unarchived."""
-    return [path.parent.name for path in sorted(root.glob("*/archive-error.json"))
-            if not (path.parent / "archive.json").exists() and not export_attempt(path.parent, store)]
-
 
 def fingerprint(config: dict, docker: list[str]) -> dict:
     if importlib.metadata.version("mini-swe-agent") != MINI_VERSION:
@@ -1646,20 +1501,7 @@ def recover_attempts(root: Path, config: dict, docker: list[str]) -> list[str]:
         if model:
             recover_trajectory(path.parent, config, model, status.get("credential_env"))
         if status.get("container"):
-            if config["transport"]["backend"] == "boat":
-                from boat import BoatSession
-                metadata_path = path.parent / "transport.json"
-                if not metadata_path.exists():
-                    raise RuntimeError("Boat recovery requires the original recorded VM identity")
-                metadata = json.loads(metadata_path.read_text())
-                transport = json.loads(json.dumps(config["transport"]))
-                transport["boat"].update(mode="resume", id=metadata["boat_id"])
-                transport["boat"].pop("image_bundle", None)
-                transport["boat"].pop("snapshot", None)
-                with BoatSession(transport, audit_dir=path.parent / "recovery-transport") as session:
-                    remove_container(session.docker_prefix, status["container"])
-            else:
-                remove_container(docker, status["container"])
+            remove_container(docker, status["container"])
         status.update(status="INTERRUPTED", eligible=False, failure_category="INFRA", model_failure=False,
                       finished_at=time.time(), totals=summarize(path.parent, model, interrupted=True))
         write_json(path, status)
@@ -1670,8 +1512,8 @@ def recover_attempts(root: Path, config: dict, docker: list[str]) -> list[str]:
 def memory_admission(config: dict) -> dict:
     """Require the full frozen pool reserve both at launch and before each attempt.
 
-    MemAvailable excludes swap. Local workers reserve 512 MiB controller plus
-    a 2 GiB sandbox cap each; Boat workers reserve only 512 MiB controller each.
+    MemAvailable excludes swap. Each worker reserves 512 MiB for its host process
+    plus a 2 GiB sandbox cap.
     Render, video and scoring allocations are not included in this admission gate.
     """
     available = None
@@ -1681,7 +1523,7 @@ def memory_admission(config: dict) -> dict:
             break
     workers = config["concurrency"]["workers"]
     controller = workers * 512 * 1024 * 1024
-    sandbox = workers * 2 * 1024**3 if config["transport"]["backend"] == "local" else 0
+    sandbox = workers * 2 * 1024**3
     required = controller + sandbox
     diagnostic = {"available_bytes": available, "required_bytes": required, "controller_reserve_bytes": controller,
                   "local_sandbox_caps_bytes": sandbox, "swap_counted": False, "workers": workers}
@@ -1705,8 +1547,6 @@ def main() -> None:
                         help="queue: seconds before re-probing a provider whose probe hit a usage limit")
     parser.add_argument("--retry-interval", type=int, default=300,
                         help="queue: seconds before re-probing after any other probe failure")
-    parser.add_argument("--boat-reserve-seconds", type=int, default=36000,
-                        help="queue: Boat balance every start must leave after all running attempts' worst case")
     parser.add_argument("--hold", action="append", default=[], metavar="MODEL_ID",
                         help="queue: operator deferral; never probe or start this model's ordinals (they stay pending)")
     parser.add_argument("--key-gate-fresh-seconds", type=int, default=KEY_GATE_FRESH_SECONDS,
@@ -1731,10 +1571,8 @@ def main() -> None:
             if (digest(frozen["snapshot"]) != frozen["sha256"]
                     or frozen["snapshot"]["config_sha256"] != digest(config)):
                 raise ValueError("Recovery campaign does not match the immutable original cohort")
-            docker = docker_command() if config["transport"]["backend"] == "local" else None
-            from artifacts import ArtifactStore
-            print(json.dumps({"interrupted_attempts": recover_attempts(root, config, docker), "rerun": False,
-                              "unarchived_attempts": export_deferred(root, ArtifactStore(config["storage"]))}))
+            docker = docker_command()
+            print(json.dumps({"interrupted_attempts": recover_attempts(root, config, docker), "rerun": False}))
         return
     memory = memory_admission(config)
     from artifacts import ArtifactStore
@@ -1746,34 +1584,22 @@ def main() -> None:
         for key_name in credential_pool(config, model):
             worker_credentials(config, model, key_name)
     with controller_lock(root):
-        transport_status = None
-        if config["transport"]["backend"] == "boat":
-            from boat import doctor
-            transport_status = doctor(config["transport"])
-            docker = None
-            snapshot = {"config_sha256": digest(config), "campaign": config,
-                        "image_id": config["image"], "visualizer_image_id": config["visualizer_image"],
-                        "runtime_images_verified": "per_attempt"}
-        else:
-            docker = docker_command()
-            snapshot = fingerprint(config, docker)
+        docker = docker_command()
+        snapshot = fingerprint(config, docker)
         if args.command == "doctor":
             print(json.dumps({"status": "configuration_checked", **snapshot,
                               "effective_models": [model["effective_settings"] for model in config["models"]],
-                              "memory": memory, "transport": transport_status,
+                              "memory": memory,
                               "note": "No model request sent. Native protocol readiness evidence is a separate launch gate."}, indent=2))
             return
         lock_campaign(root / "campaign.lock.json", snapshot)
         if args.command == "queue":
-            if (min(args.probe_interval, args.retry_interval) < 60 or args.boat_reserve_seconds < 0
-                    or args.key_gate_fresh_seconds < 0):
-                raise ValueError("Probe intervals are at least 60 s; the Boat reserve and key gate freshness are non-negative")
+            if min(args.probe_interval, args.retry_interval) < 60 or args.key_gate_fresh_seconds < 0:
+                raise ValueError("Probe intervals are at least 60 s; key gate freshness is non-negative")
             summary = RerunQueue(root, config, docker, snapshot, store, probe_interval=args.probe_interval,
-                                 retry_interval=args.retry_interval, boat_reserve=args.boat_reserve_seconds,
+                                 retry_interval=args.retry_interval,
                                  holds=args.hold, key_gate_fresh=args.key_gate_fresh_seconds).run()
-            unarchived = export_deferred(root, store)
-            print(json.dumps({"status": summary["status"], "stopped": summary["stopped"], "errors": summary["errors"],
-                              "unarchived_attempts": unarchived,
+            print(json.dumps({"status": summary["status"], "errors": summary["errors"],
                               "ordinals": [{key: item.get(key) for key in ("model_id", "repetition", "state", "attempt_id")}
                                            for item in summary["ordinals"]]}))
             return
@@ -1826,10 +1652,6 @@ def main() -> None:
             raise
         finally:
             pool.shutdown(wait=True)
-        unarchived = export_deferred(root, store)
-        if unarchived:
-            print(json.dumps({"unarchived_attempts": unarchived,
-                              "note": "Evaluated outcomes stand and local files are retained; run `recover` to retry the export."}))
         if errors:
             raise RuntimeError("Campaign finalization failed: " + ", ".join(errors))
         if config["policies"]["attempt_selection"] == campaign.INDEPENDENT:
@@ -1842,7 +1664,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    try:
-        main()
-    finally:
-        shutdown_boat_pools()  # never leave a lingering shared VM billing after the campaign
+    main()

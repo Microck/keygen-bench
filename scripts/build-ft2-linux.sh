@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Candidate Linux/no-MIDI build recipe. Source-reviewed; not native-tested here.
+# Pinned Linux/no-MIDI build used by benchmark/Dockerfile.
 set -euo pipefail
 pin=6c2ffc0778d02a42286b4a87e4dc28793ccbdf4d
 repo=https://github.com/mova77/fast-tracker2.git
@@ -25,4 +25,4 @@ read -r -a libs <<< "$(pkg-config --libs sdl2 libmicrohttpd)"
   src/modloaders/*.c src/smploaders/*.c src/*.c \
   "${libs[@]}" -lm -o release/other/ft2-clone
 printf 'Source commit: %s\nBinary: %s/release/other/ft2-clone\n' "$pin" "$PWD"
-printf 'Next: run tools/ft2_smoke.py from the research repository.\n'
+printf 'Next: run tools/ft2_smoke.py from the Keygen Bench repository.\n'
