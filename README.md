@@ -8,7 +8,7 @@ This repository contains the runner, pinned container build, evaluator, results 
 
 Start with [Contributing runs](CONTRIBUTING-RUNS.md). The guided CLI builds the environment, configures a provider, checks prerequisites and runs a smoke attempt or the three-attempt submission workflow. API-key presets include OpenAI and Anthropic; custom services can use compatible Chat Completions, Responses or Messages endpoints. OAuth routes use your own authorized local bridge.
 
-Model requests can cost money. Credentials stay outside the model's sandbox and must never be committed. Keep raw runs outside the repository; publish only reviewed bundles.
+Model requests can cost money. Credentials stay outside the model's sandbox and must never be committed. Keep your own working runs outside the repository; publish only reviewed bundles.
 
 For campaign configuration, evaluation and reporting, see [the benchmark guide](benchmark/README.md).
 
@@ -18,7 +18,9 @@ The evaluator renders the submitted XM in a fresh FT2 process. Craft-v7 measures
 
 Community submissions remain labelled separately until the maintainer verifies their provenance and re-renders and re-scores the module. A bundle validator cannot prove which model produced a file or that no undisclosed attempts occurred.
 
-The [website guide](web/classic/README.md) explains how to export a reviewed local snapshot, build the FT2-style site and generate link previews. Run data and deployed sites are generated outputs, not repository source.
+The [website guide](web/classic/README.md) explains how to export a reviewed local snapshot, build the FT2-style site and generate link previews. Deployed sites are generated outputs, not repository source.
+
+Every attempt behind the published results is in [`runs/`](runs/README.md): one folder per model with its three ranked attempts and everything else (failed, retried and older runs) under `other/`. Videos are omitted and audio is stored as lossless FLAC.
 
 ## Repository layout
 
@@ -28,6 +30,7 @@ The [website guide](web/classic/README.md) explains how to export a reviewed loc
 | `benchmark/contrib/` | Community-run packaging and validation |
 | `benchmark/tests/`, `tests/` | Offline regression tests and synthetic fixtures |
 | `scripts/`, `tools/` | Pinned FT2 builds and native acceptance checks |
+| `runs/` | Every recorded attempt of the maintainer campaigns, by model |
 | `data/` | Scoring calibration metadata, without archived music |
 | `web/classic/` | Results frontend and local publication tools |
 | `submissions/` | Reviewed community bundles |

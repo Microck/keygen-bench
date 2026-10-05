@@ -10,6 +10,8 @@
 - Repository agent instructions linking the maintained guides and defining local execution, privacy, provenance and verification boundaries.
 - Guided contributor CLI for setup, private configuration, offline preflight, bounded model smoke runs and spending-authorized official submissions.
 - Direct OpenAI and Anthropic API-key routes and public HTTPS custom endpoints for supported native protocols.
+- Every attempt of the maintainer max-tier prompt-v2 campaigns and earlier runs under `runs/<model>/`: the three ranked attempts plus all other attempts in `other/`, with trajectories, transport logs, modules, lossless FLAC audio and evaluations (no videos).
+- Google AI Studio and Devin native routes.
 - Best/Average ordering toggle at the right of the ranking toolbar with shareable URL state and final-ordinal means, preserving the same columns, attempt views and sidebar.
 - Cracktro-style preloader replacing the "Loading..." text: starfield and a chrome keygen-style logo, with load progress shown as a decoding serial and a dithered raster reveal of the mounted page.
 
