@@ -4,10 +4,16 @@
 """
 import argparse
 import http.server
+import io
+import json
 import os
 import re
+from html import escape as html_escape
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
+
+
+APP_ROUTES = {"tracker", "rankings", "scoring", "support"}
 
 
 class Handler(http.server.SimpleHTTPRequestHandler):
@@ -24,6 +30,36 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         self.send_error(404)
         return None
 
+    # index.html with og:/twitter: tags for this route from dist/og/meta.json (written by build_og.py), so link
+    # previews show the current rankings or the linked model. Without meta.json the shell is served as is.
+    def app_shell(self, route):
+        html = (self.root / "index.html").read_text(encoding="utf-8")
+        try:
+            meta = json.loads((self.root / "dist" / "og" / "meta.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            meta = {}
+        parts = route.strip("/").split("/")
+        info = meta.get(route) or meta.get("/" + "/".join(parts[:2])) or meta.get("/" + parts[0]) or meta.get("/")
+        if info:
+            host = self.headers.get("X-Forwarded-Host") or self.headers.get("Host") or ""
+            scheme = self.headers.get("X-Forwarded-Proto") or "http"
+            base = f"{scheme}://{host}"
+            esc = lambda s: html_escape(str(s), quote=True)
+            tags = [f'<meta property="og:type" content="website">', f'<meta property="og:site_name" content="Keygen Bench">',
+                    f'<meta property="og:title" content="{esc(info["title"])}">', f'<meta property="og:description" content="{esc(info["description"])}">',
+                    f'<meta property="og:image" content="{esc(base + info["image"])}">', '<meta property="og:image:width" content="1200">',
+                    '<meta property="og:image:height" content="630">', f'<meta property="og:url" content="{esc(base + route)}">',
+                    '<meta name="twitter:card" content="summary_large_image">', f'<meta name="twitter:title" content="{esc(info["title"])}">',
+                    f'<meta name="twitter:description" content="{esc(info["description"])}">', f'<meta name="twitter:image" content="{esc(base + info["image"])}">',
+                    f'<meta name="description" content="{esc(info["description"])}">']
+            html = html.replace("<!--OG-->", "\n".join(tags)).replace("<title>Keygen Bench</title>", f"<title>{esc(info['title'])}</title>")
+        body = html.encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        return io.BytesIO(body)
+
     def send_head(self):
         requested = unquote(urlsplit(self.path).path)
         translated = Path(self.translate_path(self.path))
@@ -32,6 +68,10 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 or any(path.is_symlink() for path in (translated, *translated.parents) if path.is_relative_to(self.root))):
             self.send_error(404)
             return None
+        # Client-side routes (/tracker/gpt-5.5, /rankings, ...) that are not files get the app shell.
+        route = requested.rstrip("/") or "/"
+        if requested in ("/", "/index.html") or (not os.path.exists(translated) and requested.strip("/").split("/")[0] in APP_ROUTES):
+            return self.app_shell("/" if requested == "/index.html" else route)
         rng = self.headers.get("Range")
         path = self.translate_path(self.path)
         m = re.fullmatch(r"bytes=(\d*)-(\d*)", rng or "")

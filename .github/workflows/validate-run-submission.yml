@@ -1,0 +1,53 @@
+name: Validate community run submissions
+on:
+  pull_request:
+    paths:
+      - 'submissions/**'
+permissions:
+  contents: read
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      # Execute only validator code from the trusted base. PR content is data.
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: trusted
+          persist-credentials: false
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          path: incoming
+          persist-credentials: false
+          sparse-checkout: submissions
+      - name: Validate bundles using trusted code
+        run: |
+          python3 - <<'PY'
+          import importlib.util
+          from pathlib import Path
+          specification = importlib.util.spec_from_file_location(
+              'bundle_validator', 'trusted/benchmark/contrib/validate_bundle.py')
+          validator = importlib.util.module_from_spec(specification)
+          specification.loader.exec_module(validator)
+          root = Path('incoming/submissions')
+          if root.is_symlink() or not root.is_dir():
+              raise SystemExit('Invalid submissions root')
+          bundles = []
+          for model in root.iterdir():
+              if model.name == 'README.md' and model.is_file() and not model.is_symlink():
+                  continue
+              if model.is_symlink() or not model.is_dir():
+                  raise SystemExit('Invalid submission model directory')
+              for bundle in model.iterdir():
+                  if bundle.is_symlink() or not bundle.is_dir():
+                      raise SystemExit('Invalid submission bundle directory')
+                  bundles.append(bundle)
+          for bundle in sorted(bundles):
+              try:
+                  validator.validate(bundle)
+              except Exception as error:
+                  # Do not print untrusted filenames or potentially sensitive values.
+                  raise SystemExit('Bundle rejected: ' + type(error).__name__)
+          print(f'Validated {len(bundles)} community bundles')
+          PY

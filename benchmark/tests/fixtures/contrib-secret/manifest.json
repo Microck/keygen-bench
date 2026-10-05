@@ -1,0 +1,145 @@
+{
+  "schema": "keygen-community-1",
+  "attempts": [
+    "attempt-1",
+    "attempt-2",
+    "attempt-3"
+  ],
+  "environment": {
+    "contract": {
+      "base_image": "debian:bookworm-slim@sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2e3687004faa906251",
+      "ft2_commit": "6c2ffc0778d02a42286b4a87e4dc28793ccbdf4d",
+      "harness_version": "2.4.6",
+      "prompt": {
+        "version": "prompt-v2",
+        "system_template_sha256": "208f0608f60694b3a0ff68a30b260c881b4731ac74568db2e03527857ef7ef3f",
+        "task_sha256": "ca1bf032fc28d26e82045c96285336a6d154a74c159b5a42c929fdf9274c67b2",
+        "system": "You are composing music in an isolated workspace. Use the bash tool to run commands and complete the task.\nEach command runs in /workspace in a fresh bash shell; files and the FT2 session persist between commands. Budget: no limit on steps, 120 minutes; a step is one reply, and every tool call in it runs in order. Every tool result ends with <time_left>, the minutes remaining.\nA command still running after 120 seconds is stopped and returns exit code 124 (137 if it had to be killed). Command output over 20,000 bytes shows only its first and last 10,000 bytes.\nThe `ft2 list` command describes the tracker tools. `ft2 call TOOL 'JSON_OBJECT'` calls one tool. `ft2 batch FILE.json` executes a list of {\"name\": TOOL, \"arguments\": {...}} calls in order.\nThis FT2 build exposes samples, instruments by name, patterns, order, tempo, save and render. Envelopes and note-to-sample mapping are unavailable; shape sounds in the sample data itself.\nPython 3 and NumPy are available for creating original sound material, editing files, and analyzing renders. Writing the XM bytes yourself is allowed. Keep it a real tracker module, with instruments and patterns doing the work, not one long pre-rendered sample.\nThe workspace is offline: no network, no coding-agent client, no skill library. You cannot hear audio; render to WAV with module_render and inspect the result with NumPy to check your work, then revise.\nA keygen tune plays in a loop. Compose so the module loops cleanly from its end back to its restart position.\nSave the final editable module as /workspace/submission/tune.xm. A WAV preview and source scripts may accompany it. The submission directory may hold at most 128 MiB in at most 4096 regular files (subdirectories are fine; links and special files are not). If the accompanying files break these limits they are dropped and only tune.xm is kept. A trusted process renders the final XM separately.\nIf the time budget runs out, the session stops and the tune.xm saved at that moment is collected as the submission.\nSubmit by running exactly this command:\necho COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT\nSubmission ends the session. There is no second attempt or post-submission repair.\n",
+        "task": "You have FastTracker II and Python/NumPy at your disposal. Make an original keygen tune. Music only.\nChoose the sound, tempo, harmony, rhythm, instruments, length and arrangement yourself.\n"
+      },
+      "limits": {
+        "steps": 0,
+        "wall_seconds": 7200,
+        "request_seconds": 3600,
+        "command_seconds": 120,
+        "render_seconds": 300,
+        "video_seconds": 600,
+        "artifact_bytes": 134217728
+      },
+      "submission_files": 4096,
+      "render": {
+        "rate": 44100,
+        "bits": 16
+      },
+      "scorer": "craft-v7",
+      "native": {
+        "timeout_seconds": 3600,
+        "retries": 2
+      },
+      "attempt_selection": "independent_repetitions",
+      "sources": {
+        "run.py": "99b13f7c4c6a9d2ffd8ba906bc558c3a6b8dfa919446c8d0b23bb7c13059ace7",
+        "drive.py": "73765c1c941a6ff0a7e47565f50722b13fd923995183f911672a5d5880b39742",
+        "campaign.py": "5173df1ff3b01f2bdc5fa21d8391e41d27a6035c306663d208b25edc1bbe51ca",
+        "native_models.py": "147efb63d18d7c45d4102d20a637ebf1520f0bb6f33ae016610a1a3345acf09e",
+        "boat.py": "4cfd1529c1a95d1cabdb1990902490720d01b1a58514da8af7dfd650db1042b8",
+        "boat_transport.py": "70275614caeffadda8764e5ec6a81b7c9dc4fa0b13693a49e740bc66c241cb85",
+        "artifacts.py": "f59c2272a6390079b2b682a9b68ee2911656cbaa988fe7137cd709df125edac4",
+        "bridge.py": "eef4c6c9f85a2a3e57738c80c496307867e2d591063756873b85ba4e6633a9e1",
+        "visualize.sh": "a49f4bc09336202729902522294cfb02295186ff304b5847cac70d0602a7a3e8",
+        "Dockerfile": "0d9f981ae9ec842f1124f36561951146df504cf6e6e2ef49b2c442c35669f0a7",
+        "requirements.txt": "c44f9683b38cd085cfd11d7ae877833e390c5e3af58ff22f65d8cf5069e6da76"
+      },
+      "requirements_sha256": "c44f9683b38cd085cfd11d7ae877833e390c5e3af58ff22f65d8cf5069e6da76",
+      "build_script_sha256": "3f61b57300bb8c774d2546d68d84113359a03e3660600865cf5bc2656620d74c"
+    },
+    "images": {
+      "agent": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+      "visualizer": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+    },
+    "model": {
+      "id": "community-model",
+      "model": "synthetic-fixture",
+      "response_model": "synthetic-fixture",
+      "provider": "go",
+      "api": "messages",
+      "base_url": "https://opencode.ai/zen/go/v1",
+      "api_key_env": "KEYGEN_CONTRIB_API_KEY",
+      "generation": {
+        "max_tokens": 32768,
+        "thinking": {
+          "type": "adaptive"
+        },
+        "output_config": {
+          "effort": "xhigh"
+        }
+      },
+      "tier": {
+        "level": "xhigh",
+        "reasoning": {
+          "thinking": {
+            "type": "adaptive"
+          },
+          "output_config": {
+            "effort": "xhigh"
+          }
+        },
+        "spec_sha256": "63b6b160073672005562aa0c6d5cf93bc3fd9110a6b764a7351a28d3414a0a62"
+      }
+    },
+    "tier_source": "https://opencode.ai/docs/go/",
+    "handle": "fixture",
+    "host": {
+      "system": "Linux",
+      "release": "synthetic",
+      "architecture": "x86_64",
+      "python": "3.11",
+      "docker": "synthetic"
+    },
+    "packages": [
+      [
+        "mini-swe-agent",
+        "2.4.6"
+      ]
+    ],
+    "base_layers": [
+      "sha256:3333333333333333333333333333333333333333333333333333333333333333"
+    ],
+    "image_details": {
+      "agent": {
+        "architecture": "amd64",
+        "os": "linux",
+        "layers": [
+          "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+          "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+        ],
+        "repo_digests": []
+      },
+      "visualizer": {
+        "architecture": "amd64",
+        "os": "linux",
+        "layers": [
+          "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+          "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+        ],
+        "repo_digests": []
+      }
+    }
+  },
+  "files": {
+    "attempt-3/status.json": "f79eb7a2fe006db01b6ff17aa39e70de5b7729774fafc298cbee4469ee586d2a",
+    "attempt-3/transport.jsonl": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "attempt-3/trajectory.json": "6514cc2ad8fc72ecff48aae9379abc55652babb89aca5ec60c871e68aea272f9",
+    "attempt-3/environment.json": "6fa8f9e731a3c1aadfb3164357a42b6adc2ab7d65c53649f7776de2914ee742b",
+    "attempt-1/status.json": "2f58652b839768f645b1257db28d42d613372a3c864e4099dfd7c57f28244f75",
+    "attempt-1/transport.jsonl": "62eb3c870742cbeb4ea979e1d10bf6e7da6d87ececc1493391c76e7b238d8a81",
+    "attempt-1/tune.xm": "3878b8b21d02c5fd47a142197cbf8e113f638ffcc6c230f5ecaa36906568be9f",
+    "attempt-1/trajectory.json": "2f744756875cd60a7a65ed46658b632d87d1a05925fbcf7c0027fc8d193390b4",
+    "attempt-1/environment.json": "6fa8f9e731a3c1aadfb3164357a42b6adc2ab7d65c53649f7776de2914ee742b",
+    "attempt-2/status.json": "c4430be623c9542a634c750676adb45f31039e515c269fa288421224f576daba",
+    "attempt-2/transport.jsonl": "3be8c662e9ab64946bec9d95d2db174d7c1dbbefd761204bbe7c760b5b321a46",
+    "attempt-2/tune.xm": "3878b8b21d02c5fd47a142197cbf8e113f638ffcc6c230f5ecaa36906568be9f",
+    "attempt-2/trajectory.json": "2f744756875cd60a7a65ed46658b632d87d1a05925fbcf7c0027fc8d193390b4",
+    "attempt-2/environment.json": "6fa8f9e731a3c1aadfb3164357a42b6adc2ab7d65c53649f7776de2914ee742b"
+  }
+}
