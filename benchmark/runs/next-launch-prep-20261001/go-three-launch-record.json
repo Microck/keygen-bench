@@ -1,0 +1,67 @@
+{
+  "schema": "keygen-campaign-launch-record-1",
+  "recorded_at_utc": "2026-10-02T12:50:00Z",
+  "launch_id": "go-three-20261002",
+  "authorization": {
+    "requested_by": "user via Main (2026-10-02 GoThree brief)",
+    "intent": "Every OpenCode Go model gets exactly 3 scored attempts at its max tier under the main max-tier campaign's frozen settings (prompt-v2). Infrastructure and quota failures do not count; they are rerun as linked retries. Order: attempt 1 for every missing model first, then attempts 2, then 3.",
+    "go_key_rule": "At most ONE attempt at a time per Go key (OPENCODE_GO_API_KEY, _1, _2, _3; controller-wide leases). Each key is probed with one tiny request before use; a usage-limit probe or a QUOTA attempt closes only that key, which re-probes after 30 min.",
+    "vercel": "not used",
+    "nim": "not used",
+    "cloudflare": "not used",
+    "minecraft_restoration": "forbidden (Paris minecraft.service inactive; never started)",
+    "service_restoration": "forbidden on Paris, except the precedent resolver watchdog: systemd-resolved is restarted when its RSS exceeds 400 MiB (same helper and rule as the OAuth repeats launch)",
+    "boat_reserve_seconds": 36000
+  },
+  "controller": "oracle-paris (aarch64); root /home/ubuntu/keygen-full.eALj54bh/go-three-20261002",
+  "campaigns": {
+    "main": {
+      "campaign_id": "next-max-tier-prompt-v2-go-three-20261002",
+      "policy": "independent_repetitions_infrastructure_reruns, max_queue_attempts 6",
+      "models": 17,
+      "manifest": "control/go-three-campaign.json",
+      "config_sha256": "9030c5995cbe2dd5b0bc9332e6759fa82a3a8baec2e45c4fba17cbf5b156c2b4",
+      "file_sha256": "82e455976b6d8adc6feda839eb6864248d210fc6916eaa174aaf0811799b8868",
+      "linked_campaign": {"campaign_id": "next-max-tier-prompt-v2-ashburn-20261001", "config_sha256": "fd287193ccc9fe1c69b22e9368424c3027c8f09064868af58e439414d3d8b5fc", "manifest_file_sha256": "1a0f8c57f4e4a572d05dd336f833a3c3405c37d8941dbabda0d43e54e8e62568"},
+      "plan": "go-three/go-three-plan.json (built by go-three/build-queue.py from a read-only metadata copy of the main results root)",
+      "repetition_1": "the main campaign's own <model>-rep-1 slot. Kept for deepseek-v4.1-flash, grok-4.6, hy3, qwen3.7-plus-messages, space-bunny-free (scored). Rerun as <model>-rep-1-retry-1 (retry_of the main QUOTA slot, retry record retry-<id>.json) for deepseek-v4-pro, glm-5.3-flash, grok-4.7, hy4-preview, kimi-k2.7-code, kimi-k3, mimo-v2.6-pro, minimax-m3, muse-spark-1.2-contributor, muse-spark-1.3-contributor, qwen3.8-flash-messages, qwen3.8-max-messages. The main QUOTA outcomes stay recorded as QUOTA.",
+      "repetitions_2_3": "new independent repetitions <model>-rep-2/-rep-3 in this campaign. The main campaign's first-success later slots (SKIPPED_AFTER_SUCCESS, or RESERVED behind a QUOTA stop) were conditional slots and stay untouched there.",
+      "queued_repetitions": 46,
+      "condition": "every model's report.condition_fingerprint equals the main campaign's frozen model (checked by the compiler): route, generation, tier, readiness proof, prompts, limits, native, images, Boat resource class. Selection by go-three/build-selection.py from launch/ashburn-selection.json (sha256 0388531a...); only campaign ID, workers 4, Go bound 4, key pool {4 keys: 1} and the Paris image-bundle path differ.",
+      "tier_spec": "control/tier-spec-c8cba354.json (the spec frozen in the main campaign)",
+      "engine": "repo-main/: commit 98301c67 + the probe_provider header hunk later committed in a4f44a7f (run.py sha256 fe0f9718...), with benchmark/native_models.py pinned to the main campaign's frozen source d3ae5963 (sha256 6a7e1dff...) so every frozen readiness proof's native_source_sha256 verifies"
+    },
+    "addon": {
+      "campaign_id": "next-max-tier-prompt-v2-paris-addon-20261001",
+      "policy": "independent_repetitions_infrastructure_reruns, max_queue_attempts 6, unlinked (no earlier attempts)",
+      "models": ["go-glm-5.2-chat", "go-glm-5.3-chat", "go-minimax-m2.7-messages"],
+      "manifest": "control/paris-addon-campaign.json",
+      "config_sha256": "11224605719ea18a6149afedb07b4ca4aa367e0f961794a0113568f27614ce69",
+      "file_sha256": "e80a3e35a764e9affb21fca6582eb03febabc6cd1a53bf652fb079cd4c6d7da9",
+      "tiers": {"go-glm-5.2-chat": "max (reasoning_effort max)", "go-glm-5.3-chat": "max (reasoning_effort max)", "go-minimax-m2.7-messages": "none-available (Go default; no effort override approved)"},
+      "qualification": {
+        "addon-pilots-2 (12:00 UTC, arm64 pilot image sha256:47ccad0e..., keys _1/_2/_3 one each)": {"go-glm-5.3-chat": "verified, proof c8c27e62...", "go-minimax-m2.7-messages": "verified, proof ff95eb9e...", "go-glm-5.2-chat": "blocked: native_proof_rejected (the model wrote the readiness marker without its trailing newline; 3 identity_match turns, GLM history fix held)"},
+        "addon-pilots-3 (12:02 UTC, key _1)": {"go-glm-5.2-chat": "verified, proof aa26ff15..."},
+        "evidence": "paris-addon/addon-pilots-{2,3}-collect.json, -summary.json, pilots/<id>/{proof,readiness}.json, collected-proofs/"
+      },
+      "queued_repetitions": 9,
+      "tier_spec": "control/tier-spec-9e77ad00.json",
+      "engine": "repo-addon/: same run.py (fe0f9718...) with the current native_models.py (147efb63..., approved GLM history-key removal) that the add-on proofs were made with"
+    }
+  },
+  "key_probes": "control/key-probes.json: 11:58 UTC all four keys returned HTTP 400 MissingSessionID (Go now requires x-opencode-session; no usage), 11:59 UTC re-probed with the header: all four HTTP 200",
+  "aborted_starts_before_launch": [
+    {"at_utc": "2026-10-02T12:38Z", "outcome": "supervisor guard stopped both runners within 2 s: resolver_runaway (systemd-resolved RSS 632 MB > 512 MiB). No model request, no attempt directory. Files: control/launch-attempt-1-resolver-guard-stop/. Fix: systemd-resolved restarted (13 MB) and the precedent resolver watchdog started (go-three/resolver-watchdog.py)."},
+    {"at_utc": "2026-10-02T12:40Z", "outcome": "operator cancel after 4 key probes (one per key) returned HTTP 403: the engine probe used urllib's default User-Agent and no x-opencode-session. No attempt started. Roots moved to results-aborted-probe-403-20261002/; files in control/launch-attempt-2-probe-403-cancel/. Fix: probe User-Agent + Go session header; campaigns recompiled for the changed run.py."}
+  ],
+  "launch": {
+    "at_utc": "2026-10-02T12:42Z",
+    "supervisor": {"pid": 1266626, "command": "runtime python3.11 -I control/launch-driver.py supervise control/launch-plan.json", "runners": "main and addon, each `run.py queue --campaign C --out ROOT --workers W --probe-interval 1800 --retry-interval 300 --boat-reserve-seconds 36000`"},
+    "terminal_guard": {"pid": 1266627},
+    "resolver_watchdog": "local go-three/resolver-watchdog.py (exits when the terminal guard is terminal)",
+    "first_starts": "12:45-12:47 UTC after one 200 probe per key: go-deepseek-v4-pro-rep-1-retry-1 (_2), go-glm-5.2-chat-rep-1 (base), go-glm-5.3-chat-rep-1 (_1), go-minimax-m2.7-messages-rep-1 (_3)",
+    "boat_remaining_seconds_at_doctor": 207244
+  },
+  "publication": "v6 conventions, new immutable root each time: when attempt 1 is complete for every Go model, and at the end",
+  "report": "go-three-report.md"
+}

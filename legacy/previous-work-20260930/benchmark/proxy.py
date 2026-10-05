@@ -1,4 +1,4 @@
-"""A no-retry Chat Completions Model adapter for mini-swe-agent's DefaultAgent.
+"""A Chat Completions Model adapter for mini-swe-agent's DefaultAgent.
 
 Speaks mini's default action protocol: one declared `bash` function tool, the model
 answers with tool calls, observations go back as `tool` messages. No LiteLLM router,
@@ -30,10 +30,18 @@ RATE_LIMIT_HEADERS = ("retry-after", "anthropic-ratelimit-", "x-ratelimit-", "x-
 # DefaultAgent feeds a FormatError back as a user message and ends the run after three in a row.
 FORMAT_ERROR = "{{ error }}"
 OBSERVATION = ("{% if output.exception_info %}<exception>{{output.exception_info}}</exception>\n{% endif %}"
-               "<returncode>{{output.returncode}}</returncode>\n<output>\n{{output.output}}</output>")
-# Message keys forwarded upstream. Everything else (mini's `extra`, provider reasoning fields) stays local.
+               "<returncode>{{output.returncode}}</returncode>\n<output>\n{{output.output}}</output>"
+               "{% if output.time_left %}\n<time_left>{{output.time_left}}</time_left>{% endif %}")
+# One client-side retry after this pause, only for upstream 5xx and transport failures. 4xx (auth, quota,
+# rate limit) end the attempt at once: they are the provider's answer, not a transient. The proxy itself
+# is configured with request-retry 0 so every upstream request appears in the audit exactly once.
+RETRY_PAUSE_SECONDS = 5
+TRANSIENT = ("Proxy HTTP 5", "Proxy transport failed")
+# Keep provider reasoning state across tool turns; mini's local metadata stays local.
+REASONING_FIELDS = ("reasoning_content", "reasoning", "reasoning_details")
 FORWARDED = {"system": ("content",), "user": ("content",),
-             "assistant": ("content", "tool_calls"), "tool": ("content", "tool_call_id")}
+             "assistant": ("content", "tool_calls", *REASONING_FIELDS),
+             "tool": ("content", "tool_call_id")}
 
 
 def digest(value: Any) -> str:
@@ -55,7 +63,7 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
 
 
 def request(base: str, key: str, path: str, payload=None, timeout: float = 180) -> Reply:
-    """Exactly one HTTP request, no ambient HTTP_PROXY, redirects, or retries.
+    """Exactly one HTTP request, no ambient HTTP_PROXY or redirects. Retrying is the caller's decision.
 
     Returns .json (the decoded object), .headers (rate-limit subset), .seconds (wall time).
     """
@@ -71,9 +79,9 @@ def request(base: str, key: str, path: str, payload=None, timeout: float = 180) 
             headers = {k.lower(): v for k, v in response.headers.items() if k.lower().startswith(RATE_LIMIT_HEADERS)}
     except urllib.error.HTTPError as exc:
         # Do not persist upstream error bodies/headers: they can contain credentials.
-        raise RuntimeError(f"Proxy HTTP {exc.code}; request not retried") from None
+        raise RuntimeError(f"Proxy HTTP {exc.code}") from None
     except (urllib.error.URLError, TimeoutError, OSError):
-        raise RuntimeError("Proxy transport failed; request not retried") from None
+        raise RuntimeError("Proxy transport failed") from None
     if len(raw) > MAX_RESPONSE:
         raise ValueError("Proxy response exceeded byte limit")
     result = json.loads(raw)
@@ -96,18 +104,24 @@ class ProxyModel:
         payload = {**self.config["generation"], "model": self.model["model"],
                    "messages": [forward(m) for m in messages], "tools": [BASH_TOOL],
                    "stream": False, "n": 1}
-        started_at = time.time()
-        try:
-            reply = request(self.config["base_url"], self.key, "/chat/completions", payload,
-                            self.config["limits"]["request_seconds"])
-        except (RuntimeError, ValueError) as exc:
-            # A failed request still cost time; record it so totals do not read as zero.
-            failed = {"request_sha256": digest(payload), "requested_model": self.model["model"], "started_at": started_at,
-                      "latency_seconds": time.time() - started_at, "prompt_messages": len(payload["messages"]),
-                      "error": type(exc).__name__ + ": " + str(exc)}
-            with self.audit.open("a", encoding="utf-8") as handle:
-                handle.write(json.dumps(failed, allow_nan=False) + "\n")
-            raise
+        for attempt in (1, 2):
+            started_at = time.time()
+            try:
+                reply = request(self.config["base_url"], self.key, "/chat/completions", payload,
+                                self.config["limits"]["request_seconds"])
+                break
+            except (RuntimeError, ValueError) as exc:
+                # A failed request still cost time; record it so totals do not read as zero. A transient
+                # upstream failure gets one more try; the audit line says so, and both requests count.
+                retry = attempt == 1 and str(exc).startswith(TRANSIENT)
+                failed = {"request_sha256": digest(payload), "requested_model": self.model["model"], "started_at": started_at,
+                          "latency_seconds": time.time() - started_at, "prompt_messages": len(payload["messages"]),
+                          "error": type(exc).__name__ + ": " + str(exc), "retried": retry}
+                with self.audit.open("a", encoding="utf-8") as handle:
+                    handle.write(json.dumps(failed, allow_nan=False) + "\n")
+                if not retry:
+                    raise
+                time.sleep(RETRY_PAUSE_SECONDS)
         response = reply.json
         returned_model = response.get("model")
         record = {"request_sha256": digest(payload), "requested_model": self.model["model"],
@@ -139,6 +153,7 @@ class ProxyModel:
         content = message.get("content")
         return {"role": "assistant", "content": content if isinstance(content, str) else "",
                 "tool_calls": tool_calls,
+                **{key: message[key] for key in REASONING_FIELDS if key in message},
                 "extra": {"actions": actions, "cost": 0.0, "cost_status": "not_measured", **record,
                           "timestamp": time.time(), "finish_reason": choices[0].get("finish_reason")}}
 
@@ -152,8 +167,15 @@ class ProxyModel:
             text = output.get("output", "")
             if len(text) > 20000:
                 text = text[:10000] + "\n[observation truncated]\n" + text[-10000:]
-            # mini's template reads exception_info; the sandbox only reports it on failure.
-            bounded.append({"exception_info": "", **output, "output": text})
+            # mini's template reads exception_info (the sandbox only reports it on failure) and time_left
+            # (set below on the last output) with strict undefined checking, so both keys always exist.
+            bounded.append({"exception_info": "", "time_left": "", **output, "output": text})
+        # The step's last observation ends with the minutes left, so a model can pace itself against the
+        # wall clock instead of discovering the limit when the run ends. mini supplies both numbers.
+        limit = (template_vars or {}).get("wall_time_limit_seconds") or 0
+        if bounded and limit > 0:
+            left = max(0, limit - int(template_vars.get("elapsed_seconds", 0)))
+            bounded[-1]["time_left"] = f"{left // 60} min"
         return format_toolcall_observation_messages(
             actions=message["extra"]["actions"], outputs=bounded, observation_template=OBSERVATION)
 
@@ -161,6 +183,6 @@ class ProxyModel:
         return {}
 
     def serialize(self) -> dict:
-        return {"info": {"transport": "cliproxyapi_chat_completions_no_retry", "tools": ["bash"],
+        return {"info": {"transport": "cliproxyapi_chat_completions_retry_transient_once", "tools": ["bash"],
                          "requested_model": self.model["model"],
                          "generation": self.config["generation"], "cost_status": "not_measured"}}

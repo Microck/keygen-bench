@@ -1,0 +1,97 @@
+{
+  "schema": "keygen-campaign-launch-record-1",
+  "recorded_at_utc": "2026-10-01T21:31:29Z",
+  "status": "PREPARED_NOT_LAUNCHED: paused by Main until the Go 5-hour usage window resets (after ~01:30 UTC 2026-10-02)",
+  "campaign_id": "next-max-tier-prompt-v2-paris-addon-20261001",
+  "authorization": {
+    "glm_fix": "user-approved 2026-10-01: native_models.HISTORY_KEY_REMOVALS for go/chat glm-5.2, glm-5.3",
+    "routes": ["go-glm-5.2-chat", "go-glm-5.3-chat", "go-minimax-m2.7-messages"],
+    "tiers": {
+      "go-glm-5.2-chat": "max (reasoning_effort max; Go validates the value)",
+      "go-glm-5.3-chat": "max (reasoning_effort max; Go validates the value)",
+      "go-minimax-m2.7-messages": "none-available (Go default; no output_config override: not approved)"
+    },
+    "go_keys": "OPENCODE_GO_API_KEY (base) never used on Paris; _1 and _2 exhausted on 2026-10-01 (Main 20:12-20:26 UTC for _1; _2 failed at 21:00 UTC); _3 reserved for the main campaign. Pilots and launch wait for the reset, then pool {_1:1,_2:1,_3:1}.",
+    "pilot_image": "Main approved 2026-10-01: arm64 sandbox image built on Paris from the committed benchmark/Dockerfile, used only for Paris pilot specs",
+    "vercel": "not used",
+    "cloudflare": "not used",
+    "minecraft_restoration": "forbidden (minecraft.service inactive; never started)",
+    "service_restoration": "forbidden on Paris (no service started or restored)"
+  },
+  "source": {
+    "commit": "92a9b77449c03ea8919d0757f55e54ca0556d18a",
+    "commit_subject": "Go GLM chat: drop only the SDK-synthesized provider_specific_fields from outgoing assistant copies",
+    "native_models_sha256": "147efb63d18d7c45d4102d20a637ebf1520f0bb6f33ae016610a1a3345acf09e",
+    "campaign_sha256": "ba48f35e75717e3c379edda5b9be12b80ca64f06b1e27f4367ba5854d3aeb443",
+    "tier_spec_sha256": "9e77ad007a7cff47ecd80e15fe855168064a9ada6ffeb7ba711b9bf64409c4e0",
+    "tier_spec_previous_sha256": "c8cba354fba3bf91fd415bad2f2899e99ea073e9080729df26bfbe77633ca98b (frozen in the running Ashburn campaign; untouched)",
+    "tests": "TMPDIR=/dev/shm OPENBLAS_NUM_THREADS=1 benchmark/.venv/bin/python -m unittest discover -s benchmark/tests: Ran 260 tests, OK (skipped=1). An earlier run under host load average ~25 on 2 cores had 1 failure + 3 errors, all timeouts (normalize_native 90 s, probe wall_time_exceeded); the rerun passed.",
+    "offline_validation": "validate-tier-spec.py {pass: 75, not_runnable: 10}; build-drafts.py rebuilt drafts/pilot specs; glm-5.2/5.3/minimax-m2.7 offline_validate_model pass"
+  },
+  "deploy": {
+    "host": "oracle-paris (aarch64)",
+    "root": "/home/ubuntu/keygen-full.eALj54bh/next-addon-20261001",
+    "historical_repo_untouched": "/home/ubuntu/keygen-full.eALj54bh/repo",
+    "repo": "git archive of commit 92a9b774 (legacy/ and web/ excluded) + tier-spec.json, go-blockers-investigation.md and the 3 pilot specs under benchmark/runs/next-launch-prep-20261001/",
+    "manifest": "next-addon-20261001/MANIFEST.sha256: 108 files, sha256sum -c ALL_OK (re-verified after stage 2)",
+    "stage2_manifest": "next-addon-20261001/STAGE2.sha256: arm64 pilot specs, addon-pilots-2-plan.json and launch-addon/ helpers, sha256sum -c OK",
+    "runtime": {
+      "python": "/home/ubuntu/keygen-full.eALj54bh/runtime/bin/python3.11",
+      "python_sha256": "bea85a18a443c06fba9ba3243f0235fe225249b81d2abbabcb769847d64ed7d4",
+      "packages": {"mini-swe-agent": "2.4.6", "litellm": "1.102.1", "openai": "2.54.0"}
+    },
+    "images": {
+      "campaign_agent_amd64": "sha256:c0837265585378b1b4ca4fc96a2a0c4d8c3249f8e3376f6ff4efa6c37560a59e (loaded from native-images.tar sha256 7e5f7cd4…; runs on Boat VMs)",
+      "campaign_visualizer_amd64": "sha256:446a88a905442fe736962e637a83454f1e604bf9245237457df6505474edd3e0",
+      "pilot_sandbox_arm64": "sha256:47ccad0ec8caa88fba4c0f11800213433c06a6e0f1d4b83c43dcb79be1de10b0 (docker build -f benchmark/Dockerfile --target agent, tag keygen-ft2-benchmark:addon-arm64-pilot, built 2026-10-01T21:11:58Z; smoke: start_pilot_container + sandbox_preflight pass, bash tool call rc 0)"
+    }
+  },
+  "qualification": {
+    "addon-pilots-1": {
+      "ran_at_utc": "2026-10-01T20:59:57Z",
+      "image": "amd64 c0837… on aarch64 Paris (no binfmt): every sandbox command failed with exec format error",
+      "requests_sent": 7,
+      "results": {
+        "go-glm-5.2-chat": "blocked: first request quota_or_rate_limit on OPENCODE_GO_API_KEY_2 (APIError)",
+        "go-glm-5.3-chat": "blocked: 5 consecutive identity_match turns on OPENCODE_GO_API_KEY_3 at reasoning_effort max (GLM history fix confirmed live: no HTTP 400 after turn 1), then LimitsExceeded because the amd64 sandbox could not execute",
+        "go-minimax-m2.7-messages": "blocked: first request quota_or_rate_limit on OPENCODE_GO_API_KEY_2 (BadRequestError)"
+      },
+      "evidence": ["paris-addon/addon-pilots-1-collect.json", "paris-addon/addon-pilots-1-summary.json"]
+    },
+    "addon-pilots-2": {
+      "status": "not_run (paused for the Go usage-window reset)",
+      "plan": "control/addon-pilots-2-plan.json: arm64 pilot specs, pool _1/_2/_3 one per key, go concurrency 3"
+    },
+    "pass_fail": {"go-glm-5.2-chat": "not yet qualified", "go-glm-5.3-chat": "not yet qualified", "go-minimax-m2.7-messages": "not yet qualified"}
+  },
+  "campaign_draft": {
+    "selection_draft": "paris-addon/paris-addon-selection-draft.json (readiness pending; check_tier_spec and normalize_native pass offline)",
+    "finalizer": "paris-addon/build-selection.py <passed ids> (copies verified proofs to collected-proofs/, writes paris-addon-selection.json)",
+    "configuration": {
+      "prompt_version": "prompt-v2",
+      "limits": {"steps": 0, "wall_seconds": 7200, "request_seconds": 3600, "command_seconds": 120},
+      "native": {"timeout_seconds": 3600, "retries": 2},
+      "max_attempts": 3,
+      "attempt_selection": "first success up to three attempts",
+      "workers": 3,
+      "go_provider_bound": 3,
+      "key_pools": {"OPENCODE_GO_API_KEY": {"OPENCODE_GO_API_KEY_1": 1, "OPENCODE_GO_API_KEY_2": 1, "OPENCODE_GO_API_KEY_3": 1}},
+      "transport": "Boat (Paris draft transport, image bundle native-images.tar)",
+      "storage": "rclone gdrive2:keygen-benchmark-artifacts"
+    },
+    "launch_plan": "launch-addon/make-launch-plan.py writes launch-addon/launch-plan.json (fingerprints, workers 3, deadline 64800 s, controller lock /home/ubuntu/keygen-full.eALj54bh/launch-control/controller.lock)",
+    "launch_driver_credentials": "BOAT_API_KEY, BOAT_API_URL, OPENCODE_GO_API_KEY_1.._3 only"
+  },
+  "resume_runbook": [
+    "1. After the reset, confirm with Main that _1/_2/_3 are usable and the main campaign's load on _3 allows one pilot request stream.",
+    "2. Pilots: ssh oracle-paris; A=/home/ubuntu/keygen-full.eALj54bh/next-addon-20261001; cd $A/control && setsid nohup env -i PATH=/home/ubuntu/keygen-full.eALj54bh/runtime/bin:/usr/local/bin:/usr/bin:/bin HOME=$HOME LANG=C.UTF-8 PYTHONNOUSERSITE=1 /home/ubuntu/keygen-full.eALj54bh/runtime/bin/python3.11 -I qualification-driver.py addon-pilots-2-plan.json > addon-pilots-2-driver.log 2>&1 < /dev/null &",
+    "3. On any quota_or_rate_limit result: stop and report; do not rerun.",
+    "4. Fetch out/addon-pilots-2/<id>/{proof.json,readiness.json} to paris-addon/pilots/<id>/; run paris-addon/build-selection.py <passed ids>; upload paris-addon-selection.json + collected-proofs/ to $A/launch-addon/.",
+    "5. Compile on Paris: cd $A/repo && env -i PATH=/home/ubuntu/keygen-full.eALj54bh/runtime/bin:/usr/local/bin:/usr/bin:/bin HOME=$HOME LANG=C.UTF-8 PYTHONNOUSERSITE=1 /home/ubuntu/keygen-full.eALj54bh/runtime/bin/python3.11 -I benchmark/campaign.py --inventory $A/repo/MODEL-TEST-PLAN.oauth-first.json --selection $A/launch-addon/paris-addon-selection.json --tier-spec $A/repo/benchmark/runs/next-launch-prep-20261001/tier-spec.json --out $A/launch-addon/paris-addon-campaign.json",
+    "6. python3.11 -I $A/launch-addon/make-launch-plan.py; run.py doctor --campaign ... --out $A/results/next-max-tier-prompt-v2-paris-addon-20261001 --workers 3 with the launch-driver environment; then setsid launch-driver.py supervise launch-plan.json and terminal-guard.py launch-plan.json <supervisor pid> (pid of the setsid-forked supervisor, not the shell)."
+  ],
+  "risks": {
+    "go_quota": "_3 is shared with the main campaign's remaining Go attempts; add-on attempts on _3 compete for the same 5-hour window",
+    "boat_machine_time": "shared Boat balance with the Ashburn campaign; the add-on adds up to 9 attempts"
+  }
+}
