@@ -385,8 +385,9 @@ export async function mount(root, ctx) {
     }
     v.scopeFB = sized(v.scopeFB, v.scopeC);
     v.scopeFB.fill(0, 0, v.scopeFB.w, v.scopeFB.h, PAL.desktop);
-    // A module still downloading gets idle scopes at its channel count, like a stopped tune.
-    const scopes = player ?? (v.loading && v.run?.media.xm ? { song: { channels: v.run.module.channels || 8 }, scope: () => null } : null);
+    // Until the player exists (module downloading, or audio still buffering before a resumed play), draw
+    // idle scopes at the run's channel count, like a stopped tune.
+    const scopes = player ?? (v.run?.media.xm && (v.loading || song) ? { song: { channels: song?.channels ?? (v.run.module.channels || 8) }, scope: () => null } : null);
     if (scopes) drawScopes(v.scopeFB, scopes, st, 0, 0, v.scopeFB.w, v.scopeFB.h); else v.scopeFB.frame(0, 0, v.scopeFB.w - 1, v.scopeFB.h - 1, 1);
     v.scopeFB.flush();
     v.patFB = sized(v.patFB, v.patC);
