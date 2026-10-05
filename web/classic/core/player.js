@@ -64,7 +64,9 @@ class LoopAudio extends EventTarget {
 }
 
 export class Player {
-  constructor(data, run, song) {
+  // `audio`: the element the caller already pointed at run.media.audio, so the MP3 downloads while the
+  // module is still loading.
+  constructor(data, run, song, audio) {
     this.data = data;
     this.run = run;
     this.song = song;
@@ -72,9 +74,6 @@ export class Player {
     this.listeners = new Set();
     this.raf = 0;
     this.looping = false;
-    const audio = new Audio();
-    audio.preload = "auto";
-    if (run.media.audio) audio.src = data.base + run.media.audio;
     this.attach(audio);
     this.chanState = song ? this.buildChannelState() : [];
   }
@@ -130,7 +129,8 @@ export class Player {
   destroy() { this.destroyed = true; cancelAnimationFrame(this.raf); this.audio.pause(); if (this.audio instanceof LoopAudio) this.audio.close(); else this.audio.src = ""; this.listeners.clear(); }
 
   traceIndex(t) {
-    const f = t * RATE, tr = this.trace;
+    // Media clocks round seek times; map them back to the nearest captured sample.
+    const f = Math.round(t * RATE), tr = this.trace;
     let lo = 0, hi = tr.length - 1;
     if (hi < 0) return -1;
     while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (tr[mid][0] <= f) lo = mid; else hi = mid - 1; }
@@ -141,7 +141,7 @@ export class Player {
     const i = this.traceIndex(t);
     const row = i >= 0 ? this.trace[i] : [0, 0, 0, this.song?.orders[0] ?? 0];
     const next = this.trace[i + 1];
-    const rowFrac = next ? Math.min(1, (t * RATE - row[0]) / (next[0] - row[0])) : 0;
+    const rowFrac = next ? Math.max(0, Math.min(1, (t * RATE - row[0]) / (next[0] - row[0]))) : 0;
     return {
       time: t, duration: this.audio.duration || this.run.audio.duration || 0, playing: this.playing,
       traceIndex: i, order: row[1], row: row[2], pattern: row[3], rowFrac,

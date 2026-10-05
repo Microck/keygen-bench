@@ -3,11 +3,13 @@
 import { h, scoreColor } from "./ui.js";
 
 const slotText = (s) => s.state === "ok" ? s.score.toFixed(1) : s.state === "pending" ? "pending" : s.state === "failed" ? `failed (${s.status.toLowerCase().replaceAll("_", " ")})` : "not run";
+export const CONSISTENCY_HELP = "Consistency is the best score minus the worst score across at least two scored attempts. Lower spread means more consistent scores, not better music. Models with fewer than two scored attempts stay last in either direction. Colored attempt markers show scores (green higher, red lower), not consistency ranks.";
 
 export function consistencyTitle(m) {
   const lines = m.slots.map((s) => `Attempt ${s.ordinal}: ${slotText(s)}`);
-  if (m.n > 1) lines.push(`Spread ${(m.max - m.min).toFixed(1)} (${m.min.toFixed(1)}-${m.max.toFixed(1)}), mean ${m.mean.toFixed(1)}, sd ${m.sd.toFixed(1)}`);
-  else lines.push(m.declared > 1 ? "Only one scored attempt: no spread yet" : "One attempt: no spread to measure");
+  if (m.n > 1) lines.push(`Score spread (best - worst): ${(m.max - m.min).toFixed(1)} points (${m.min.toFixed(1)}-${m.max.toFixed(1)}), mean ${m.mean.toFixed(1)}, sd ${m.sd.toFixed(1)}`);
+  else lines.push(`${m.n} scored attempt${m.n === 1 ? "" : "s"}: at least two needed to compare consistency`);
+  lines.push(CONSISTENCY_HELP);
   return lines.join("\n");
 }
 
