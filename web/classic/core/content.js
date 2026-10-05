@@ -6,6 +6,7 @@ export const SITE = {
   twitter: "https://x.com/JustMicrock",
   sponsors: "https://github.com/sponsors/Microck",
   kofi: "https://ko-fi.com/microck",
+  contributorGuide: "https://github.com/Microck/keygen-bench/blob/main/CONTRIBUTING-RUNS.md",
 };
 
 export const PAGES = [
@@ -169,8 +170,16 @@ export const SUPPORT = {
   heading: "Unlike keygens, this is not free to run",
   paragraphs: [
     "I pay for this benchmark myself, including API credits, subscriptions and compute for every run. Some models are too expensive for me to test out of pocket.",
-    "If there's a model you're curious about, you can help fund its run. General support helps me keep testing as new models come out.",
+    "Help fund a model you're curious about, support future testing, or contribute a benchmark run using your own model access.",
   ],
+  contribution: {
+    heading: "Contribute a benchmark run",
+    paragraphs: [
+      "Run the benchmark with your own model access and submit the results. Guided setup helps you configure a provider, check the environment and try a short run before all three official attempts.",
+      "Use API keys, compatible custom endpoints, or Anthropic and Codex OAuth through your own authorized local bridge.",
+    ],
+    button: "View the contributor guide",
+  },
   // Planning estimates = assumed token use x the listed price, rounded up.
   // Run sizes: typical 1.03M input / 125k output, long 3.5M / 270k, heavy 6.9M / 333k.
   // Models with a cached-input price assume 94.5% cached input; Pro models assume full-price input.

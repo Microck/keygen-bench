@@ -15,23 +15,28 @@ function params() {
   const [seg, model, attempt] = location.pathname.split("/").filter(Boolean).map(decodeURIComponent);
   const page = PAGE[seg] ?? "viewer";
   const m = data.byModel[model];
-  const run = (m && (attempt ? m.runs.find((r) => String(r.attempt) === attempt) : m.best)) ?? data.runs.find((r) => r.rank === 1) ?? data.runs[0];
-  return { page, run: run.slug };
+  const mode = new URLSearchParams(location.search).get("mode") === "average" ? "average" : "best";
+  const leader = mode === "average" && page === "ranking" ? Object.values(data.byModel).find((model) => model.averageRank === 1)?.best : null;
+  // Information pages keep their originating attempt in this history entry.
+  const remembered = page === "scoring" || page === "support" ? data.bySlug[history.state?.run] : null;
+  const run = (m && (attempt ? m.runs.find((r) => String(r.attempt) === attempt) : m.best)) ?? remembered ?? leader ?? data.runs.find((r) => r.rank === 1) ?? data.runs[0];
+  return { page, run: run.slug, mode };
 }
 
 // Path for a page + run. Model-specific only on the pages that show one run.
-export function pathFor(page, slug) {
+export function pathFor(page, slug, mode = "best") {
   const r = data.bySlug[slug];
   const base = "/" + SEG[page];
-  if (!r || (page !== "viewer" && page !== "ranking")) return base;
-  return `${base}/${encodeURIComponent(r.model.key)}${r.isBest ? "" : "/" + r.attempt}`;
+  const path = !r || (page !== "viewer" && page !== "ranking") ? base
+    : `${base}/${encodeURIComponent(r.model.key)}${r.isBest ? "" : "/" + r.attempt}`;
+  return path + (mode === "average" ? "?mode=average" : "");
 }
 
-// next: { page?, run? }. replace: rewrite the URL without a history entry. silent: URL only, no re-render.
+// next: { page?, run?, mode? }. replace rewrites the URL; silent skips rendering.
 function go(next, { replace = false, silent = false } = {}) {
   const cur = params();
-  const page = next.page ?? cur.page, run = next.run ?? cur.run;
-  history[replace ? "replaceState" : "pushState"](null, "", pathFor(page, run));
+  const page = next.page ?? cur.page, run = next.run ?? cur.run, mode = next.mode ?? cur.mode;
+  history[replace ? "replaceState" : "pushState"]({ run }, "", pathFor(page, run, mode));
   if (!silent) render();
 }
 
@@ -44,10 +49,19 @@ async function render() {
 
 addEventListener("popstate", render);
 
+// core/intro.js covers the page while it loads and mounts, then reveals it; without it the page appears once mounted.
+const intro = globalThis.bootIntro;
+const step = (promise, label) => intro ? intro.track(promise, label) : promise;
+
 try {
-  [data] = await Promise.all([loadData("/dist/"), loadFonts(), document.fonts.load('10px "FT2"'), document.fonts.load('20px "FT2 Big"'), document.fonts.load('7px "FT2 Tiny"')]);
+  [data] = await Promise.all([
+    step(loadData("/dist/"), "READING RESULTS"),
+    step(Promise.all([loadFonts(), document.fonts.load('10px "FT2"'), document.fonts.load('20px "FT2 Big"'), document.fonts.load('7px "FT2 Tiny"')]), "LOADING FT2 FONTS"),
+  ]);
   await render();
+  intro?.done();
 } catch (err) {
   app.innerHTML = `<div id="boot">${String(err.message || err)}</div>`;
+  intro?.fail();
   throw err;
 }

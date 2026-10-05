@@ -21,7 +21,7 @@ ROOT = HERE.parents[1]
 sys.path.insert(0, str(ROOT))
 from benchmark.artifacts import ArtifactStore
 from benchmark.report import INDEPENDENT_SELECTION, QUEUE_SELECTION, build_report, finite_json
-from build import FLAG_RULES, compact_trace, estimate_cost, price_id, public_maker, public_price, slug, worst_transition
+from build import FLAG_RULES, compact_trace, estimate_cost, estimate_cost_range, price_id, public_maker, public_price, slug, worst_transition
 
 
 def sha256(path: Path) -> str:
@@ -154,6 +154,10 @@ def public_run(row: dict, group: dict, directory: Path, output: Path, campaign: 
                        "profile_sha256": sha256(directory / "profile.json"), **verification,
                        "public_media_sha256": {key: sha256(media / f"{run_slug}.{ext}") for key, ext in (("xm", "xm"), ("wav", "wav"), ("mp3", "mp3"))}},
     }
+    if run["cost_usd"] is None and not row["usage_unknown"]:
+        interval = estimate_cost_range(totals, pub_price)
+        if interval is not None:
+            run["cost_range_usd"] = interval
     if scope == "continuation":
         run["provenance"]["continuation_note"] = "A new frozen native continuation cohort with its own configuration and evaluator fingerprints. Original campaigns, routes and historical outcomes remain unchanged."
     if repetition:
@@ -166,7 +170,7 @@ def public_run(row: dict, group: dict, directory: Path, output: Path, campaign: 
             f"Added to the roster after requalification under its declared condition. This attempt ran{day} in the "
             "infrastructure rerun queue, under the same frozen condition as every other model."))
     run["module"].update({"patterns": structure.get("distinct_patterns_in_order"), "instruments": structure.get("instruments_used"), "samples": structure.get("samples")})
-    evaluation = {key: value for key, value in run.items() if key not in {"trace", "media", "price", "cost_usd"}}
+    evaluation = {key: value for key, value in run.items() if key not in {"trace", "media", "price", "cost_usd", "cost_range_usd"}}
     write_json(output / "evaluations" / f"{run_slug}.json", evaluation)
     return run
 
