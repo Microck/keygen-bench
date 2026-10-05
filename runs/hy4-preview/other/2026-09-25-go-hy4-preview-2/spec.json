@@ -1,0 +1,68 @@
+{
+  "config": {
+    "base_url": "http://127.0.0.1:8417/v1",
+    "api_key_env": "CLIPROXY_CLIENT_KEY",
+    "proxy_version": "CLIProxyAPI v7.3.16 c404af96 linux_aarch64 release, binary sha256 9a7cb93be4b21953c9d90e66453d04581e02287e8324eae01f0ec7bbdc1cb720",
+    "image": "keygen-ft2-benchmark:local",
+    "visualizer_image": "keygen-ft2-visualizer:local",
+    "limits": {
+      "steps": 100,
+      "wall_seconds": 1800,
+      "request_seconds": 600,
+      "command_seconds": 120,
+      "render_seconds": 300,
+      "video_seconds": 600,
+      "artifact_bytes": 134217728
+    },
+    "generation": {
+      "max_tokens": 32768,
+      "reasoning_effort": "high"
+    },
+    "models": [
+      {
+        "id": "go-hy3",
+        "model": "go-hy3",
+        "response_model": "hy3"
+      },
+      {
+        "id": "go-hy4-preview",
+        "model": "go-hy4-preview",
+        "response_model": "hy4-preview"
+      },
+      {
+        "id": "go-qwen3.6-plus",
+        "model": "go-qwen3.6-plus",
+        "response_model": "qwen3.6-plus"
+      },
+      {
+        "id": "go-qwen3.7-max",
+        "model": "go-qwen3.7-max",
+        "response_model": "qwen3.7-max"
+      },
+      {
+        "id": "go-qwen3.7-plus",
+        "model": "go-qwen3.7-plus",
+        "response_model": "qwen3.7-plus"
+      }
+    ],
+    "proxy_policy": {
+      "config_sha256": "6cd32690b15df2319e5983bf130ae0179c5f2c2421da02290888def42bf1563d",
+      "port": 8417,
+      "auth_overrides_audited": false,
+      "upstream_payload_verified": false
+    },
+    "system": "You are composing music in an isolated workspace. Use the bash tool to run commands and complete the task.\nEach command runs in /workspace in a fresh bash shell; files and the FT2 session persist between commands. Budget: 100 steps and 30 minutes; a step is one reply, and every tool call in it runs in order.\nThe `ft2 list` command describes the tracker tools. `ft2 call TOOL 'JSON_OBJECT'` calls one tool. `ft2 batch FILE.json` executes a list of {\"name\": TOOL, \"arguments\": {...}} calls in order.\nThis FT2 build exposes samples, instruments by name, patterns, order, tempo, save and render. Envelopes and note-to-sample mapping are unavailable; shape sounds in the sample data itself.\nPython 3 and NumPy are available for creating original sound material, editing files, and analyzing renders. Writing the XM bytes yourself is allowed; the module is judged as a file. Keep it a real tracker module, with instruments and patterns doing the work, not one long pre-rendered sample.\nThe workspace is offline: no network, no coding-agent client, no skill library. You cannot hear audio; render to WAV with module_render and inspect the result with NumPy to check your work, then revise.\nA keygen tune plays in a loop. Compose so the module loops cleanly from its end back to its restart position.\nSave the final editable module as /workspace/submission/tune.xm. A WAV preview and source scripts may accompany it. A trusted process renders the final XM separately.\nSubmit by running exactly this command:\necho COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT\nSubmission ends the session. There is no second attempt or post-submission repair.\n",
+    "task": "You have FastTracker II and Python/NumPy at your disposal. Make an original keygen tune. Music only.\nChoose the sound, tempo, harmony, rhythm, instruments, length and arrangement yourself.\n"
+  },
+  "model": {
+    "id": "go-hy4-preview",
+    "model": "go-hy4-preview",
+    "response_model": "hy4-preview"
+  },
+  "docker": [
+    "/usr/bin/docker",
+    "--host",
+    "unix:///var/run/docker.sock"
+  ],
+  "container": "keygen-create-4061e6c440ce41ee"
+}
