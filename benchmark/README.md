@@ -119,19 +119,20 @@ Terminal attempts are scored before export. Bundles include allowlisted result m
 
 ## Private data layout
 
-Raw runs, inputs and generated sites live outside every checkout, in one private root on the operator laptop. Each step reads the folder above it and writes a new dated folder:
+Raw runs, inputs and generated sites live outside every checkout, in one private root on the operator laptop:
 
 ```text
 ~/keygen-data/                       private, not a git checkout
-  campaigns/<YYYY-MM-DD>-<name>/     results/ (run.py --out: lock, attempts, queue state), campaign.json,
-                                     control/ (selection, queue plan, tier spec, collected proofs), SOURCE.json
+  runs/<model>/attempt-1..3/         the three attempts the leaderboard ranks (best of 3)
+  runs/<model>/other/<date>-<id>/    everything else: failed, retried, quota, legacy, other services
+  runs/index.json                    every attempt: slot, status, score, route, source
+  _store/<host>/<path>/              verified mirror of every source run root (audit copy)
   inputs/                            prices, attempt usage, model metadata
   snapshots/<YYYY-MM-DD>-<name>/     collect_public.py --output
   publications/<YYYY-MM-DD>-<name>/  build.py --publish-root (what serve.py serves)
-  legacy/                            runs that are not part of the showcased condition
 ```
 
-Campaigns run on a controller's local disk (file locks and atomic renames; never a cloud mount) and are copied here after they finish with `benchmark/runs/organize/organize.py`, which verifies every file's SHA-256 against the source and never modifies the controller copy. Credentials, private logs and isolated homes are not copied. Bulk media evicted after archiving stays in `gdrive2:keygen-benchmark-artifacts` and is referenced by each attempt's `archive.json`. Community submissions are the only run data in git (`submissions/`).
+Campaigns run on a controller's local disk (file locks and atomic renames; never a cloud mount). `benchmark/runs/organize/organize.py` mirrors every run root from Ashburn, Paris and the laptop into `_store/`, verifies every file's SHA-256 against the source and never modifies the source; laptop sources are hard-linked. It then rebuilds `runs/` from `_store/` as hard links, so rerunning it after new attempts moves a newly ranked retry into its slot. Model folders use the plain model name; when several services served one model, the ranked route is the first with three attempts in the showcased condition (vendor, then Devin, Go, Vercel). Credentials, private logs and isolated homes are not copied. Bulk media evicted after archiving stays in `gdrive2:keygen-benchmark-artifacts` and is referenced by each attempt's `archive.json`. Community submissions are the only run data in git (`submissions/`).
 
 ## Boat execution
 
