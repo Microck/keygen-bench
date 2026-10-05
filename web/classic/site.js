@@ -5,7 +5,7 @@
 import { FB, PAL } from "./core/fb.js";
 import { drawPatternFit, drawScopes } from "./core/pattern.js";
 import { Player } from "./core/player.js";
-import { loadXM, money, usd, tokens, mmss, rankingRows } from "./core/data.js";
+import { loadXM, prefetchXM, money, usd, tokens, mmss, rankingRows } from "./core/data.js";
 import { h, badge, dropdown, makerItems, modelItems, scoreColor } from "./core/ui.js";
 import { SCORING, SCORING_NOTES, DISCLAIMER, KEYGEN, OVERVIEW, SETUP, PROMPTS, SUPPORT, SITE, PAGES } from "./core/content.js";
 import { fmt } from "./core/xm.js";
@@ -385,18 +385,23 @@ export async function mount(root, ctx) {
     }
     v.scopeFB = sized(v.scopeFB, v.scopeC);
     v.scopeFB.fill(0, 0, v.scopeFB.w, v.scopeFB.h, PAL.desktop);
-    if (player) drawScopes(v.scopeFB, player, st, 0, 0, v.scopeFB.w, v.scopeFB.h); else v.scopeFB.frame(0, 0, v.scopeFB.w - 1, v.scopeFB.h - 1, 1);
+    // A module still downloading gets idle scopes at its channel count, like a stopped tune.
+    const scopes = player ?? (v.loading && v.run?.media.xm ? { song: { channels: v.run.module.channels || 8 }, scope: () => null } : null);
+    if (scopes) drawScopes(v.scopeFB, scopes, st, 0, 0, v.scopeFB.w, v.scopeFB.h); else v.scopeFB.frame(0, 0, v.scopeFB.w - 1, v.scopeFB.h - 1, 1);
     v.scopeFB.flush();
     v.patFB = sized(v.patFB, v.patC);
-    if (song) {
-      const out = drawPatternFit(v.patFB, song, st.pattern, st.row, v.patFB.w, v.patFB.h, { firstChannel: v.first });
+    // While the module downloads, draw the empty pattern editor at the run's channel count (from
+    // data.json), so the view is already the tracker and the notes simply appear.
+    const shape = song ?? (v.loading && v.run?.media.xm ? { channels: v.run.module.channels || 8, patterns: [], orders: [0] } : null);
+    if (shape) {
+      const out = drawPatternFit(v.patFB, shape, song ? st.pattern : 0, song ? st.row : 0, v.patFB.w, v.patFB.h, { firstChannel: v.first });
       v.first = out.first; v.shown = out.chans;
-      setText(v.chLbl, "lastLbl", out.chans >= song.channels ? `${song.channels}ch` : `${out.first + 1}-${out.first + out.chans}/${song.channels}`);
-      v.chL.disabled = out.first <= 0; v.chR.disabled = out.first + out.chans >= song.channels;
+      setText(v.chLbl, "lastLbl", out.chans >= shape.channels ? `${shape.channels}ch` : `${out.first + 1}-${out.first + out.chans}/${shape.channels}`);
+      v.chL.disabled = !song || out.first <= 0; v.chR.disabled = !song || out.first + out.chans >= shape.channels;
     } else if (v.run) {
       v.patFB.fill(0, 0, v.patFB.w, v.patFB.h, PAL.desktop);
       v.patFB.frame(0, 0, v.patFB.w - 1, v.patFB.h - 1, 1);
-      v.patFB.text(20, v.patFB.h >> 1, !v.run.media.xm ? "No module: this run failed to produce one." : v.loading ? "Loading module..." : "The module could not be loaded.", PAL.forgrnd);
+      v.patFB.text(20, v.patFB.h >> 1, !v.run.media.xm ? "No module: this run failed to produce one." : "The module could not be loaded.", PAL.forgrnd);
       setText(v.chLbl, "lastLbl", "--"); v.chL.disabled = v.chR.disabled = true;
     }
     v.patFB.flush();
@@ -405,9 +410,9 @@ export async function mount(root, ctx) {
     const m = r.module;
     V.pickHost.replaceChildren(
       h("div", { class: "picker-field" }, h("span", { class: "shadow-text" }, "Company"),
-        dropdown({ label: "Company", items: makerItems(data), value: r.maker, width: 120, onChange: (mk) => ctx.go({ run: data.makers.find((x) => x.name === mk).runs.find((x) => x.isBest).slug }) })),
+        dropdown({ label: "Company", items: makerItems(data), value: r.maker, width: 120, onChange: (mk) => ctx.go({ run: bestOf(mk).slug }), onHover: (mk) => prefetchXM(data, bestOf(mk)) })),
       h("div", { class: "picker-field" }, h("span", { class: "shadow-text" }, "Model"),
-        dropdown({ label: "Model", items: modelItems(data, r.maker, r.slug), value: r.slug, width: 170, onChange: (s2) => ctx.go({ run: s2 }) })),
+        dropdown({ label: "Model", items: modelItems(data, r.maker, r.slug), value: r.slug, width: 170, onChange: (s2) => ctx.go({ run: s2 }), onHover: (s2) => prefetchXM(data, data.bySlug[s2]) })),
       h("span", { class: "grow" }),
       ...(r.media.xm ? [h("a", { class: "btn", href: data.base + r.media.xm, download: r.slug + ".xm", style: { height: "14px" } }, ".XM")] : []),
       ...(r.media.audio ? [h("a", { class: "btn", href: data.base + r.media.audio, download: r.slug + ".mp3", style: { height: "14px" } }, ".MP3")] : []));
@@ -420,10 +425,11 @@ export async function mount(root, ctx) {
   }
   // "declared tier: max, 128k output" -> "max".
   const effort = (r) => String(r.tier ?? "-").replace(/^.*tier:\s*/i, "").split(",")[0].trim();
+  const bestOf = (maker) => data.makers.find((x) => x.name === maker).runs.find((x) => x.isBest);
   // Switch the viewer to run `s2`. The pickers, info and score card come from data.json, so they switch at
-  // once; the old tune stops and the pattern says "Loading module..." until the new module is parsed. The
-  // MP3 downloads alongside the module. If a tune was playing (or Play was pressed meanwhile), the new one
-  // starts when it can play.
+  // once; the old tune stops and the pattern editor shows the new run's empty channels until its module is
+  // parsed (usually already cached by a prefetch). The MP3 downloads alongside the module. If a tune was
+  // playing (or Play was pressed meanwhile), the new one starts when it can play.
   async function loadRun(s2) {
     const r = data.bySlug[s2];
     const tok = ++V.loadToken;
@@ -454,6 +460,17 @@ export async function mount(root, ctx) {
     drawViewer();
     if (V.resume) next.play().catch(() => {});
     V.resume = false;
+    prefetchNeighbours(r);
+  }
+  // Once a run is up, warm the modules one click away: the models above and below it in the Model list and
+  // its model's other attempts.
+  function prefetchNeighbours(r) {
+    const idle = window.requestIdleCallback ?? ((f) => setTimeout(f, 200));
+    idle(() => {
+      const items = modelItems(data, r.maker, r.slug), i = items.findIndex((it) => it.value === r.slug);
+      for (const it of [items[i + 1], items[i - 1]]) if (it) prefetchXM(data, data.bySlug[it.value]);
+      for (const s of r.model.slots ?? []) if (s.slug) prefetchXM(data, data.bySlug[s.slug]);
+    });
   }
   // Loop button: pressed while looping; disabled when the run has no WAV or never reaches its restart position.
   function syncLoop() {
@@ -575,6 +592,7 @@ export async function mount(root, ctx) {
     }
     function renderDetail() {
       const r = data.bySlug[S.sel];
+      prefetchXM(data, r); // "Open in tracker" then opens with its module already parsed
       const kv = (pairs) => h("dl", { class: "kv sunken" }, ...pairs.flatMap(([a, b]) => [h("dt", {}, a), h("dd", {}, b ?? "-")]));
       const nf = (v) => (v == null ? "n/a" : "$" + v);
       const m = r.model;

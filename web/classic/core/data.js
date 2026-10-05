@@ -123,13 +123,23 @@ export function rankingRows(data, { mode = "best", maker = "All", view = "best",
   });
 }
 
+// One fetch + parse per module, shared by the tracker and prefetches. A failed fetch is forgotten so
+// a later load retries it.
 const xmCache = new Map();
-export function loadXM(data, run) {
-  if (!run.media.xm) return Promise.resolve(null);
+export function loadXM(data, run, priority = "high") {
+  if (!run?.media.xm) return Promise.resolve(null);
   if (!xmCache.has(run.slug)) {
-    xmCache.set(run.slug, fetch(data.base + run.media.xm).then((r) => r.arrayBuffer()).then(parseXM));
+    const song = fetch(data.base + run.media.xm, { priority })
+      .then((r) => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.arrayBuffer(); })
+      .then(parseXM);
+    song.catch(() => xmCache.delete(run.slug));
+    xmCache.set(run.slug, song);
   }
   return xmCache.get(run.slug);
+}
+// Warm the cache for a module the visitor is likely to open next, without competing with visible work.
+export function prefetchXM(data, run) {
+  if (run?.media.xm && !xmCache.has(run.slug)) loadXM(data, run, "low").catch(() => {});
 }
 
 export const mediaUrl = (data, path) => data.base + path;
