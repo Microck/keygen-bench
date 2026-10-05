@@ -1,7 +1,8 @@
 # Build from the repository root with an explicit target and freeze both image IDs for a campaign:
 #   docker build -f benchmark/Dockerfile --target agent -t keygen-ft2-benchmark:local .
 #   docker build -f benchmark/Dockerfile --target visualizer -t keygen-ft2-visualizer:local .
-FROM debian:bookworm-slim AS build
+ARG BASE_IMAGE=debian:bookworm-slim@sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2e3687004faa906251
+FROM ${BASE_IMAGE} AS build
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential git ca-certificates pkg-config libsdl2-dev libmicrohttpd-dev python3 \
     && rm -rf /var/lib/apt/lists/*
@@ -15,7 +16,7 @@ RUN SDL_AUDIODRIVER=dummy python3 /opt/keygen/tools/ft2_smoke.py \
     && sed '/^def wav_metrics(/,$d' /opt/keygen/tools/ft2_smoke.py > /opt/keygen/tools/ft2_transport.py \
     && python3 -m py_compile /opt/keygen/tools/ft2_transport.py
 
-FROM debian:bookworm-slim AS agent
+FROM ${BASE_IMAGE} AS agent
 RUN apt-get update && apt-get install -y --no-install-recommends \
     bash coreutils python3 python3-numpy libsdl2-2.0-0 libmicrohttpd12 \
     && rm -rf /var/lib/apt/lists/* \
@@ -39,7 +40,8 @@ FROM agent AS visualizer
 USER root
 RUN apt-get update && apt-get install -y --no-install-recommends \
     xvfb x11-utils xdotool ffmpeg libsdl2-2.0-0 \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && dpkg-query -W > /opt/keygen/packages.txt
 COPY benchmark/visualize.sh /opt/keygen/visualize.sh
 USER 10001:10001
 ENTRYPOINT ["/bin/sleep", "infinity"]
