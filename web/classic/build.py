@@ -52,6 +52,8 @@ PUBLIC_PRICE_HOSTS = (  # maker-published pricing pages only; third-party/proxy 
     "docs.z.ai", "platform.kimi.ai", "alibabacloud.com", "mimo.mi.com", "platform.minimax.io",
     "dev.meta.ai", "docs.mistral.ai", "docs.devin.ai", "tencentcloud.com",
     "longcat.chat", "cohere.com", "api.inceptionlabs.ai", "platform.stepfun.ai", "docs.arcee.ai",
+    # API prices where the maker publishes none: OpenRouter's API and OpenCode Go (free models).
+    "openrouter.ai", "opencode.ai",
 )
 PUBLIC_FREE_PRICES = {"space-bunny-free": "https://opencode.ai/docs/go/"}
 
