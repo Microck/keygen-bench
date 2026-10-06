@@ -5,7 +5,7 @@
 import { FB, PAL } from "./core/fb.js";
 import { drawPatternFit, drawScopes } from "./core/pattern.js";
 import { Player } from "./core/player.js";
-import { loadXM, prefetchXM, money, usd, tokens, mmss, rankingRows } from "./core/data.js";
+import { loadXM, prefetchXM, mediaUrl, money, usd, tokens, mmss, rankingRows } from "./core/data.js";
 import { h, badge, dropdown, makerItems, modelItems, scoreColor } from "./core/ui.js";
 import { SCORING, SCORING_NOTES, DISCLAIMER, KEYGEN, OVERVIEW, SETUP, PROMPTS, SUPPORT, SITE, PAGES } from "./core/content.js";
 import { fmt } from "./core/xm.js";
@@ -415,8 +415,8 @@ export async function mount(root, ctx) {
       h("div", { class: "picker-field" }, h("span", { class: "shadow-text" }, "Model"),
         dropdown({ label: "Model", items: modelItems(data, r.maker, r.slug), value: r.slug, width: 170, onChange: (s2) => ctx.go({ run: s2 }), onHover: (s2) => prefetchXM(data, data.bySlug[s2]) })),
       h("span", { class: "grow" }),
-      ...(r.media.xm ? [h("a", { class: "btn", href: data.base + r.media.xm, download: r.slug + ".xm", style: { height: "14px" } }, ".XM")] : []),
-      ...(r.media.audio ? [h("a", { class: "btn", href: data.base + r.media.audio, download: r.slug + ".mp3", style: { height: "14px" } }, ".MP3")] : []));
+      ...(r.media.xm ? [h("a", { class: "btn", href: mediaUrl(data, r.media.xm), download: r.slug + ".xm", style: { height: "14px" } }, ".XM")] : []),
+      ...(r.media.audio ? [h("a", { class: "btn", href: mediaUrl(data, r.media.audio), download: r.slug + ".mp3", style: { height: "14px" } }, ".MP3")] : []));
     V.infoHost.replaceChildren(
       h("div", { style: { color: "#fff", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, `"${m.name || "untitled"}"`),
       h("div", { class: "muted" }, `${m.channels ?? "-"} ch | ${m.bpm ?? "-"} bpm | spd ${m.speed ?? "-"}`),
@@ -445,7 +445,7 @@ export async function mount(root, ctx) {
     drawViewer();
     const audio = new Audio();
     audio.preload = "auto";
-    if (r.media.audio) audio.src = data.base + r.media.audio;
+    if (r.media.audio) audio.src = mediaUrl(data, r.media.audio);
     const song = r.media.xm ? await loadXM(data, r).catch(() => null) : null;
     if (tok !== V.loadToken) { audio.src = ""; return; }
     V.song = song; V.loading = false;

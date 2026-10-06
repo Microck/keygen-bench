@@ -1,8 +1,9 @@
 // Plays the canonical FT2 render (mp3) and maps audio time -> executed order/row using the
 // FT2 row trace captured during scoring. Scopes are emulated from pattern data + sample PCM (visual only).
-// Loop mode switches to the lossless WAV through Web Audio and repeats from the module's restart
+// Loop mode switches to the lossless render (WAV, or FLAC on static hosts) through Web Audio and repeats from the module's restart
 // position to the end of the first pass, sample-accurately, the way the tune loops in a keygen.
 import { cellAt } from "./xm.js";
+import { mediaUrl } from "./data.js";
 
 const RATE = 44100;
 
@@ -99,7 +100,7 @@ export class Player {
     if (this.audio instanceof LoopAudio) { this.audio.setLoop(on); this.emit(); return; }
     if (!on || this.pending) return;
     const p = this.loopPoints();
-    const next = this.pending = new LoopAudio(this.data.base + this.run.media.wav, p.start, p.end);
+    const next = this.pending = new LoopAudio(mediaUrl(this.data, this.run.media.wav), p.start, p.end);
     await next.ready.catch(() => {});
     this.pending = null;
     if (!next.buffer || this.destroyed) { next.close(); this.looping = false; this.emit(); return; }

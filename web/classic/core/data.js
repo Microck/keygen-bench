@@ -130,7 +130,7 @@ const xmCache = new Map();
 export function loadXM(data, run, priority = "high") {
   if (!run?.media.xm) return Promise.resolve(null);
   if (!xmCache.has(run.slug)) {
-    const song = fetch(data.base + run.media.xm, { priority })
+    const song = fetch(mediaUrl(data, run.media.xm), { priority })
       .then((r) => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.arrayBuffer(); })
       .then(parseXM);
     song.catch(() => xmCache.delete(run.slug));
@@ -143,7 +143,8 @@ export function prefetchXM(data, run) {
   if (run?.media.xm && !xmCache.has(run.slug)) loadXM(data, run, "low").catch(() => {});
 }
 
-export const mediaUrl = (data, path) => data.base + path;
+// Media paths are relative to data.json, or absolute when a publication serves media from another host.
+export const mediaUrl = (data, path) => (/^https?:\/\//.test(path) ? path : data.base + path);
 
 export const money = (v) => (v == null ? "n/a" : v < 0.01 ? "<$0.01" : "$" + v.toFixed(2));
 export const usd = (v) => "$" + Math.round(v).toLocaleString("en-US");
