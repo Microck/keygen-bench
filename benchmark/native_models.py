@@ -18,6 +18,7 @@ import os
 import re
 import socket
 import threading
+import time
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
@@ -105,6 +106,32 @@ FORMAT_ERROR = (
     "{{ error }}{% if finish_reason == 'length' %} Your previous reply was cut off at the output "
     "token limit before it contained a complete tool call.{% endif %}"
 )
+
+
+# Routes with a published per-minute request cap per account: Cohere trial keys (20/min) and OpenRouter
+# ":free" endpoints (20/min). A request over the cap is a 429, which ends the attempt as QUOTA (never
+# retried), so request starts are spaced below the cap. Every worker in the process shares one schedule
+# per account bucket; the wait counts toward the attempt's wall time.
+REQUEST_PACING_SECONDS = 60 / 18
+_pacing_lock = threading.Lock()
+_pacing_next: dict[str, float] = {}
+
+
+def pacing_bucket(model: dict) -> str | None:
+    if model["provider"] == "cohere":
+        return "cohere"
+    if model["model"].endswith(":free") and urlsplit(model.get("base_url") or "").hostname == "openrouter.ai":
+        return "openrouter-free"
+    return None
+
+
+def wait_for_request_slot(bucket: str) -> None:
+    with _pacing_lock:
+        now = time.monotonic()
+        start = max(now, _pacing_next.get(bucket, now))
+        _pacing_next[bucket] = start + REQUEST_PACING_SECONDS
+    if start > now:
+        time.sleep(start - now)
 
 
 def transport_retry_policy(retries: int) -> dict:
@@ -562,6 +589,8 @@ def validate_model(config: dict, model: dict) -> dict:
         "cost_policy": "native estimate when positive; zero/missing is unknown, not free",
         "observation_time_left": "every tool result, rendered by original native formatter",
     }
+    if pacing_bucket(model):
+        effective["request_pacing"] = {"bucket": pacing_bucket(model), "min_seconds_between_requests": REQUEST_PACING_SECONDS}
     removal = HISTORY_KEY_REMOVALS.get((provider, api, model["model"]))
     if removal is not None:
         # Only declared routes carry this field; every other route's settings are unchanged.
@@ -730,6 +759,8 @@ def _construct_model(config: dict, model: dict, run_dir: Path, effective: dict):
     from minisweagent.models.litellm_model import LitellmModel
     from minisweagent.models.litellm_response_model import LitellmResponseModel
 
+    pacing = pacing_bucket(model)
+
     class NativeAudit(CustomLogger):
         # This is a supported SDK observability callback, not a model wrapper.
         def __init__(self):
@@ -742,6 +773,9 @@ def _construct_model(config: dict, model: dict, run_dir: Path, effective: dict):
                 stream.write(json.dumps(record, allow_nan=False) + "\n")
 
         def log_pre_api_call(self, model, messages, kwargs):
+            # LiteLLM calls this synchronously right before sending, so the wait delays the request itself.
+            if pacing is not None:
+                wait_for_request_slot(pacing)
             payload = kwargs.get("additional_args", {}).get("complete_input_dict")
             if not isinstance(payload, dict):
                 return
