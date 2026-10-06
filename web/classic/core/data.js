@@ -18,9 +18,10 @@ export async function loadData(base = "./dist/") {
     if (!byMaker.has(r.maker)) byMaker.set(r.maker, []);
     byMaker.get(r.maker).push(r);
   }
+  // Company menus list the makers with the most benchmarked models first; ties by best score, then name.
   data.makers = [...byMaker.entries()]
     .map(([name, runs]) => ({ name, runs, models: [...new Set(runs.map((r) => r.model))], best: Math.max(...runs.map((r) => r.score)) }))
-    .sort((a, b) => b.best - a.best);
+    .sort((a, b) => b.models.length - a.models.length || b.best - a.best || a.name.localeCompare(b.name));
   data.bySlug = Object.fromEntries(data.runs.map((r) => [r.slug, r]));
   return data;
 }
