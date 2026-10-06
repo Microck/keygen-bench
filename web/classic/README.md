@@ -233,11 +233,12 @@ The server supports `/tracker`, `/rankings`, `/scoring`, `/support`, and model/a
 
 ```sh
 python3 web/classic/export_static.py --publication /absolute/publication --out /absolute/static \
-  --site-url https://keygen-bench.netlify.app --media-map /absolute/media-map.json
+  --site-url https://keygen.micr.dev --media-map /absolute/media-map.json \
+  --redirect-from keygen-bench.netlify.app
 netlify deploy --prod --dir /absolute/static
 ```
 
-`--media-map` maps every media file name to its absolute URL. The live site serves MP3 renders, XM modules and one lossless FLAC loop source per WAV (`ffmpeg -c:a flac`, same name with `.flac`) from public GitHub Pages repositories (`Microck/keygen-bench-media`, `Microck/keygen-bench-media-2`; each published site must stay under 1 GB, so the files are split by size). GitHub Pages sends `Access-Control-Allow-Origin: *` and honours byte ranges, which the player's `fetch` of modules and loop sources and MP3 seeking need. The exporter rewrites `data.json` media paths to those URLs (the frontend's `mediaUrl` accepts absolute URLs), writes one HTML file per route in `dist/og/meta.json` with that route's preview tags (a static host cannot inject them per request), and writes `netlify.toml` falling back to `index.html` for other app routes. Cross-origin `.XM`/`.MP3` buttons open the file instead of forcing a download, because browsers ignore `download` across origins.
+`--media-map` maps every media file name to its absolute URL. The live site serves MP3 renders, XM modules and one lossless FLAC loop source per WAV (`ffmpeg -c:a flac`, same name with `.flac`) from public GitHub Pages repositories (`Microck/keygen-bench-media`, `Microck/keygen-bench-media-2`; each published site must stay under 1 GB, so the files are split by size). GitHub Pages sends `Access-Control-Allow-Origin: *` and honours byte ranges, which the player's `fetch` of modules and loop sources and MP3 seeking need. The exporter rewrites `data.json` media paths to those URLs (the frontend's `mediaUrl` accepts absolute URLs), writes one HTML file per route in `dist/og/meta.json` with that route's preview tags (a static host cannot inject them per request), writes `netlify.toml` falling back to `index.html` for other app routes and redirecting `--redirect-from` hosts to the site URL, drops `dist/evaluations/` (not read by the site) and moves each run's playback trace to `dist/traces/<slug>.json`, which the tracker loads when it opens the run (`data.json` drops from 2.8 MB to 0.95 MB, about 130 kB with Brotli). Cross-origin `.XM`/`.MP3` buttons open the file instead of forcing a download, because browsers ignore `download` across origins.
 
 ## Regenerate fonts
 
