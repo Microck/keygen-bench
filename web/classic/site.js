@@ -734,12 +734,13 @@ export async function mount(root, ctx) {
   }
 
   // ---------------- Support ----------------
-  // Hover note for the spend total: short lines instead of one paragraph.
+  // Hover note for the spend total: the attempt count, the ledger's basis, then coverage and the price caveat.
   const spendTip = (l) => [
     `${l.runs} recorded attempts.`,
-    `${l.bounded_runs ?? 0} bounded estimates; ${l.unknown_cost_runs ?? l.unpriced_runs} attempts with missing costs.`,
-    "Recorded usage only. Missing costs are excluded.",
-    "List-price estimate, not a provider bill.",
+    l.basis,
+    `${l.bounded_runs ?? 0} attempts have bounded estimates; ${l.unknown_cost_runs ?? l.unpriced_runs} have missing or incomplete evidence.`,
+    l.recorded_usage_cost_range_usd ? `Recorded usage range: ${rangeText(l.recorded_usage_cost_range_usd)}. Missing usage is excluded; this is not a lifetime-spend upper bound.` : null,
+    "An estimate at list price, not an actual bill.",
   ].filter(Boolean).join("\n");
   function support() {
     main.style.gridTemplateColumns = "minmax(0,1fr) minmax(0,1fr)";
