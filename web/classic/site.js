@@ -5,7 +5,7 @@
 import { FB, PAL } from "./core/fb.js";
 import { drawPatternFit, drawScopes } from "./core/pattern.js";
 import { Player } from "./core/player.js";
-import { loadXM, prefetchXM, mediaUrl, money, usd, tokens, mmss, rankingRows } from "./core/data.js";
+import { loadXM, loadTrace, prefetchXM, mediaUrl, money, usd, tokens, mmss, rankingRows } from "./core/data.js";
 import { h, badge, dropdown, makerItems, modelItems, scoreColor } from "./core/ui.js";
 import { SCORING, SCORING_NOTES, DISCLAIMER, KEYGEN, OVERVIEW, SETUP, PROMPTS, SUPPORT, SITE, PAGES } from "./core/content.js";
 import { fmt } from "./core/xm.js";
@@ -446,7 +446,7 @@ export async function mount(root, ctx) {
     const audio = new Audio();
     audio.preload = "auto";
     if (r.media.audio) audio.src = mediaUrl(data, r.media.audio);
-    const song = r.media.xm ? await loadXM(data, r).catch(() => null) : null;
+    const [song] = await Promise.all([r.media.xm ? loadXM(data, r).catch(() => null) : null, loadTrace(data, r).catch(() => {})]);
     if (tok !== V.loadToken) { audio.src = ""; return; }
     V.song = song; V.loading = false;
     const orders = song ? song.orders.slice(0, song.songLength) : [];
