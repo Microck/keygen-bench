@@ -528,6 +528,56 @@ def build_report(root: Path, cohort: Path, linked: list[tuple[Path, Path]] = ())
             "groups": groups, "rows": rows}
 
 
+def explicit_retry_record_error(root: Path, attempt_id: str, previous: str, config_hash: str) -> str | None:
+    """`run.py retry` writes retry-<id>.json naming the campaign and the attempt it reruns; None when it matches."""
+    record, error = metadata(root / f"retry-{attempt_id}.json")
+    if error:
+        return f"retry record: {error}"
+    if (record.get("campaign_sha256") != config_hash or record.get("attempt_id") != attempt_id
+            or record.get("retry_of") != previous):
+        return "retry record does not link this rerun to the attempt it reruns"
+    return None
+
+
+def follow_explicit_retries(source: dict, source_model: dict, condition: str, repetitions: list[dict],
+                            others: list[dict]) -> None:
+    """An explicit `run.py retry` chain inside one campaign, under the queue rule: every link but the last is
+    an unstarted slot or a non-model failure, each rerun names its predecessor in status.retry_of and its retry
+    record, and the last link becomes the ordinal's sample. No scored outcome is ever replaced; superseded
+    links stay listed beside the sample."""
+    root = source["root"]
+    for index, sample in enumerate(repetitions):
+        if sample["source_root"] != str(root) or "superseded_attempts" in sample:
+            continue
+        chain, current = [sample], sample
+        while rerunnable(current):
+            successors = [row for row in others if row["source_root"] == str(root)
+                          and row.get("retry_of") == current["attempt_id"] and row["repetition"] == sample["repetition"]
+                          and explicit_retry_record_error(root, row["attempt_id"], current["attempt_id"],
+                                                          source["config_sha256"]) is None]
+            if len(successors) != 1:
+                break
+            current = successors[0]
+            chain.append(current)
+        if len(chain) == 1:
+            sample["superseded_attempts"] = []
+            continue
+        last = attempt_row(root, current["attempt_id"], (source_model, sample["repetition"]), source["fingerprint"],
+                           source["config_sha256"], source["cohort"], retry_of=current["retry_of"])
+        last.update(source_root=str(root), source_campaign_id=source["campaign_id"],
+                    source_campaign_sha256=source["config_sha256"], condition_fingerprint=condition,
+                    role="repetition", selected=False)
+        if not last["declared_condition_match"]:
+            last["eligible"], last["craft"] = False, None
+            last["error"] = "; ".join(filter(None, [last["error"], "repetition differs from its declared frozen condition"]))
+        for row, successor in zip(chain, chain[1:]):
+            row.update(role="superseded", superseded_by=successor["attempt_id"])
+        last["superseded_attempts"] = [{key: row[key] for key in ("attempt_id", "source_campaign_id", "status", "outcome",
+                                                                  "failure_category", "retry_of")} for row in chain[:-1]]
+        others[:] = [row for row in others if row is not current] + [sample]
+        repetitions[index] = last
+
+
 def repetition_report(root: Path, cohort: Path, config: dict, config_hash: str, fingerprint: str,
                       linked: list[tuple[Path, Path]]) -> dict:
     """Independent repetitions of one condition per model, possibly declared across linked campaigns.
@@ -595,6 +645,7 @@ def repetition_report(root: Path, cohort: Path, config: dict, config_hash: str, 
                     row["eligible"], row["craft"] = False, None
                     row["error"] = "; ".join(filter(None, [row["error"], "repetition differs from its declared frozen condition"]))
                 (repetitions if is_sample else others).append(row)
+            follow_explicit_retries(source, source_model, condition, repetitions, others)
         repetitions.sort(key=lambda row: row["repetition"])
         scores = [row["craft"] for row in repetitions if row["eligible"] and finite_number(row["craft"])]
         pending = [row["attempt_id"] for row in repetitions if not row["terminal"]]
@@ -609,7 +660,8 @@ def repetition_report(root: Path, cohort: Path, config: dict, config_hash: str, 
                        "condition_fingerprint": condition, "kind": "native", "cohort": campaign, "tier": first["tier"],
                        **counts(repetitions + others), "attempt_ids": [row["attempt_id"] for row in repetitions + others],
                        "repetitions": [{key: row[key] for key in ("repetition", "attempt_id", "source_campaign_id", "status",
-                                                                 "outcome", "eligible", "craft", "failure_category", "model_failure")}
+                                                                 "outcome", "eligible", "craft", "failure_category", "model_failure",
+                                                                 "retry_of", "superseded_attempts")}
                                        for row in repetitions],
                        "outside_condition_attempts": [{key: row[key] for key in ("attempt_id", "source_campaign_id", "status",
                                                                                  "repetition", "retry_of", "failure_category",
