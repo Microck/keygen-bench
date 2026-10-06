@@ -94,7 +94,8 @@ def canvas():
 
 
 def base_name(name):
-    return re.sub(r"\s*\(attempt \d+\)\s*$", "", name, flags=re.I)
+    # "glm-5-3 (max-tier, attempt 2)" / "glm-5-3 (attempt 2)" / "glm-5-3 (max-tier)" -> "glm-5-3"
+    return re.sub(r"\s*\((?:[^()]*,\s*)?attempt\s+\d+\)\s*$|\s*\(max-tier\)\s*$", "", name, flags=re.I)
 
 
 def models(data):
