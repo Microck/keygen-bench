@@ -23,11 +23,11 @@ from typing import Any
 from urllib.parse import urlsplit
 
 LITELLM_VERSION = "1.102.1"
-PROVIDERS = {"go", "vercel", "nim", "google", "mistral", "devin", "anthropic_oauth", "codex_oauth", "openai", "anthropic", "custom"}
+PROVIDERS = {"go", "vercel", "nim", "google", "mistral", "cohere", "devin", "anthropic_oauth", "codex_oauth", "openai", "anthropic", "custom"}
 BRIDGE_PROVIDERS = {"devin", "anthropic_oauth", "codex_oauth"}
 # Protocol selection controls the native SDK, never a provider-name heuristic.
 PROTOCOLS = {"go": {"chat", "responses", "messages"}, "vercel": {"chat", "responses"}, "nim": {"chat"},
-             "google": {"chat"}, "mistral": {"chat"}, "devin": {"chat"}, "anthropic_oauth": {"messages"}, "codex_oauth": {"responses"},
+             "google": {"chat"}, "mistral": {"chat"}, "cohere": {"chat"}, "devin": {"chat"}, "anthropic_oauth": {"messages"}, "codex_oauth": {"responses"},
              "openai": {"chat", "responses"}, "anthropic": {"messages"},
              "custom": {"chat", "responses", "messages"}}
 # LiteLLM provider prefix per route; Google AI Studio uses LiteLLM's native Gemini provider
@@ -136,13 +136,14 @@ def validate_url(url: str, provider: str | None = None, api: str | None = None) 
             raise ValueError("Credential bridge must use explicit http://127.0.0.1:PORT")
         if path != "/v1":
             raise ValueError("Credential bridge base_url must end in /v1")
-    elif provider in {"go", "vercel", "nim", "google", "mistral", "openai", "anthropic"}:
+    elif provider in {"go", "vercel", "nim", "google", "mistral", "cohere", "openai", "anthropic"}:
         expected = {
             "go": ("opencode.ai", "/zen/go/v1"),
             "vercel": ("ai-gateway.vercel.sh", "/v1"),
             "nim": ("integrate.api.nvidia.com", "/v1"),
             "google": ("generativelanguage.googleapis.com", "/v1beta"),
             "mistral": ("api.mistral.ai", "/v1"),
+            "cohere": ("api.cohere.ai", "/compatibility/v1"),
             "openai": ("api.openai.com", "/v1"),
             "anthropic": ("api.anthropic.com", "/v1"),
         }[provider]
@@ -526,6 +527,12 @@ def validate_model(config: dict, model: dict) -> dict:
         kwargs.pop("api_base")
     if provider == "go":
         kwargs["extra_headers"] = {"User-Agent": "keygen-benchmark/mini-swe-agent-2.4.6"}
+    if provider == "cohere":
+        # Cohere's Chat API rejects a whole reply (HTTP 400, "all generated tool calls were hallucinated") when
+        # the model calls a function that is not declared, e.g. an FT2 tool name read from `ft2 list`. Other
+        # routes return such a call to the agent as a format error. strict_tools constrains generation to the
+        # declared bash tool so the reply reaches the agent; it is a fixed route setting, not a generation field.
+        kwargs["extra_body"] = {"strict_tools": True}
     # SDK optional params include transport defaults and an extra_body envelope.
     # Both SDK paths expand extra_body into the wire body; it is not a generation field.
     wire_parameters = effective_generation | effective_generation.get("extra_body", {})
