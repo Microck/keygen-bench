@@ -76,6 +76,14 @@ HISTORY_KEY_REMOVALS = {
                                 "value": {"refusal": None}},
 }
 HISTORY_KEY_REMOVAL_MODEL = "GoStrictHistoryLitellmModel"
+# Routes whose Chat API rejects assistant-history keys the SDK adds (HTTP 400 "property ... is unsupported").
+# Unlike the Go removals these keys carry the model's earlier reasoning text, so their values are dropped
+# whatever they hold; this is what any client of the route must send. Keyed by API host.
+HISTORY_KEY_DROPS = {
+    "api.cerebras.ai": {"role": "assistant", "keys": ["reasoning_content", "provider_specific_fields"],
+                        "reason": "Cerebras Chat rejects these assistant-history properties as unsupported"},
+}
+HISTORY_KEY_DROP_MODEL = "UnsupportedHistoryKeysLitellmModel"
 WIRE_GENERATION_FIELDS = (
     "max_tokens", "max_completion_tokens", "max_output_tokens", "temperature",
     "reasoning_effort", "reasoning", "thinking", "output_config", "chat_template_kwargs",
@@ -109,24 +117,28 @@ FORMAT_ERROR = (
 )
 
 
-# Routes with a published per-minute request cap per account: Cohere trial keys (20/min) and OpenRouter
-# ":free" endpoints (20/min). A request over the cap is a 429, which ends the attempt as QUOTA (never
+# Routes with a published per-minute cap per account: Cohere trial keys and OpenRouter ":free" endpoints
+# (20 requests/min), Cerebras (150k tokens/min, so a request's slot grows with its estimated input size). A request over the cap is a 429, which ends the attempt as QUOTA (never
 # retried), so request starts are spaced below the cap. Each attempt runs in its own worker process, so
 # the schedule lives in a lock-protected file per account bucket on the controller host; the wait counts
 # toward the attempt's wall time.
 REQUEST_PACING_SECONDS = 60 / 18
+# Cerebras' token cap is kept at 90%; input tokens are estimated as payload characters / 3 (an over-estimate).
+TOKEN_PACING = {"cerebras": 135_000}
 REQUEST_PACING_DIR = Path("/tmp/keygen-request-pacing")
 
 
 def pacing_bucket(model: dict) -> str | None:
     if model["provider"] == "cohere":
         return "cohere"
+    if urlsplit(model.get("base_url") or "").hostname == "api.cerebras.ai":
+        return "cerebras"
     if model["model"].endswith(":free") and urlsplit(model.get("base_url") or "").hostname == "openrouter.ai":
         return "openrouter-free"
     return None
 
 
-def wait_for_request_slot(bucket: str) -> None:
+def wait_for_request_slot(bucket: str, payload_chars: int = 0) -> None:
     REQUEST_PACING_DIR.mkdir(mode=0o700, exist_ok=True)
     with open(REQUEST_PACING_DIR / bucket, "a+") as handle:
         fcntl.flock(handle, fcntl.LOCK_EX)
@@ -139,7 +151,10 @@ def wait_for_request_slot(bucket: str) -> None:
         start = max(now, scheduled)
         handle.seek(0)
         handle.truncate()
-        handle.write(repr(start + REQUEST_PACING_SECONDS))
+        slot = REQUEST_PACING_SECONDS
+        if bucket in TOKEN_PACING:
+            slot = max(slot, payload_chars / 3 * 60 / TOKEN_PACING[bucket])
+        handle.write(repr(start + slot))
         handle.flush()
     if start > now:
         time.sleep(start - now)
@@ -606,6 +621,9 @@ def validate_model(config: dict, model: dict) -> dict:
     if removal is not None:
         # Only declared routes carry this field; every other route's settings are unchanged.
         effective["history_key_removal"] = {**removal, "model_type": f"native_models.{HISTORY_KEY_REMOVAL_MODEL}"}
+    drop = HISTORY_KEY_DROPS.get(urlsplit(model.get("base_url") or "").hostname)
+    if drop is not None and removal is None:
+        effective["history_key_removal"] = {**drop, "model_type": f"native_models.{HISTORY_KEY_DROP_MODEL}"}
     return effective
 
 
@@ -785,9 +803,9 @@ def _construct_model(config: dict, model: dict, run_dir: Path, effective: dict):
 
         def log_pre_api_call(self, model, messages, kwargs):
             # LiteLLM calls this synchronously right before sending, so the wait delays the request itself.
-            if pacing is not None:
-                wait_for_request_slot(pacing)
             payload = kwargs.get("additional_args", {}).get("complete_input_dict")
+            if pacing is not None:
+                wait_for_request_slot(pacing, len(json.dumps(payload, default=str)) if isinstance(payload, dict) else 0)
             if not isinstance(payload, dict):
                 return
             # The SDK expands an extra_body envelope into the HTTP body; record it as sent.
@@ -832,7 +850,22 @@ def _construct_model(config: dict, model: dict, run_dir: Path, effective: dict):
         kwargs["extra_headers"]["x-opencode-session"] = digest(str(run_dir.resolve()))
     cls = LitellmResponseModel if model["api"] == "responses" else LitellmModel
     removal = effective.get("history_key_removal")
-    if removal is not None:
+    if removal is not None and "keys" in removal:
+        if HISTORY_KEY_DROPS.get(urlsplit(model.get("base_url") or "").hostname) is None:
+            raise ValueError("History key drops are declared only for their exact API host")
+        dropped = frozenset(removal["keys"])
+
+        class UnsupportedHistoryKeysLitellmModel(cls):
+            """The original model class; outgoing assistant copies omit keys the route rejects."""
+
+            def _prepare_messages_for_api(self, messages: list[dict]) -> list[dict]:
+                return [{key: item for key, item in message.items() if key not in dropped}
+                        if message.get("role") == removal["role"] else message
+                        for message in super()._prepare_messages_for_api(messages)]
+
+        UnsupportedHistoryKeysLitellmModel.__module__ = "native_models"
+        cls = UnsupportedHistoryKeysLitellmModel
+    elif removal is not None:
         if HISTORY_KEY_REMOVALS.get((model["provider"], model["api"], model["model"])) is None:
             raise ValueError("History key removal is declared only for its exact provider route")
 
