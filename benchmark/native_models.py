@@ -9,6 +9,7 @@ No bridge route is ready until its exact protocol and settings pass a real gate.
 """
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import ipaddress
 import json
@@ -110,11 +111,11 @@ FORMAT_ERROR = (
 
 # Routes with a published per-minute request cap per account: Cohere trial keys (20/min) and OpenRouter
 # ":free" endpoints (20/min). A request over the cap is a 429, which ends the attempt as QUOTA (never
-# retried), so request starts are spaced below the cap. Every worker in the process shares one schedule
-# per account bucket; the wait counts toward the attempt's wall time.
+# retried), so request starts are spaced below the cap. Each attempt runs in its own worker process, so
+# the schedule lives in a lock-protected file per account bucket on the controller host; the wait counts
+# toward the attempt's wall time.
 REQUEST_PACING_SECONDS = 60 / 18
-_pacing_lock = threading.Lock()
-_pacing_next: dict[str, float] = {}
+REQUEST_PACING_DIR = Path("/tmp/keygen-request-pacing")
 
 
 def pacing_bucket(model: dict) -> str | None:
@@ -126,10 +127,20 @@ def pacing_bucket(model: dict) -> str | None:
 
 
 def wait_for_request_slot(bucket: str) -> None:
-    with _pacing_lock:
-        now = time.monotonic()
-        start = max(now, _pacing_next.get(bucket, now))
-        _pacing_next[bucket] = start + REQUEST_PACING_SECONDS
+    REQUEST_PACING_DIR.mkdir(mode=0o700, exist_ok=True)
+    with open(REQUEST_PACING_DIR / bucket, "a+") as handle:
+        fcntl.flock(handle, fcntl.LOCK_EX)
+        handle.seek(0)
+        try:
+            scheduled = float(handle.read() or 0)
+        except ValueError:
+            scheduled = 0.0
+        now = time.time()
+        start = max(now, scheduled)
+        handle.seek(0)
+        handle.truncate()
+        handle.write(repr(start + REQUEST_PACING_SECONDS))
+        handle.flush()
     if start > now:
         time.sleep(start - now)
 
