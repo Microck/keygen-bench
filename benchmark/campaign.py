@@ -24,7 +24,7 @@ SCHEMA = "keygen-native-campaign-3"
 # before the label existed (no prompts.version) ran prompt-v1.
 PROMPT_VERSION = "prompt-v2"
 PROVIDERS = {"Codex OAuth": "codex_oauth", "Anthropic OAuth": "anthropic_oauth", "OpenCode Go": "go",
-             "Vercel AI Gateway": "vercel", "NVIDIA NIM": "nim", "Google AI Studio": "google", "Devin": "devin",
+             "Vercel AI Gateway": "vercel", "NVIDIA NIM": "nim", "Google AI Studio": "google", "Mistral": "mistral", "Devin": "devin",
              "OpenAI": "openai", "Anthropic": "anthropic", "Custom": "custom"}
 LIMIT_KEYS = {"steps", "wall_seconds", "request_seconds", "command_seconds", "render_seconds", "video_seconds", "artifact_bytes"}
 FIRST_SUCCESS = "first_success_up_to_three_attempts"

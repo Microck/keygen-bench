@@ -23,16 +23,18 @@ from typing import Any
 from urllib.parse import urlsplit
 
 LITELLM_VERSION = "1.102.1"
-PROVIDERS = {"go", "vercel", "nim", "google", "devin", "anthropic_oauth", "codex_oauth", "openai", "anthropic", "custom"}
+PROVIDERS = {"go", "vercel", "nim", "google", "mistral", "devin", "anthropic_oauth", "codex_oauth", "openai", "anthropic", "custom"}
 BRIDGE_PROVIDERS = {"devin", "anthropic_oauth", "codex_oauth"}
 # Protocol selection controls the native SDK, never a provider-name heuristic.
 PROTOCOLS = {"go": {"chat", "responses", "messages"}, "vercel": {"chat", "responses"}, "nim": {"chat"},
-             "google": {"chat"}, "devin": {"chat"}, "anthropic_oauth": {"messages"}, "codex_oauth": {"responses"},
+             "google": {"chat"}, "mistral": {"chat"}, "devin": {"chat"}, "anthropic_oauth": {"messages"}, "codex_oauth": {"responses"},
              "openai": {"chat", "responses"}, "anthropic": {"messages"},
              "custom": {"chat", "responses", "messages"}}
 # LiteLLM provider prefix per route; Google AI Studio uses LiteLLM's native Gemini provider
 # (generateContent), never an OpenAI-compatible shim.
-SDK_PREFIX = {"google": "gemini"}
+# Mistral uses LiteLLM's native Mistral provider: it parses Mistral's thinking content chunks into
+# reasoning_content, which the OpenAI-compatible path rejects as an invalid response object.
+SDK_PREFIX = {"google": "gemini", "mistral": "mistral"}
 GOOGLE_BASE = "https://generativelanguage.googleapis.com/v1beta"
 # Gemini 3.x thinkingLevel values (Google thinking docs); LiteLLM maps reasoning_effort onto them.
 GOOGLE_EFFORTS = {"minimal", "low", "medium", "high"}
@@ -134,12 +136,13 @@ def validate_url(url: str, provider: str | None = None, api: str | None = None) 
             raise ValueError("Credential bridge must use explicit http://127.0.0.1:PORT")
         if path != "/v1":
             raise ValueError("Credential bridge base_url must end in /v1")
-    elif provider in {"go", "vercel", "nim", "google", "openai", "anthropic"}:
+    elif provider in {"go", "vercel", "nim", "google", "mistral", "openai", "anthropic"}:
         expected = {
             "go": ("opencode.ai", "/zen/go/v1"),
             "vercel": ("ai-gateway.vercel.sh", "/v1"),
             "nim": ("integrate.api.nvidia.com", "/v1"),
             "google": ("generativelanguage.googleapis.com", "/v1beta"),
+            "mistral": ("api.mistral.ai", "/v1"),
             "openai": ("api.openai.com", "/v1"),
             "anthropic": ("api.anthropic.com", "/v1"),
         }[provider]
@@ -384,6 +387,10 @@ def sdk_controls(model: dict) -> dict:
     """
     if model["provider"] in {"go", "custom"} and model["api"] == "messages" and "thinking" in model["generation"]:
         return {"allowed_openai_params": ["thinking"]}
+    # LiteLLM's Mistral provider lists reasoning_effort only for "magistral" names, and for those it injects a
+    # system prompt instead of sending the field. The opt-in sends the declared field unaltered for any name.
+    if model["provider"] == "mistral" and "reasoning_effort" in model["generation"]:
+        return {"allowed_openai_params": ["reasoning_effort"]}
     return {}
 
 
