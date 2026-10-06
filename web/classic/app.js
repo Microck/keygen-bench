@@ -4,6 +4,7 @@
 import { loadData } from "./core/data.js";
 import { loadFonts } from "./core/fb.js";
 import { mount } from "./site.js";
+import { modelItems } from "./core/ui.js";
 
 const app = document.getElementById("app");
 let data, site = null;
@@ -19,7 +20,10 @@ function params() {
   const leader = mode === "average" && page === "ranking" ? Object.values(data.byModel).find((model) => model.averageRank === 1)?.best : null;
   // Information pages keep their originating attempt in this history entry.
   const remembered = page === "scoring" || page === "support" ? data.bySlug[history.state?.run] : null;
-  const run = (m && (attempt ? m.runs.find((r) => String(r.attempt) === attempt) : m.best)) ?? remembered ?? leader ?? data.runs.find((r) => r.rank === 1) ?? data.runs[0];
+  // The bare tracker opens the first entry of its own menus: the top company and its newest model.
+  const firstMaker = data.makers[0];
+  const opening = page === "viewer" && firstMaker ? data.bySlug[modelItems(data, firstMaker.name, null)[0]?.value] : null;
+  const run = (m && (attempt ? m.runs.find((r) => String(r.attempt) === attempt) : m.best)) ?? remembered ?? leader ?? opening ?? data.runs.find((r) => r.rank === 1) ?? data.runs[0];
   return { page, run: run.slug, mode };
 }
 
