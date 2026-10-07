@@ -11,4 +11,4 @@ The repository includes benchmark source, explanatory text, scoring calibration 
 - The Win98-style favicons originate from [win98icons.alexmeub.com](https://win98icons.alexmeub.com/). Verify redistribution rights before a public release; this notice is not a license grant.
 - Product names, maker marks and trademarks belong to their respective owners. Their appearance does not imply endorsement.
 
-No project-wide license for original code or documentation has been selected. See [PUBLIC-LAUNCH.md](PUBLIC-LAUNCH.md) for the release checklist. Dependency and asset licenses do not license the rest of this repository.
+Original code and documentation are licensed under the [MIT License](LICENSE). Dependency and asset licenses above keep their own terms; the MIT License does not relicense them.

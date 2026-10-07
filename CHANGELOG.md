@@ -4,6 +4,7 @@
 
 ### Added
 
+- MIT License for original code and documentation; third-party assets keep their own licenses.
 - Community-run guide, three-attempt runner, bundle validator, submission templates and trusted-base validation workflow.
 - FT2-style results site with per-model routes, attempt selection, loop playback, scoring explanations and generated Open Graph cards.
 - Public-launch checklist covering Git history, personal data, credentials, licenses and release verification.
