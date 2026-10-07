@@ -2,12 +2,6 @@
   <img src=".github/assets/banner.png" alt="keygen bench" width="900">
 </p>
 
-<p align="center">
-  <a href="https://keygen.micr.dev"><img src="https://img.shields.io/badge/results-keygen.micr.dev-000000?style=flat-square" alt="results badge"></a>
-  <a href="https://github.com/Microck/keygen-bench/actions/workflows/validate-run-submission.yml"><img src="https://img.shields.io/github/actions/workflow/status/Microck/keygen-bench/validate-run-submission.yml?style=flat-square&label=submissions&color=000000" alt="submission validation badge"></a>
-  <a href="CITATION.cff"><img src="https://img.shields.io/badge/cite-citation.cff-000000?style=flat-square" alt="citation badge"></a>
-</p>
-
 ---
 
 keygen bench is a benchmark for language models composing tracker music in FastTracker II. a model gets one bash tool in an offline Docker sandbox, writes an XM module, and submits it. the module is then rendered in a fresh FT2 process and scored outside the sandbox.
