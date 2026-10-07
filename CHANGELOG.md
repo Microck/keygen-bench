@@ -32,6 +32,8 @@
 
 ### Fixed
 
+- Reconcile the public-launch checklist with the public repository, published maintainer transport logs and existing contributor validator; retain outstanding review requirements.
+
 - Match model release metadata across dot/dash keys and the public names without `-contributor`, so the model dropdown sorts by release date; keep dropdown logos inside their border.
 - Restore the original page slide transition and the original spend tooltip wording.
 - Show `$0` for models that are free on their maker's API instead of `<$0.01`.
@@ -55,4 +57,4 @@
 - Remote sandbox provisioning, private deployment and account inventories, campaign launch records, duplicate source trees and generated publication evidence.
 - Historical operator notes and unrelated research drafts that are not required to run or evaluate the benchmark.
 
-The cleanup changes the current source tree only. Earlier commits and pull requests still require review before the repository becomes public.
+The cleanup changes the current source tree only. Earlier commits and pull requests still require review; public visibility does not establish that the review is complete.
