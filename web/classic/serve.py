@@ -48,6 +48,23 @@ def accepts_gzip(header):
     return q.get("gzip", q.get("x-gzip", q.get("*", 0.0))) > 0
 
 
+def with_og(html, meta, route, base):
+    """index.html with the og:/twitter: tags of `route` (most specific entry of build_og.py's meta.json)."""
+    parts = route.strip("/").split("/")
+    info = meta.get(route) or meta.get("/" + "/".join(parts[:2])) or meta.get("/" + parts[0]) or meta.get("/")
+    if not info:
+        return html
+    esc = lambda s: html_escape(str(s), quote=True)
+    tags = [f'<meta property="og:type" content="website">', f'<meta property="og:site_name" content="Keygen Bench">',
+            f'<meta property="og:title" content="{esc(info["title"])}">', f'<meta property="og:description" content="{esc(info["description"])}">',
+            f'<meta property="og:image" content="{esc(base + info["image"])}">', '<meta property="og:image:width" content="1200">',
+            '<meta property="og:image:height" content="630">', f'<meta property="og:url" content="{esc(base + route)}">',
+            '<meta name="twitter:card" content="summary_large_image">', f'<meta name="twitter:title" content="{esc(info["title"])}">',
+            f'<meta name="twitter:description" content="{esc(info["description"])}">', f'<meta name="twitter:image" content="{esc(base + info["image"])}">',
+            f'<meta name="description" content="{esc(info["description"])}">']
+    return html.replace("<!--OG-->", "\n".join(tags)).replace("<title>Keygen Bench</title>", f"<title>{esc(info['title'])}</title>")
+
+
 class Handler(http.server.SimpleHTTPRequestHandler):
     def __init__(self, *a, directory, **kw):
         self.root = Path(directory).resolve()
@@ -72,21 +89,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             meta = json.loads((self.root / "dist" / "og" / "meta.json").read_text(encoding="utf-8"))
         except (OSError, ValueError):
             meta = {}
-        parts = route.strip("/").split("/")
-        info = meta.get(route) or meta.get("/" + "/".join(parts[:2])) or meta.get("/" + parts[0]) or meta.get("/")
-        if info:
-            host = self.headers.get("X-Forwarded-Host") or self.headers.get("Host") or ""
-            scheme = self.headers.get("X-Forwarded-Proto") or "http"
-            base = f"{scheme}://{host}"
-            esc = lambda s: html_escape(str(s), quote=True)
-            tags = [f'<meta property="og:type" content="website">', f'<meta property="og:site_name" content="Keygen Bench">',
-                    f'<meta property="og:title" content="{esc(info["title"])}">', f'<meta property="og:description" content="{esc(info["description"])}">',
-                    f'<meta property="og:image" content="{esc(base + info["image"])}">', '<meta property="og:image:width" content="1200">',
-                    '<meta property="og:image:height" content="630">', f'<meta property="og:url" content="{esc(base + route)}">',
-                    '<meta name="twitter:card" content="summary_large_image">', f'<meta name="twitter:title" content="{esc(info["title"])}">',
-                    f'<meta name="twitter:description" content="{esc(info["description"])}">', f'<meta name="twitter:image" content="{esc(base + info["image"])}">',
-                    f'<meta name="description" content="{esc(info["description"])}">']
-            html = html.replace("<!--OG-->", "\n".join(tags)).replace("<title>Keygen Bench</title>", f"<title>{esc(info['title'])}</title>")
+        host = self.headers.get("X-Forwarded-Host") or self.headers.get("Host") or ""
+        scheme = self.headers.get("X-Forwarded-Proto") or "http"
+        html = with_og(html, meta, route, f"{scheme}://{host}")
         body = html.encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
