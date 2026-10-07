@@ -80,7 +80,7 @@ def public_maker(model: str, price: dict) -> str:
                 ("longcat", "Meituan"), ("llama", "Meta"), ("mercury", "Inception"),
                 ("inkling", "Thinking Machines Lab"), ("muse", "Meta"),
                 ("mistral", "Mistral AI"), ("command", "Cohere"), ("north", "Cohere"),
-                ("nemotron", "NVIDIA"), ("step", "StepFun"))
+                ("nemotron", "NVIDIA"), ("step", "StepFun"), ("hermes", "Nous Research"))
     return next((maker for prefix, maker in prefixes if product.startswith(prefix)), "Other")
 
 
