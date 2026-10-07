@@ -227,6 +227,21 @@ Open Graph generation writes `dist/og/home.png`, one image per model, and `dist/
 
 The server supports `/tracker`, `/rankings`, `/scoring`, `/support`, and model/attempt URLs, plus byte ranges for audio seeking and downloads. JSON, JavaScript, CSS and XM files are sent gzip-compressed to browsers that accept it (a pretty-printed 6.3 MB `data.json` becomes about 0.76 MB); range requests and audio are always sent uncompressed. It rejects dotfiles, symlinks, and directory listings. Serve only the dedicated publication directory, never the repository or a campaign directory. For public deployment, put this local server behind a proxy with HTTPS; configure the proxy to set trustworthy `Host` or `X-Forwarded-Host` and `X-Forwarded-Proto` headers for preview URLs. No deployment-specific service files are included.
 
+### Static hosting (GitHub Pages or Netlify)
+
+`export_static.py` turns a publication into a static site for a CDN host, without `dist/media/`:
+
+```sh
+python3 web/classic/export_static.py --publication /absolute/publication --out /absolute/static \
+  --site-url https://keygen.micr.dev --media-map /absolute/media-map.json \
+  --redirect-from keygen-bench.netlify.app
+netlify deploy --prod --dir /absolute/static
+```
+
+The live site is published with `--host github-pages` to the public repository `Microck/keygen-bench-site` (GitHub Pages, custom domain `keygen.micr.dev`, HTTPS enforced): the exporter writes `404.html` (the app shell, so unlisted app routes such as attempt URLs still render), `CNAME` and `.nojekyll` instead of `netlify.toml`. GitHub Pages has no deploy credits or bandwidth meter (soft limits: 1 GB per site, about 100 GB a month), but response headers cannot be configured. Push the output as the repository's `main` branch to deploy.
+
+`--media-map` maps every media file name to its absolute URL. The live site serves MP3 renders, XM modules and one lossless FLAC loop source per WAV (`ffmpeg -c:a flac`, same name with `.flac`) from public GitHub Pages repositories (`Microck/keygen-bench-media`, `Microck/keygen-bench-media-2`; each published site must stay under 1 GB, so the files are split by size). GitHub Pages sends `Access-Control-Allow-Origin: *` and honours byte ranges, which the player's `fetch` of modules and loop sources and MP3 seeking need. The exporter rewrites `data.json` media paths to those URLs (the frontend's `mediaUrl` accepts absolute URLs), writes one HTML file per route in `dist/og/meta.json` with that route's preview tags (a static host cannot inject them per request), writes `netlify.toml` falling back to `index.html` for other app routes and redirecting `--redirect-from` hosts to the site URL, drops `dist/evaluations/` (not read by the site) and moves each run's playback trace to `dist/traces/<slug>.json`, which the tracker loads when it opens the run (`data.json` drops from 2.8 MB to 0.95 MB, about 130 kB with Brotli). Cross-origin `.XM`/`.MP3` buttons open the file instead of forcing a download, because browsers ignore `download` across origins.
+
 ## Regenerate fonts
 
 Only regenerate fonts when changing their source bitmaps or metrics:

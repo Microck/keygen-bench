@@ -20,7 +20,8 @@ export function badge(maker, size = 16) {
 
 // FT2-looking dropdown: sunken face + arrow pushbutton, popup list styled like the Disk Op file list.
 // items: [{ value, label, badge?, right? }]
-export function dropdown({ items, value, onChange, label, width }) {
+// `onHover(value)`: an item is pointed at or keyboard-highlighted (lets callers prefetch what it opens).
+export function dropdown({ items, value, onChange, onHover, label, width }) {
   let open = false, active = Math.max(0, items.findIndex((i) => i.value === value));
   const face = h("div", { class: "dd-face sunken", role: "combobox", tabindex: "0", "aria-expanded": "false", "aria-label": label });
   const arrow = h("button", { class: "btn dd-arrow", tabindex: "-1", "aria-hidden": "true" }, "\u25BC");
@@ -36,6 +37,7 @@ export function dropdown({ items, value, onChange, label, width }) {
     pop.replaceChildren(...items.map((it, i) => h("div", {
       class: "list-row" + (it.value === value ? " sel" : "") + (i === active ? " hl" : ""), role: "option",
       "aria-selected": String(it.value === value), onmousedown: (e) => { e.preventDefault(); pick(it.value); },
+      onmouseenter: onHover && (() => onHover(it.value)),
     }, it.badge ? badge(it.badge) : null, h("span", { style: { flex: "1", overflow: "hidden" } }, it.label), it.right ? h("span", { class: "muted" }, it.right) : null)));
     // Keep the active row visible by scrolling the popup only; scrollIntoView would also scroll every
     // scrollable ancestor (the page wells), which shoves the page around.
@@ -67,6 +69,7 @@ export function dropdown({ items, value, onChange, label, width }) {
       e.preventDefault(); e.stopPropagation();
       if (!open) setOpen(true);
       active = (active + (e.key === "ArrowDown" ? 1 : -1) + items.length) % items.length; renderPop();
+      onHover?.(items[active].value);
     } else if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open ? pick(items[active].value) : setOpen(true); }
     else if (e.key === "Escape") setOpen(false);
   });
