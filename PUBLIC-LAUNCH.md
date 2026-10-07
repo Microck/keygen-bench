@@ -21,6 +21,8 @@ Public author handles and third-party copyright notices are intentional attribut
 
 ## Submission privacy
 
-Keep raw run directories private. Review the exported bundle before committing it, even when validation passes. Prompts, model output and tool logs may contain personal information that a pattern scanner cannot identify. A validator cannot establish authorship, undisclosed attempts, provider identity or organizational compliance.
+Keep in-progress run directories private. Review the exported bundle before committing it, even when validation passes. Prompts, model output and tool logs may contain personal information that a pattern scanner cannot identify. A validator cannot establish authorship, undisclosed attempts, provider identity or organizational compliance.
+
+The maintainer campaigns are published in full under `runs/` (minus videos): trajectories, provider transport logs, modules, renders and evaluations. Before each update, scan the exported tree for credentials and personal data (emails, names, account or organization identifiers); controller paths such as `/home/ubuntu/...` and opaque provider identifiers (response IDs, prompt-cache keys, encrypted reasoning blobs) are expected. Check each provider's terms before republishing transcripts of its models.
 
 Accepted results must keep their community provenance label. Re-render and re-score submitted modules using the trusted evaluator rather than accepting submitted scores.

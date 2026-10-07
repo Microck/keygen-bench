@@ -1,0 +1,60 @@
+{
+  "status": "RENDERED_UNSCORED",
+  "model": {
+    "id": "kimi-k3",
+    "model": "vercel-moonshotai/kimi-k3",
+    "response_model": "moonshotai/kimi-k3"
+  },
+  "quality_score": null,
+  "started_at": 1790718516.798964,
+  "collection": "ok",
+  "render": "ok",
+  "termination": {
+    "exit_status": "TimeoutExpired",
+    "error": "Command '['/usr/bin/docker', '--host', 'unix:///var/run/docker.sock', 'exec', '-w', '/workspace', '-e', 'BASH_ENV=/dev/null', '-e', 'ENV=/dev/null', 'keygen-create-dd042dbb094c4021', '/bin/bash', '--noprofile', '--norc', '-c', 'timeout --kill-after=2s 120s /bin/bash --noprofile --norc -c \\'cd /workspace && python3 - <<\\'\"\\'\"\\'EOF\\'\"\\'\"\\'\\nimport numpy as np, wave\\nw = wave.open(\\'\"\\'\"\\'final_check.wav\\'\"\\'\"\\',\\'\"\\'\"\\'rb\\'\"\\'\"\\'); sr=w.getframerate()\\nplen = 64*6*2.5/132\\nd = np.frombuffer(w.readframes(w.getnframes()), dtype=\\'\"\\'\"\\'<i2\\'\"\\'\"\\').astype(np.float64)\\nL = d[0::2]\\n# global rms\\nprint(\"global rms:\", round(np.sqrt((L**2).mean())), \"peak:\", int(np.abs(L).max()))\\nprint(\"crest factor:\", round(np.abs(L).max()/np.sqrt((L**2).mean()), 2))\\n# outro tail check\\np10 = int(10*plen*sr)\\ntail = L[p10+int(3.2*sr):]\\nprint(\"outro after +3.2s rms:\", round(np.sqrt((tail**2).mean())), \"nonzero samples:\", int((tail!=0).sum()))\\nEOF\\' > /tmp/keygen-action.log 2>&1; r=$?; n=$(stat -c %s /tmp/keygen-action.log); if [ \"$n\" -le 20000 ]; then cat /tmp/keygen-action.log; else head -c 10000 /tmp/keygen-action.log; printf \\'\\\\n[output truncated: %s bytes total]\\\\n\\' \"$n\"; tail -c 10000 /tmp/keygen-action.log; fi; exit $r']' timed out after 130 seconds"
+  },
+  "audio": {
+    "duration_seconds": 79.97823129251701,
+    "rate": 44100,
+    "channels": 2,
+    "pcm_sha256": "3565138b1016394acb2214b419ea99a89ebef5c534278b31d5060b6abc7e450f",
+    "peak": 0.50946044921875,
+    "rms": 0.12506326603569132,
+    "dc_offset": 0.00044562783307895926,
+    "full_scale_samples": 0,
+    "quality_score": null,
+    "note": "Technical observations, not aesthetic scores"
+  },
+  "module": {
+    "name": "silicon sunrise",
+    "channels": 12,
+    "bpm": 132,
+    "speed": 6,
+    "global_volume": 64,
+    "song_length": 11,
+    "loop_start": 0,
+    "current_pattern": 0,
+    "pattern_rows": 64
+  },
+  "artifact_sha256": "dd4e74524f0a54b855d0cc4c29e710750ea8c3175b6af1fc997dad91827d95ce",
+  "video": {
+    "seconds": 80,
+    "bytes": 51567685,
+    "sha256": "5055bf5715fd1a0bcbea937bccabd3ee6787399ca526464679a47b14eaa5fa94",
+    "capture": "window=1264x800+8+80 audio_offset=0.7893333333333333"
+  },
+  "finished_at": 1790720644.2623258,
+  "wall_seconds": 2127.4633617401123,
+  "totals": {
+    "requests": 145,
+    "failed_requests": 0,
+    "usage_unknown": 0,
+    "prompt_tokens": 9871613,
+    "cached_tokens": 9630724,
+    "completion_tokens": 95282,
+    "reasoning_tokens": 13152,
+    "model_seconds": 1304.7477081470133,
+    "sandbox_seconds": 450.7831973719876,
+    "commands": 145
+  }
+}
