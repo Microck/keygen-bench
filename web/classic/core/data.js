@@ -26,6 +26,10 @@ export async function loadData(base = "./dist/") {
   return data;
 }
 
+const metadataKey = (key) => key.replace(/-contributor$/, "").replaceAll(".", "-");
+const metadataFor = (metadata, key) =>
+  metadata[key] ?? Object.entries(metadata).find(([k]) => metadataKey(k) === metadataKey(key))?.[1];
+
 // Extract model names and ordinals from older snapshots that embed them in the name.
 const attemptSuffix = /\s*\((?:(.*?)\s*,\s*)?attempt\s+(\d+)\)\s*$/i;
 
@@ -56,8 +60,10 @@ function groupAttempts(data) {
     const mean = scores.reduce((s, v) => s + v, 0) / (scores.length || 1);
     const sd = Math.sqrt(scores.reduce((s, v) => s + (v - mean) ** 2, 0) / (scores.length || 1));
     const best = scored.reduce((b, r) => (!b || r.score > b.score ? r : b), null) ?? runs[0];
-    // Release metadata is about the model, never the campaign or attempt timestamp.
-    const date = runs.find((r) => r.release_date)?.release_date ?? data.modelMetadata[key]?.release_date;
+    // Release metadata is about the model, never the campaign or attempt timestamp. Keys are matched with
+    // dots and dashes treated alike (Devin routes write glm-5-3, others glm-5.3) and without the
+    // "-contributor" tag the public names drop.
+    const date = runs.find((r) => r.release_date)?.release_date ?? metadataFor(data.modelMetadata, key)?.release_date;
     const releaseDate = /^\d{4}-\d{2}-\d{2}$/.test(date ?? "") ? date : null;
     const model = { key, runs: scored, slots, best, releaseDate, n: scores.length, declared: slots.length,
       min: Math.min(...scores), max: Math.max(...scores), mean, sd };
@@ -130,7 +136,7 @@ const xmCache = new Map();
 export function loadXM(data, run, priority = "high") {
   if (!run?.media.xm) return Promise.resolve(null);
   if (!xmCache.has(run.slug)) {
-    const song = fetch(data.base + run.media.xm, { priority })
+    const song = fetch(mediaUrl(data, run.media.xm), { priority })
       .then((r) => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.arrayBuffer(); })
       .then(parseXM);
     song.catch(() => xmCache.delete(run.slug));
@@ -138,12 +144,28 @@ export function loadXM(data, run, priority = "high") {
   }
   return xmCache.get(run.slug);
 }
-// Warm the cache for a module the visitor is likely to open next, without competing with visible work.
+// A static export moves each run's playback trace out of data.json into media.trace (fetched when the
+// tracker opens the run); served publications keep it inline. Resolves once run.trace is set.
+const traceCache = new Map();
+export function loadTrace(data, run, priority = "high") {
+  if (!run || Array.isArray(run.trace) || !run.media.trace) return Promise.resolve();
+  if (!traceCache.has(run.slug)) {
+    const trace = fetch(mediaUrl(data, run.media.trace), { priority })
+      .then((r) => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
+      .then((t) => { run.trace = t; });
+    trace.catch(() => traceCache.delete(run.slug));
+    traceCache.set(run.slug, trace);
+  }
+  return traceCache.get(run.slug);
+}
+// Warm the caches for a run the visitor is likely to open next, without competing with visible work.
 export function prefetchXM(data, run) {
   if (run?.media.xm && !xmCache.has(run.slug)) loadXM(data, run, "low").catch(() => {});
+  loadTrace(data, run, "low").catch(() => {});
 }
 
-export const mediaUrl = (data, path) => data.base + path;
+// Media paths are relative to data.json, or absolute when a publication serves media from another host.
+export const mediaUrl = (data, path) => (/^https?:\/\//.test(path) ? path : data.base + path);
 
 export const money = (v) => (v == null ? "n/a" : v < 0.01 ? "<$0.01" : "$" + v.toFixed(2));
 export const usd = (v) => "$" + Math.round(v).toLocaleString("en-US");

@@ -180,23 +180,24 @@ export const SUPPORT = {
     ],
     button: "View the contributor guide",
   },
-  // Planning estimates = assumed token use x the listed price, rounded up.
+  // Planning estimates = assumed token use x the listed price, rounded up to the next $5.
+  // Prices checked 2026-10-06 against developers.openai.com/api/docs/pricing (Standard) and Anthropic's legacy price list.
   // Run sizes: typical 1.03M input / 125k output, long 3.5M / 270k, heavy 6.9M / 333k.
   // Models with a cached-input price assume 94.5% cached input; Pro models assume full-price input.
   // Every figure covers three attempts; est uses the long-run assumption. Update prices before fundraising.
   // raised: USD donated so far towards that model; update by hand.
   // tip: shows a hover asterisk with this note.
   wanted: [
-    { model: "o1-pro", maker: "OpenAI", price: "$150/$600", typical: 690, est: 2100, heavy: 3750, raised: 0 },
-    { model: "gpt-5.5-pro", maker: "OpenAI", price: "$30/$180", typical: 165, est: 480, heavy: 810, raised: 0 },
-    { model: "gpt-5.4-pro", maker: "OpenAI", price: "$30/$180", typical: 165, est: 480, heavy: 810, raised: 0 },
-    { model: "gpt-5.2-pro", maker: "OpenAI", price: "$21/$168", typical: 135, est: 360, heavy: 630, raised: 0 },
-    { model: "o3-pro", maker: "OpenAI", price: "$20/$80", typical: 105, est: 285, heavy: 510, raised: 0 },
-    { model: "gpt-5-pro", maker: "OpenAI", price: "$15/$120", typical: 105, est: 255, heavy: 450, raised: 0 },
-    { model: "claude-3-opus", maker: "Anthropic", price: "$15/$75", typical: 45, est: 90, heavy: 135, raised: 0, tip: "I also need access to this model: it's retired and only open to researchers. If you can lend me a hand getting API access, it would be really appreciated." },
+    { model: "o1-pro", maker: "OpenAI", price: "$150/$600", typical: 690, est: 2065, heavy: 3705, raised: 0 },
+    { model: "gpt-5.5-pro", maker: "OpenAI", price: "$30/$180", typical: 165, est: 465, heavy: 805, raised: 0 },
+    { model: "gpt-5.4-pro", maker: "OpenAI", price: "$30/$180", typical: 165, est: 465, heavy: 805, raised: 0 },
+    { model: "gpt-5.2-pro", maker: "OpenAI", price: "$21/$168", typical: 130, est: 360, heavy: 605, raised: 0 },
+    { model: "o3-pro", maker: "OpenAI", price: "$20/$80", typical: 95, est: 275, heavy: 495, raised: 0 },
+    { model: "gpt-5-pro", maker: "OpenAI", price: "$15/$120", typical: 95, est: 255, heavy: 435, raised: 0 },
+    { model: "claude-3-opus", maker: "Anthropic", price: "$15/$75", typical: 40, est: 85, heavy: 125, raised: 0, tip: "I also need access to this model: it's retired and only open to researchers. If you can lend me a hand getting API access, it would be really appreciated." },
     // "GPT-6 Pro" is ChatGPT's name; the API has no gpt-6-pro ID: it is gpt-6-astra with reasoning.mode "pro", billed at Astra's rates
     // but doing several times the work. Tokens assumed 6x a normal run (gpt-5.5-pro's price is 6x gpt-5.5's).
-    { model: "gpt-6-pro", maker: "OpenAI", price: "$10/$50", typical: 150, est: 345, heavy: 495, raised: 0 },
+    { model: "gpt-6-pro", maker: "OpenAI", price: "$10/$50", typical: 145, est: 340, heavy: 490, raised: 0 },
   ],
   // Collapsible note under the wanted list.
   costHelp: {
