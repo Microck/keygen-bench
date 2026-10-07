@@ -13,6 +13,10 @@
 - Every attempt of the maintainer max-tier prompt-v2 campaigns and earlier runs under `runs/<model>/`: the three ranked attempts plus all other attempts in `other/`, with trajectories, transport logs, modules, lossless FLAC audio and evaluations (no videos).
 - Google AI Studio and Devin native routes.
 - Best/Average ordering toggle at the right of the ranking toolbar with shareable URL state and final-ordinal means, preserving the same columns, attempt views and sidebar.
+- Native Mistral and Cohere routes; per-account request pacing for Cohere trial keys, OpenRouter `:free` endpoints and Cerebras; Cerebras history-key removal.
+- Independent repetitions follow explicit `run.py retry` chains: a rerun of an unstarted slot or non-model failure becomes the ordinal's sample, and superseded attempts stay listed.
+- Static export for GitHub Pages (`--host github-pages`) with media served from public GitHub Pages repositories.
+- Crypto donation page (`/crypto`) with per-network addresses, QR codes and copy buttons, linked from Support.
 - Cracktro-style preloader replacing the "Loading..." text: starfield and a chrome keygen-style logo, with load progress shown as a decoding serial and a dithered raster reveal of the mounted page.
 
 ### Changed
@@ -27,6 +31,9 @@
 
 ### Fixed
 
+- Match model release metadata across dot/dash keys and the public names without `-contributor`, so the model dropdown sorts by release date; keep dropdown logos inside their border.
+- Restore the original page slide transition and the original spend tooltip wording.
+- Show `$0` for models that are free on their maker's API instead of `<$0.01`.
 - Price supported records per response with context tiers, cached reads and cache writes; preserve unknown amounts and count known portions of incomplete attempts without token-count deduplication.
 - Show bounded cost estimates when recorded usage and documented pricing cannot establish an exact context tier or cache-write split.
 - Keep mobile ranking identities, tracker downloads/channel controls and Support funding/spend rows readable through stacked layouts and scrolling.
