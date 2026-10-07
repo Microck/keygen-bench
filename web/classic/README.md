@@ -242,6 +242,21 @@ The live site is published with `--host github-pages` to the public repository `
 
 `--media-map` maps every media file name to its absolute URL. The live site serves MP3 renders, XM modules and one lossless FLAC loop source per WAV (`ffmpeg -c:a flac`, same name with `.flac`) from public GitHub Pages repositories (`Microck/keygen-bench-media`, `Microck/keygen-bench-media-2`; each published site must stay under 1 GB, so the files are split by size). GitHub Pages sends `Access-Control-Allow-Origin: *` and honours byte ranges, which the player's `fetch` of modules and loop sources and MP3 seeking need. The exporter rewrites `data.json` media paths to those URLs (the frontend's `mediaUrl` accepts absolute URLs), writes one HTML file per route in `dist/og/meta.json` with that route's preview tags (a static host cannot inject them per request), writes `netlify.toml` falling back to `index.html` for other app routes and redirecting `--redirect-from` hosts to the site URL, drops `dist/evaluations/` (not read by the site) and moves each run's playback trace to `dist/traces/<slug>.json`, which the tracker loads when it opens the run (`data.json` drops from 2.8 MB to 0.95 MB, about 130 kB with Brotli). Cross-origin `.XM`/`.MP3` buttons open the file instead of forcing a download, because browsers ignore `download` across origins.
 
+## Share a run as a video
+
+`make_demo.py` turns one run into a video for posting: the site's Tracker playing the tune, with a branded footer (model, score, rank, cost and the site URL), a title card, an end card and the run's own MP3 as the soundtrack. It also writes a draft post text. Output goes to `~/keygen-demos/` and is never part of the repository.
+
+```sh
+python3 web/classic/make_demo.py --model qwen3.5-397b-a17b                 # 4:3, full loop (default)
+python3 web/classic/make_demo.py --model hermes-4-405b --attempt 2 --aspect 4:3,1:1 --clip catchy --seconds 40
+```
+
+- `--aspect`: `4:3` (1440x1080), `1:1` (1080x1080), or both. Default `4:3`.
+- `--clip full` plays the whole loop, capped at the 2:20 post limit; `--clip catchy` picks the window with the most loudness and note activity. Default `full`.
+- `--attempt` defaults to the model's best attempt. `--site` defaults to the public site; for a run that is not published, serve a local publication and pass its URL.
+
+It needs `ffmpeg`, numpy and Playwright with Chromium (`python3 -m pip install -r web/classic/requirements.txt && python3 -m playwright install chromium`, or pass `--chrome` with an existing Chromium). The page is captured at 2x with the Chrome screencast; the audio start is taken from the moment the Tracker clock ticks over a whole second, so sound and picture line up within one frame.
+
 ## Regenerate fonts
 
 Only regenerate fonts when changing their source bitmaps or metrics:
