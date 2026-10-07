@@ -75,7 +75,7 @@ def public_maker(model: str, price: dict) -> str:
     product = product if separator else namespace
     prefixes = (("gpt", "OpenAI"), ("claude", "Anthropic"), ("gemini", "Google"),
                 ("gemma", "Google"), ("grok", "xAI"), ("qwen", "Alibaba"),
-                ("deepseek", "DeepSeek"), ("glm", "Zhipu (Z.ai)"), ("kimi", "Moonshot AI"),
+                ("deepseek", "DeepSeek"), ("glm", "Zhipu"), ("kimi", "Moonshot AI"),
                 ("minimax", "MiniMax"), ("mimo", "Xiaomi"), ("hy", "Tencent"),
                 ("longcat", "Meituan"), ("llama", "Meta"), ("mercury", "Inception"),
                 ("inkling", "Thinking Machines Lab"), ("muse", "Meta"),
