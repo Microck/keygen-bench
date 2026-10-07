@@ -29,10 +29,11 @@ from pathlib import Path
 import numpy as np
 import re
 
-# Output size and page layout size (CSS px) per aspect. The page is captured at 2x so the pixel font stays
-# sharp; 1:1 is laid out at 600 px because narrower windows switch the site to its phone layout.
-ASPECTS = {"4:3": ((1440, 1080), (720, 540)), "1:1": ((1080, 1080), (600, 600))}
-FOOTER = 64                      # branded bar under the site, CSS px
+# Output size and page layout size (CSS px) per aspect. The page is captured at exactly 2x, so every FT2 font
+# pixel is a 2x2 block with no resampling; 1:1 is 600 px wide because narrower windows switch the site to its
+# phone layout.
+ASPECTS = {"4:3": ((1440, 1080), (720, 540)), "1:1": ((1200, 1200), (600, 600))}
+FOOTER = 46                      # branded bar under the site, CSS px
 CARD_SECONDS = 2.0               # title and end card
 MAX_SECONDS = 140.0              # X/Twitter video limit
 FPS = 30
@@ -102,7 +103,7 @@ def bar_html(w: int, h: int, run: dict, total: int) -> str:
       <div style="display:flex;justify-content:space-between;align-items:baseline">
         <span class="big">{html.escape(run['model_key'])} <span style="color:#fff">{run['score']:.1f}</span></span><span class="big blue">keygen.micr.dev</span></div>
       <div class="dim">{html.escape(run['maker'])} | attempt {run['attempt']} | rank {run.get('rank', '-')} of {total} | cost {cost}</div>
-      <div class="blue">An AI composed this keygen tune in FastTracker II, offline, with one bash tool.</div></div>"""
+      </div>"""
     return f"<div style='width:{w}px;height:{h}px'>{body}</div>"
 
 
@@ -151,7 +152,7 @@ async def record(args, site: str, run: dict, total: int, aspect: str, start: flo
         cdp = await context.new_cdp_session(page)
 
         async def on_frame(event):
-            path = work / f"f{len(frames):06d}.jpg"
+            path = work / f"f{len(frames):06d}.png"
             path.write_bytes(base64.b64decode(event["data"]))
             frames.append((event["metadata"]["timestamp"], path))
             try:
@@ -165,7 +166,7 @@ async def record(args, site: str, run: dict, total: int, aspect: str, start: flo
             duration = run["audio"]["duration"]
             await page.mouse.click(box["x"] + box["width"] * start / duration, box["y"] + box["height"] / 2)
             await page.wait_for_timeout(500)
-        await cdp.send("Page.startScreencast", {"format": "jpeg", "quality": 92, "maxWidth": w * 2, "maxHeight": app_h * 2})
+        await cdp.send("Page.startScreencast", {"format": "png", "maxWidth": w * 2, "maxHeight": app_h * 2})
         lcd = page.locator(".transport .lcd").first
         before = await lcd.inner_text()
         await page.get_by_role("button", name="Play", exact=True).click()
@@ -191,8 +192,8 @@ async def record(args, site: str, run: dict, total: int, aspect: str, start: flo
         f.write(f"file '{rows[-1][1].name}'\n")
     app = work / "app.mp4"
     subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "concat", "-safe", "0", "-i", str(listing), "-vf",
-                    f"fps={FPS},scale={out_w}:{round(out_h * app_h / h / 2) * 2}:flags=lanczos", "-c:v", "libx264", "-crf", "16",
-                    "-pix_fmt", "yuv420p", str(app)], check=True, cwd=work)
+                    f"fps={FPS},scale={out_w}:{round(out_h * app_h / h / 2) * 2}:flags=lanczos", "-c:v", "libx264", "-qp", "0",
+                    "-pix_fmt", "yuv444p", str(app)], check=True, cwd=work)
     return app
 
 
@@ -215,7 +216,8 @@ def compose(app: Path, work: Path, mp3: Path, aspect: str, start: float, seconds
                     "-loop", "1", "-t", str(c), "-i", str(work / "title.png"),
                     "-loop", "1", "-t", str(c), "-i", str(work / "end.png"),
                     "-i", str(mp3), "-filter_complex", filtergraph, "-map", "[v]", "-map", "[a]",
-                    "-c:v", "libx264", "-crf", "18", "-preset", "slow", "-pix_fmt", "yuv420p",
+                    "-c:v", "libx264", "-crf", "10", "-preset", "slow", "-tune", "animation", "-pix_fmt", "yuv420p",
+                    "-b:v", "0", "-maxrate", "25M", "-bufsize", "50M",
                     "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", "-t", str(seconds + 2 * c), str(out)], check=True)
 
 

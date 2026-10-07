@@ -251,7 +251,7 @@ python3 web/classic/make_demo.py --model qwen3.5-397b-a17b                 # 4:3
 python3 web/classic/make_demo.py --model hermes-4-405b --attempt 2 --aspect 4:3,1:1 --clip catchy --seconds 40
 ```
 
-- `--aspect`: `4:3` (1440x1080), `1:1` (1080x1080), or both. Default `4:3`.
+- `--aspect`: `4:3` (1440x1080), `1:1` (1200x1200), or both. Default `4:3`.
 - `--clip full` plays the whole loop, capped at the 2:20 post limit; `--clip catchy` picks the window with the most loudness and note activity. Default `full`.
 - `--attempt` defaults to the model's best attempt. `--site` defaults to the public site; for a run that is not published, serve a local publication and pass its URL.
 
