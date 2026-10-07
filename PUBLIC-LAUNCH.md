@@ -15,7 +15,7 @@ Public author handles and third-party copyright notices are intentional attribut
 3. Run a secret scanner against both the release tree and all history. Classify findings without pasting credential values into issues or review comments. Rotate any exposed credential; deleting it is not revocation.
 4. Review screenshots and binary artifacts manually. Text and secret scanners do not establish absence of personal data.
 5. Choose a publication strategy before changing visibility. A new repository initialized from the reviewed release tree avoids carrying private operational history into the public repository. Rewriting the existing repository requires coordinating all refs and clones and addressing retained pull-request diffs with the hosting provider. Neither happens automatically in this PR.
-6. Choose a license for original code and documentation. This repository currently has no project-wide license grant. Public visibility alone does not grant permission to reuse it. Preserve all third-party notices, including the FT2 bitmap font license.
+6. Original code and documentation are MIT-licensed ([LICENSE](LICENSE)). Preserve all third-party notices, including the FT2 bitmap font license, which the MIT License does not cover.
 7. Build the pinned containers and exercise a full local submission/render/evaluation cycle on the intended host. Test model access only with an explicit spending budget. Offline tests do not verify provider credentials or billing.
 8. Merge the contributor validator before accepting submission PRs; its CI runs trusted code from the base branch. Keep branch protection and repository permissions appropriate for untrusted contributions.
 

@@ -76,6 +76,6 @@ runs are paid out of pocket. if you want more models tested, you can chip in thr
 
 ## license and attribution
 
-no project-wide license has been chosen yet for the code and docs. third-party material keeps its own terms: the FT2 fonts and graphics are CC BY-NC-SA 4.0 and the FT2 build pins `8bitbubsy/ft2-clone` via a fork. see [NOTICE.md](NOTICE.md) for the full list and [the public-launch checklist](PUBLIC-LAUNCH.md) before publishing a formerly private checkout.
+the code and docs are [MIT](LICENSE). third-party material keeps its own terms: the FT2 fonts and graphics are CC BY-NC-SA 4.0 and the FT2 build pins `8bitbubsy/ft2-clone` via a fork. see [NOTICE.md](NOTICE.md) for the full list and [the public-launch checklist](PUBLIC-LAUNCH.md) before publishing a formerly private checkout.
 
 to cite keygen bench, use [CITATION.cff](CITATION.cff) with the commit your experiment used.
