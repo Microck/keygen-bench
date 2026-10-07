@@ -244,18 +244,19 @@ The live site is published with `--host github-pages` to the public repository `
 
 ## Share a run as a video
 
-`make_demo.py` turns one run into a video for posting: the site's Tracker playing the tune, with a branded footer (model, score, rank, cost and the site URL), a title card, an end card and the run's own MP3 as the soundtrack. It also writes a draft post text. Output goes to `~/keygen-demos/` and is never part of the repository.
+`make_demo.py` turns one run into a video for posting: the site's Tracker playing the tune, with a branded footer (model, score, rank, cost and the site URL), an end card and the run's own MP3 as the soundtrack. It also writes a draft post text. Output goes to `~/keygen-demos/` and is never part of the repository.
 
 ```sh
 python3 web/classic/make_demo.py --model qwen3.5-397b-a17b                 # 4:3, full loop (default)
 python3 web/classic/make_demo.py --model hermes-4-405b --attempt 2 --aspect 4:3,1:1 --clip catchy --seconds 40
 ```
 
-- `--aspect`: `4:3` (1440x1080), `1:1` (1200x1200), or both. Default `4:3`.
+- `--aspect`: `4:3`, `1:1`, or both. Default `4:3`.
+- `--scale`: device pixels per site pixel. `4` (default) gives 2880x2160 / 2400x2400, where every FT2 font pixel is a 4x4 block and stays sharp after a player's chroma subsampling (X accepts 4K uploads on Premium and downsizes otherwise); `2` gives 1440x1080 / 1200x1200.
 - `--clip full` plays the whole loop, capped at the 2:20 post limit; `--clip catchy` picks the window with the most loudness and note activity. Default `full`.
 - `--attempt` defaults to the model's best attempt. `--site` defaults to the public site; for a run that is not published, serve a local publication and pass its URL.
 
-It needs `ffmpeg`, numpy and Playwright with Chromium (`python3 -m pip install -r web/classic/requirements.txt && python3 -m playwright install chromium`, or pass `--chrome` with an existing Chromium). The page is captured at 2x with the Chrome screencast; the audio start is taken from the moment the Tracker clock ticks over a whole second, so sound and picture line up within one frame.
+It needs `ffmpeg`, numpy and Playwright with Chromium (`python3 -m pip install -r web/classic/requirements.txt && python3 -m playwright install chromium`, or pass `--chrome` with an existing Chromium). The page is captured losslessly with the Chrome screencast; the audio start is taken from the moment the Tracker clock ticks over a whole second, so sound and picture line up within one frame.
 
 ## Regenerate fonts
 
