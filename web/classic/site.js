@@ -689,10 +689,10 @@ export async function mount(root, ctx) {
         ...PROMPTS.flatMap((p) => [head(p.title), h("pre", { class: "prompt sunken" }, p.text)])] },
       { id: "overview", label: "How it works", render: () => [head("How it works"), ...OVERVIEW.map(para),
         h("pre", { class: "formula" }, ["score = music points (up to 100)", "        x clean sound", "        x no broken samples", "        x clean loop", "        x long enough", "        then caps, rounded to 0.1"].join("\n"))] },
-      { id: "points", label: "Music points", render: () => SCORING.filter((m) => m.kind === "points").flatMap(measure) },
-      { id: "checks", label: "Checks", render: () => SCORING.filter((m) => m.kind !== "points").flatMap(measure) },
-      { id: "example", label: "Worked example", render: () => [head("Worked example"), para("Every run's score, step by step. Pick any run."), worked(exampleRun())] },
-      { id: "notes", label: "Fine print", render: () => SCORING_NOTES.flatMap((n) => [head(n.title), para(n.text),
+      { id: "points", label: "What earns points", render: () => SCORING.filter((m) => m.kind === "points").flatMap(measure) },
+      { id: "checks", label: "What costs points", render: () => SCORING.filter((m) => m.kind !== "points").flatMap(measure) },
+      { id: "example", label: "Example run", render: () => [head("Example run"), para("Every run's score, step by step. Pick any run."), worked(exampleRun())] },
+      { id: "notes", label: "Caveats", render: () => SCORING_NOTES.flatMap((n) => [head(n.title), para(n.text),
         n.id === "flags" ? h("table", { class: "plain" }, ...Object.entries(data.flag_rules).filter(([kk]) => kk !== "RAW_XM").map(([kk, v]) => h("tr", {}, h("td", { style: { color: "#FFAA00", whiteSpace: "nowrap", verticalAlign: "top" } }, SHORT[kk] ?? kk), h("td", { style: { color: "#fff" } }, v)))) : null]) },
     ];
     const toc = h("nav", { class: "panel raised toc", "aria-label": "Sections" }, h("h2", {}, "Help subjects"));
