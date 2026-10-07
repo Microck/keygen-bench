@@ -655,7 +655,7 @@ class NativePolicyTests(unittest.TestCase):
     def test_devin_credential_route_rejects_nonloopback_and_wrong_protocols(self):
         spec = model_spec("chat", "devin")
         spec["model"] = spec["response_model"] = "devin/exact-model"
-        for base in ("https://devin.ai/v1", "http://localhost:8417/v1", "http://100.92.22.120:8417/v1",
+        for base in ("https://devin.ai/v1", "http://localhost:8417/v1", "http://100.64.0.10:8417/v1",
                      "http://127.0.0.1/v1", "http://127.0.0.1:8417", "http://127.0.0.1:8417/v1?key=secret",
                      "http://secret@127.0.0.1:8417/v1", "http://127.0.0.1:8417/v1#key"):
             with (self.subTest(base=base), patch.dict(os.environ, {"BENCHMARK_TEST_KEY": "synthetic-only"}),
