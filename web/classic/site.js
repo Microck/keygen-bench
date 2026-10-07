@@ -5,7 +5,7 @@
 import { FB, PAL } from "./core/fb.js";
 import { drawPatternFit, drawScopes } from "./core/pattern.js";
 import { Player } from "./core/player.js";
-import { loadXM, prefetchXM, money, usd, tokens, mmss, rankingRows } from "./core/data.js";
+import { loadXM, loadTrace, prefetchXM, mediaUrl, money, usd, tokens, mmss, rankingRows } from "./core/data.js";
 import { h, badge, dropdown, makerItems, modelItems, scoreColor } from "./core/ui.js";
 import { SCORING, SCORING_NOTES, DISCLAIMER, KEYGEN, OVERVIEW, SETUP, PROMPTS, SUPPORT, SITE, PAGES } from "./core/content.js";
 import { fmt } from "./core/xm.js";
@@ -99,6 +99,8 @@ const CSS = `
 .vb .dd-pop { max-height: 60vh; }
 .vb .dd-pop .list-row { height: 17px; line-height: 17px; }
 .vb .dd-face .badge, .vb .dd-pop .badge { width: 12px !important; height: 12px !important; }
+/* The face is 14px with a 1px sunken border and 2px top padding: lift the 12px logo onto the inner box so it never covers the bottom border. */
+.vb .dd-face .badge { position: relative; top: -1px; }
 .vb .list-row { height: 10px; line-height: 10px; }
 .vb .tracker-entry { appearance: none; display: block; width: 100%; margin: 0; padding: 0 0 0 2px; border: 0; background: transparent; color: var(--pattext); font-family: inherit; font-size: inherit; text-align: left; }
 .vb .tracker-entry.sel { background: var(--pattext); color: #000; }
@@ -415,8 +417,8 @@ export async function mount(root, ctx) {
       h("div", { class: "picker-field" }, h("span", { class: "shadow-text" }, "Model"),
         dropdown({ label: "Model", items: modelItems(data, r.maker, r.slug), value: r.slug, width: 170, onChange: (s2) => ctx.go({ run: s2 }), onHover: (s2) => prefetchXM(data, data.bySlug[s2]) })),
       h("span", { class: "grow" }),
-      ...(r.media.xm ? [h("a", { class: "btn", href: data.base + r.media.xm, download: r.slug + ".xm", style: { height: "14px" } }, ".XM")] : []),
-      ...(r.media.audio ? [h("a", { class: "btn", href: data.base + r.media.audio, download: r.slug + ".mp3", style: { height: "14px" } }, ".MP3")] : []));
+      ...(r.media.xm ? [h("a", { class: "btn", href: mediaUrl(data, r.media.xm), download: r.slug + ".xm", style: { height: "14px" } }, ".XM")] : []),
+      ...(r.media.audio ? [h("a", { class: "btn", href: mediaUrl(data, r.media.audio), download: r.slug + ".mp3", style: { height: "14px" } }, ".MP3")] : []));
     V.infoHost.replaceChildren(
       h("div", { style: { color: "#fff", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, `"${m.name || "untitled"}"`),
       h("div", { class: "muted" }, `${m.channels ?? "-"} ch | ${m.bpm ?? "-"} bpm | spd ${m.speed ?? "-"}`),
@@ -445,8 +447,8 @@ export async function mount(root, ctx) {
     drawViewer();
     const audio = new Audio();
     audio.preload = "auto";
-    if (r.media.audio) audio.src = data.base + r.media.audio;
-    const song = r.media.xm ? await loadXM(data, r).catch(() => null) : null;
+    if (r.media.audio) audio.src = mediaUrl(data, r.media.audio);
+    const [song] = await Promise.all([r.media.xm ? loadXM(data, r).catch(() => null) : null, loadTrace(data, r).catch(() => {})]);
     if (tok !== V.loadToken) { audio.src = ""; return; }
     V.song = song; V.loading = false;
     const orders = song ? song.orders.slice(0, song.songLength) : [];
@@ -734,12 +736,13 @@ export async function mount(root, ctx) {
   }
 
   // ---------------- Support ----------------
-  // Hover note for the spend total: short lines instead of one paragraph.
+  // Hover note for the spend total: the attempt count, the ledger's basis, then coverage and the price caveat.
   const spendTip = (l) => [
     `${l.runs} recorded attempts.`,
-    `${l.bounded_runs ?? 0} bounded estimates; ${l.unknown_cost_runs ?? l.unpriced_runs} attempts with missing costs.`,
-    "Recorded usage only. Missing costs are excluded.",
-    "List-price estimate, not a provider bill.",
+    l.basis,
+    `${l.bounded_runs ?? 0} attempts have bounded estimates; ${l.unknown_cost_runs ?? l.unpriced_runs} have missing or incomplete evidence.`,
+    l.recorded_usage_cost_range_usd ? `Recorded usage range: ${rangeText(l.recorded_usage_cost_range_usd)}. Missing usage is excluded; this is not a lifetime-spend upper bound.` : null,
+    "An estimate at list price, not an actual bill.",
   ].filter(Boolean).join("\n");
   function support() {
     main.style.gridTemplateColumns = "minmax(0,1fr) minmax(0,1fr)";

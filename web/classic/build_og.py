@@ -94,7 +94,8 @@ def canvas():
 
 
 def base_name(name):
-    return re.sub(r"\s*\(attempt \d+\)\s*$", "", name, flags=re.I)
+    # "glm-5-3 (max-tier, attempt 2)" / "glm-5-3 (attempt 2)" / "glm-5-3 (max-tier)" -> "glm-5-3"
+    return re.sub(r"\s*\((?:[^()]*,\s*)?attempt\s+\d+\)\s*$|\s*\(max-tier\)\s*$", "", name, flags=re.I)
 
 
 def models(data):
@@ -123,13 +124,20 @@ def home(ms, path, date):
     text(d, (W - 6 * K, 12 * K), SITE, font(1, 20), PAL["dim"], anchor="ra")
     sunken(d, [5 * K, 50 * K, W - 5 * K - 1, H - 6 * K - 1])
     row = 29 * K
-    for i, m in enumerate(ms[:5]):
+    top = ms[:5]
+    # The bar track ends a clear gap before the widest score, so a full bar never touches its number.
+    score_w = max(d.textlength(f"{m['best']['score']:.1f}", font=BIG) for m in top)
+    bar_w = 80 * K
+    bar_x = W - 12 * K - score_w - 10 * K - bar_w
+    for i, m in enumerate(top):
         y = 54 * K + i * row
         s = m["best"]["score"]
         text(d, (12 * K, y + 4 * K), str(m["rank"]), BIG, PAL["white"])
         logo(img, m["maker"], 34 * K, y + 5 * K, 4)
-        text(d, (62 * K, y + 7 * K), m["label"], SMALL if len(m["label"]) > 22 else font(1, 13 * K), PAL["pattext"])
-        bar_x, bar_w = 250 * K, 100 * K
+        name_font = font(1, 13 * K)
+        if d.textlength(m["label"], font=name_font) > bar_x - 68 * K:
+            name_font = SMALL
+        text(d, (62 * K, y + 7 * K), m["label"], name_font, PAL["pattext"])
         d.rectangle([bar_x, y + 9 * K, bar_x + round(bar_w * s / 100), y + 15 * K], fill=score_color(s))
         text(d, (W - 12 * K, y + 4 * K), f"{s:.1f}", BIG, PAL["white"], anchor="ra")
     img.save(path, optimize=True)
