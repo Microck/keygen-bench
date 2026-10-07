@@ -1,0 +1,48 @@
+{
+  "config": {
+    "base_url": "http://127.0.0.1:8417/v1",
+    "api_key_env": "CLIPROXY_CLIENT_KEY",
+    "proxy_version": "dev build 2026-09-22, binary sha256 4d4958947ab42f9b698374c357737a83e199159bbb20191272285ab5953279d2",
+    "image": "keygen-ft2-benchmark:local",
+    "visualizer_image": "keygen-ft2-visualizer:local",
+    "limits": {
+      "steps": 30,
+      "wall_seconds": 900,
+      "request_seconds": 180,
+      "command_seconds": 120,
+      "render_seconds": 300,
+      "video_seconds": 600,
+      "artifact_bytes": 134217728
+    },
+    "generation": {
+      "max_tokens": 32768,
+      "reasoning_effort": "low"
+    },
+    "models": [
+      {
+        "id": "gpt-6-astra",
+        "model": "gpt-6-astra",
+        "response_model": "gpt-6-astra"
+      }
+    ],
+    "proxy_policy": {
+      "config_sha256": "a3bc3ab8b201f06efd61f5f10b171e59c884d4a953f6d60ca2347a52caf6a392",
+      "port": 8417,
+      "auth_overrides_audited": false,
+      "upstream_payload_verified": false
+    },
+    "system": "You are composing music in an isolated workspace. Use the bash tool to run commands and complete the task.\nEach command runs in /workspace in a fresh bash shell; files and the FT2 session persist between commands. Budget: 30 commands and 15 minutes.\nThe `ft2 list` command describes the tracker tools. `ft2 call TOOL 'JSON_OBJECT'` calls one tool. `ft2 batch FILE.json` executes a list of {\"name\": TOOL, \"arguments\": {...}} calls in order.\nThis FT2 build exposes samples, instruments by name, patterns, order, tempo, save and render. Envelopes and note-to-sample mapping are unavailable; shape sounds in the sample data itself.\nPython 3 and NumPy are available for creating original sound material, editing files, and analyzing renders.\nThe workspace is offline: no network, no coding-agent client, no skill library. You cannot hear audio; render to WAV with module_render and inspect the result with NumPy to check your work, then revise.\nA keygen tune plays in a loop. Compose so the module loops cleanly from its end back to its restart position.\nSave the final editable module as /workspace/submission/tune.xm. A WAV preview and source scripts may accompany it. A trusted process renders the final XM separately.\nSubmit by running exactly this command:\necho COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT\nSubmission ends the session. There is no second attempt or post-submission repair.\n",
+    "task": "You have FastTracker II and Python/NumPy at your disposal. Make an original keygen tune. Music only.\nChoose the sound, tempo, harmony, rhythm, instruments, length and arrangement yourself.\n"
+  },
+  "model": {
+    "id": "gpt-6-astra",
+    "model": "gpt-6-astra",
+    "response_model": "gpt-6-astra"
+  },
+  "docker": [
+    "/usr/bin/docker",
+    "--host",
+    "unix:///var/run/docker.sock"
+  ],
+  "container": "keygen-create-c44b2df078b54513"
+}
