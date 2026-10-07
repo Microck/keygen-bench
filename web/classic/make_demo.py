@@ -2,7 +2,7 @@
 """Make a branded, shareable video of one benchmark run: the site's Tracker playing the tune.
 
 The video shows the real results site (FT2 Tracker with moving pattern editor and scopes) above a branded
-footer (model, score, rank, cost, URL), with a title card before, an end card after, and the run's own MP3
+footer (model, score, rank, cost, URL) and an end card, with the run's own MP3
 as the soundtrack.
 Output is written to a private folder and is never part of the repository.
 
@@ -29,12 +29,13 @@ from pathlib import Path
 import numpy as np
 import re
 
-# Output size and page layout size (CSS px) per aspect. The page is captured at exactly 2x, so every FT2 font
-# pixel is a 2x2 block with no resampling; 1:1 is 600 px wide because narrower windows switch the site to its
-# phone layout.
-ASPECTS = {"4:3": ((1440, 1080), (720, 540)), "1:1": ((1200, 1200), (600, 600))}
+# Page layout size (CSS px) per aspect; 1:1 is 600 px wide because narrower windows switch the site to its
+# phone layout. The page is captured at --scale device pixels per CSS px, so each FT2 font pixel is an exact
+# scale x scale block. At 4 (default, 2880x2160 / 2400x2400) a player's 4:2:0 chroma blur stays inside each
+# block; at 2 (1440x1080 / 1200x1200) colored text edges soften visibly.
+ASPECTS = {"4:3": (720, 540), "1:1": (600, 600)}
 FOOTER = 46                      # branded bar under the site, CSS px
-CARD_SECONDS = 2.0               # title and end card
+CARD_SECONDS = 2.0               # end card
 MAX_SECONDS = 140.0              # X/Twitter video limit
 FPS = 30
 PUBLIC_URL = "https://keygen.micr.dev"
@@ -107,18 +108,13 @@ def bar_html(w: int, h: int, run: dict, total: int) -> str:
     return f"<div style='width:{w}px;height:{h}px'>{body}</div>"
 
 
-def card_html(kind: str, w: int, h: int, run: dict, total: int) -> str:
-    if kind == "title":
-        lines = f"""<div class="big" style="font-size:40px;line-height:40px">KEYGEN BENCH</div>
-          <div class="blue" style="font-size:20px;line-height:22px">Can an AI write keygen music?</div>
-          <div class="well" style="padding:10px 14px;margin-top:10px"><div class="big">{html.escape(run['model_key'])}</div>
-          <div class="dim" style="margin-top:4px">{html.escape(run['maker'])}</div></div>"""
-    else:
-        lines = f"""<div class="big" style="font-size:40px;line-height:40px">{run['score']:.1f}</div>
-          <div class="dim">{html.escape(run['model_key'])} | rank {run.get('rank', '-')} of {total}</div>
-          <div class="well" style="padding:10px 14px;margin-top:10px;text-align:center">
-          <div class="dim">Every model, 3 attempts, scored in FastTracker II</div>
-          <div class="big blue" style="margin-top:6px">keygen.micr.dev</div></div>"""
+def card_html(w: int, h: int, run: dict, total: int) -> str:
+    """End card: the score, the rank and the site URL."""
+    lines = f"""<div class="big" style="font-size:40px;line-height:40px">{run['score']:.1f}</div>
+      <div class="dim">{html.escape(run['model_key'])} | rank {run.get('rank', '-')} of {total}</div>
+      <div class="well" style="padding:10px 14px;margin-top:10px;text-align:center">
+      <div class="dim">Every model, 3 attempts, scored in FastTracker II</div>
+      <div class="big blue" style="margin-top:6px">keygen.micr.dev</div></div>"""
     return f'<div class="card bevel" style="align-items:center;justify-content:center;gap:8px;text-align:center">{lines}</div>'
 
 
@@ -133,17 +129,17 @@ async def render_png(page, site: str, markup: str, w: int, h: int, out: Path) ->
 
 async def record(args, site: str, run: dict, total: int, aspect: str, start: float, seconds: float, work: Path) -> Path:
     from playwright.async_api import async_playwright
-    (out_w, out_h), (w, h) = ASPECTS[aspect]
+    w, h = ASPECTS[aspect]
+    k = args.scale
     app_h = h - FOOTER
     async with async_playwright() as p:
         browser = await p.chromium.launch(executable_path=args.chrome, args=["--autoplay-policy=no-user-gesture-required"])
-        context = await browser.new_context(viewport={"width": w, "height": app_h}, device_scale_factor=2)
+        context = await browser.new_context(viewport={"width": w, "height": app_h}, device_scale_factor=k)
         page = await context.new_page()
         # Branded stills come from the site's own stylesheet and FT2 fonts (same origin as the site).
         await page.goto(f"{site}/robots.txt")
         await render_png(page, site, bar_html(w, FOOTER, run, total), w, FOOTER, work / "footer.png")
-        await render_png(page, site, card_html("title", w, h, run, total), w, h, work / "title.png")
-        await render_png(page, site, card_html("end", w, h, run, total), w, h, work / "end.png")
+        await render_png(page, site, card_html(w, h, run, total), w, h, work / "end.png")
         await page.set_viewport_size({"width": w, "height": app_h})
         await page.goto(f"{site}/tracker/{run['model_key']}/{run['attempt']}", wait_until="domcontentloaded")
         await page.wait_for_function("document.querySelector('.transport .lcd') && document.querySelector('.seek')", timeout=60000)
@@ -166,7 +162,7 @@ async def record(args, site: str, run: dict, total: int, aspect: str, start: flo
             duration = run["audio"]["duration"]
             await page.mouse.click(box["x"] + box["width"] * start / duration, box["y"] + box["height"] / 2)
             await page.wait_for_timeout(500)
-        await cdp.send("Page.startScreencast", {"format": "png", "maxWidth": w * 2, "maxHeight": app_h * 2})
+        await cdp.send("Page.startScreencast", {"format": "png", "maxWidth": w * k, "maxHeight": app_h * k})
         lcd = page.locator(".transport .lcd").first
         before = await lcd.inner_text()
         await page.get_by_role("button", name="Play", exact=True).click()
@@ -192,33 +188,31 @@ async def record(args, site: str, run: dict, total: int, aspect: str, start: flo
         f.write(f"file '{rows[-1][1].name}'\n")
     app = work / "app.mp4"
     subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "concat", "-safe", "0", "-i", str(listing), "-vf",
-                    f"fps={FPS},scale={out_w}:{round(out_h * app_h / h / 2) * 2}:flags=lanczos", "-c:v", "libx264", "-qp", "0",
+                    f"fps={FPS},scale={w * k}:{app_h * k}:flags=neighbor", "-c:v", "libx264", "-qp", "0",
                     "-pix_fmt", "yuv444p", str(app)], check=True, cwd=work)
     return app
 
 
-def compose(app: Path, work: Path, mp3: Path, aspect: str, start: float, seconds: float, out: Path) -> None:
-    (out_w, out_h), (_, h) = ASPECTS[aspect]
-    foot = out_h - round(out_h * (h - FOOTER) / h / 2) * 2
+def compose(app: Path, work: Path, mp3: Path, aspect: str, k: int, start: float, seconds: float, out: Path) -> None:
+    w, h = ASPECTS[aspect]
+    out_w, out_h, foot = w * k, h * k, FOOTER * k
     c = CARD_SECONDS
     fade = min(1.5, seconds / 4)
     filtergraph = (
-        f"[1:v]scale={out_w}:{foot}:flags=lanczos[ft];"
+        f"[1:v]scale={out_w}:{foot}:flags=neighbor[ft];"
         f"[0:v][ft]vstack=inputs=2,fps={FPS},setsar=1[main];"
-        f"[2:v]scale={out_w}:{out_h},fps={FPS},setsar=1,format=yuv420p[ti];"
-        f"[3:v]scale={out_w}:{out_h},fps={FPS},setsar=1,format=yuv420p[en];"
-        f"[main]format=yuv420p[mn];[ti][mn][en]concat=n=3:v=1:a=0[v];"
-        f"[4:a]atrim=start={start}:duration={seconds},asetpts=PTS-STARTPTS,afade=t=in:d=0.05,"
-        f"afade=t=out:st={seconds - fade}:d={fade},adelay={int(c * 1000)}:all=1,apad=whole_dur={seconds + 2 * c}[a]"
+        f"[2:v]scale={out_w}:{out_h}:flags=neighbor,fps={FPS},setsar=1,format=yuv420p[en];"
+        f"[main]format=yuv420p[mn];[mn][en]concat=n=2:v=1:a=0[v];"
+        f"[3:a]atrim=start={start}:duration={seconds},asetpts=PTS-STARTPTS,afade=t=in:d=0.05,"
+        f"afade=t=out:st={seconds - fade}:d={fade},apad=whole_dur={seconds + c}[a]"
     )
     subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", str(app),
                     "-loop", "1", "-t", str(seconds), "-i", str(work / "footer.png"),
-                    "-loop", "1", "-t", str(c), "-i", str(work / "title.png"),
                     "-loop", "1", "-t", str(c), "-i", str(work / "end.png"),
                     "-i", str(mp3), "-filter_complex", filtergraph, "-map", "[v]", "-map", "[a]",
                     "-c:v", "libx264", "-crf", "10", "-preset", "slow", "-tune", "animation", "-pix_fmt", "yuv420p",
-                    "-b:v", "0", "-maxrate", "25M", "-bufsize", "50M",
-                    "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", "-t", str(seconds + 2 * c), str(out)], check=True)
+                    "-b:v", "0", "-maxrate", "60M", "-bufsize", "120M",
+                    "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", "-t", str(seconds + c), str(out)], check=True)
 
 
 def main() -> None:
@@ -231,6 +225,8 @@ def main() -> None:
     parser.add_argument("--seconds", type=float, default=40, help="Length of the catchy clip (default 40)")
     parser.add_argument("--site", default=PUBLIC_URL, help="Results site URL (default: the public site)")
     parser.add_argument("--out", type=Path, default=Path.home() / "keygen-demos", help="Output folder (default ~/keygen-demos)")
+    parser.add_argument("--scale", type=int, choices=[2, 3, 4], default=4,
+                        help="Device pixels per CSS px: 4 = 2880x2160 / 2400x2400 (default, sharpest), 2 = 1440x1080 / 1200x1200")
     parser.add_argument("--chrome", help="Chromium executable (default: Playwright's)")
     args = parser.parse_args()
     aspects = [a.strip() for a in args.aspect.split(",")]
@@ -247,7 +243,7 @@ def main() -> None:
         with urllib.request.urlopen(media_url(site, run["media"]["audio"]), timeout=120) as response:
             mp3.write_bytes(response.read())
         length = float(run["audio"]["duration"])
-        budget = MAX_SECONDS - 2 * CARD_SECONDS
+        budget = MAX_SECONDS - CARD_SECONDS
         if args.clip == "full":
             start, seconds = 0.0, min(length, budget)
         else:
@@ -258,9 +254,9 @@ def main() -> None:
             frames.mkdir()
             app = asyncio.run(record(args, site, run, total, aspect, start, seconds, frames))
             name = f"{run['model_key']}-a{run['attempt']}-{args.clip}-{aspect.replace(':', 'x')}.mp4"
-            compose(app, frames, mp3, aspect, start, seconds, args.out / name)
+            compose(app, frames, mp3, aspect, args.scale, start, seconds, args.out / name)
             shutil.rmtree(frames)
-            print(f"{args.out / name}  ({seconds + 2 * CARD_SECONDS:.0f} s, starts at {start:.0f} s of the tune)")
+            print(f"{args.out / name}  ({seconds + CARD_SECONDS:.0f} s, starts at {start:.0f} s of the tune)")
     url = f"{PUBLIC_URL}/tracker/{run['model_key']}/{run['attempt']}"
     tweet = (f"{run['model_key']} ({run['maker']}) composed this keygen tune in FastTracker II, offline, with one bash tool.\n"
              f"Score {run['score']:.1f}, rank {run.get('rank', '-')} of {total} on Keygen Bench.\n{url}")
