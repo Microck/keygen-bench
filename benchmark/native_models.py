@@ -9,6 +9,7 @@ No bridge route is ready until its exact protocol and settings pass a real gate.
 """
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import ipaddress
 import json
@@ -18,16 +19,17 @@ import os
 import re
 import socket
 import threading
+import time
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
 LITELLM_VERSION = "1.102.1"
-PROVIDERS = {"go", "vercel", "nim", "google", "mistral", "devin", "anthropic_oauth", "codex_oauth", "openai", "anthropic", "custom"}
+PROVIDERS = {"go", "vercel", "nim", "google", "mistral", "cohere", "devin", "anthropic_oauth", "codex_oauth", "openai", "anthropic", "custom"}
 BRIDGE_PROVIDERS = {"devin", "anthropic_oauth", "codex_oauth"}
 # Protocol selection controls the native SDK, never a provider-name heuristic.
 PROTOCOLS = {"go": {"chat", "responses", "messages"}, "vercel": {"chat", "responses"}, "nim": {"chat"},
-             "google": {"chat"}, "mistral": {"chat"}, "devin": {"chat"}, "anthropic_oauth": {"messages"}, "codex_oauth": {"responses"},
+             "google": {"chat"}, "mistral": {"chat"}, "cohere": {"chat"}, "devin": {"chat"}, "anthropic_oauth": {"messages"}, "codex_oauth": {"responses"},
              "openai": {"chat", "responses"}, "anthropic": {"messages"},
              "custom": {"chat", "responses", "messages"}}
 # LiteLLM provider prefix per route; Google AI Studio uses LiteLLM's native Gemini provider
@@ -74,6 +76,14 @@ HISTORY_KEY_REMOVALS = {
                                 "value": {"refusal": None}},
 }
 HISTORY_KEY_REMOVAL_MODEL = "GoStrictHistoryLitellmModel"
+# Routes whose Chat API rejects assistant-history keys the SDK adds (HTTP 400 "property ... is unsupported").
+# Unlike the Go removals these keys carry the model's earlier reasoning text, so their values are dropped
+# whatever they hold; this is what any client of the route must send. Keyed by API host.
+HISTORY_KEY_DROPS = {
+    "api.cerebras.ai": {"role": "assistant", "keys": ["reasoning_content", "provider_specific_fields"],
+                        "reason": "Cerebras Chat rejects these assistant-history properties as unsupported"},
+}
+HISTORY_KEY_DROP_MODEL = "UnsupportedHistoryKeysLitellmModel"
 WIRE_GENERATION_FIELDS = (
     "max_tokens", "max_completion_tokens", "max_output_tokens", "temperature",
     "reasoning_effort", "reasoning", "thinking", "output_config", "chat_template_kwargs",
@@ -107,6 +117,49 @@ FORMAT_ERROR = (
 )
 
 
+# Routes with a published per-minute cap per account: Cohere trial keys and OpenRouter ":free" endpoints
+# (20 requests/min), Cerebras (150k tokens/min, so a request's slot grows with its estimated input size). A request over the cap is a 429, which ends the attempt as QUOTA (never
+# retried), so request starts are spaced below the cap. Each attempt runs in its own worker process, so
+# the schedule lives in a lock-protected file per account bucket on the controller host; the wait counts
+# toward the attempt's wall time.
+REQUEST_PACING_SECONDS = 60 / 18
+# Cerebras' token cap is kept at 90%; input tokens are estimated as payload characters / 3 (an over-estimate).
+TOKEN_PACING = {"cerebras": 135_000}
+REQUEST_PACING_DIR = Path("/tmp/keygen-request-pacing")
+
+
+def pacing_bucket(model: dict) -> str | None:
+    if model["provider"] == "cohere":
+        return "cohere"
+    if urlsplit(model.get("base_url") or "").hostname == "api.cerebras.ai":
+        return "cerebras"
+    if model["model"].endswith(":free") and urlsplit(model.get("base_url") or "").hostname == "openrouter.ai":
+        return "openrouter-free"
+    return None
+
+
+def wait_for_request_slot(bucket: str, payload_chars: int = 0) -> None:
+    REQUEST_PACING_DIR.mkdir(mode=0o700, exist_ok=True)
+    with open(REQUEST_PACING_DIR / bucket, "a+") as handle:
+        fcntl.flock(handle, fcntl.LOCK_EX)
+        handle.seek(0)
+        try:
+            scheduled = float(handle.read() or 0)
+        except ValueError:
+            scheduled = 0.0
+        now = time.time()
+        start = max(now, scheduled)
+        handle.seek(0)
+        handle.truncate()
+        slot = REQUEST_PACING_SECONDS
+        if bucket in TOKEN_PACING:
+            slot = max(slot, payload_chars / 3 * 60 / TOKEN_PACING[bucket])
+        handle.write(repr(start + slot))
+        handle.flush()
+    if start > now:
+        time.sleep(start - now)
+
+
 def transport_retry_policy(retries: int) -> dict:
     """LiteLLM RetryPolicy fields: `retries` for transport classes, 0 for everything else."""
     return {**{key: retries for key in RETRIED_ERRORS}, **{key: 0 for key in NEVER_RETRIED_ERRORS}}
@@ -136,13 +189,14 @@ def validate_url(url: str, provider: str | None = None, api: str | None = None) 
             raise ValueError("Credential bridge must use explicit http://127.0.0.1:PORT")
         if path != "/v1":
             raise ValueError("Credential bridge base_url must end in /v1")
-    elif provider in {"go", "vercel", "nim", "google", "mistral", "openai", "anthropic"}:
+    elif provider in {"go", "vercel", "nim", "google", "mistral", "cohere", "openai", "anthropic"}:
         expected = {
             "go": ("opencode.ai", "/zen/go/v1"),
             "vercel": ("ai-gateway.vercel.sh", "/v1"),
             "nim": ("integrate.api.nvidia.com", "/v1"),
             "google": ("generativelanguage.googleapis.com", "/v1beta"),
             "mistral": ("api.mistral.ai", "/v1"),
+            "cohere": ("api.cohere.ai", "/compatibility/v1"),
             "openai": ("api.openai.com", "/v1"),
             "anthropic": ("api.anthropic.com", "/v1"),
         }[provider]
@@ -526,6 +580,12 @@ def validate_model(config: dict, model: dict) -> dict:
         kwargs.pop("api_base")
     if provider == "go":
         kwargs["extra_headers"] = {"User-Agent": "keygen-benchmark/mini-swe-agent-2.4.6"}
+    if provider == "cohere":
+        # Cohere's Chat API rejects a whole reply (HTTP 400, "all generated tool calls were hallucinated") when
+        # the model calls a function that is not declared, e.g. an FT2 tool name read from `ft2 list`. Other
+        # routes return such a call to the agent as a format error. strict_tools constrains generation to the
+        # declared bash tool so the reply reaches the agent; it is a fixed route setting, not a generation field.
+        kwargs["extra_body"] = {"strict_tools": True}
     # SDK optional params include transport defaults and an extra_body envelope.
     # Both SDK paths expand extra_body into the wire body; it is not a generation field.
     wire_parameters = effective_generation | effective_generation.get("extra_body", {})
@@ -555,10 +615,15 @@ def validate_model(config: dict, model: dict) -> dict:
         "cost_policy": "native estimate when positive; zero/missing is unknown, not free",
         "observation_time_left": "every tool result, rendered by original native formatter",
     }
+    if pacing_bucket(model):
+        effective["request_pacing"] = {"bucket": pacing_bucket(model), "min_seconds_between_requests": REQUEST_PACING_SECONDS}
     removal = HISTORY_KEY_REMOVALS.get((provider, api, model["model"]))
     if removal is not None:
         # Only declared routes carry this field; every other route's settings are unchanged.
         effective["history_key_removal"] = {**removal, "model_type": f"native_models.{HISTORY_KEY_REMOVAL_MODEL}"}
+    drop = HISTORY_KEY_DROPS.get(urlsplit(model.get("base_url") or "").hostname)
+    if drop is not None and removal is None:
+        effective["history_key_removal"] = {**drop, "model_type": f"native_models.{HISTORY_KEY_DROP_MODEL}"}
     return effective
 
 
@@ -723,6 +788,8 @@ def _construct_model(config: dict, model: dict, run_dir: Path, effective: dict):
     from minisweagent.models.litellm_model import LitellmModel
     from minisweagent.models.litellm_response_model import LitellmResponseModel
 
+    pacing = pacing_bucket(model)
+
     class NativeAudit(CustomLogger):
         # This is a supported SDK observability callback, not a model wrapper.
         def __init__(self):
@@ -735,7 +802,10 @@ def _construct_model(config: dict, model: dict, run_dir: Path, effective: dict):
                 stream.write(json.dumps(record, allow_nan=False) + "\n")
 
         def log_pre_api_call(self, model, messages, kwargs):
+            # LiteLLM calls this synchronously right before sending, so the wait delays the request itself.
             payload = kwargs.get("additional_args", {}).get("complete_input_dict")
+            if pacing is not None:
+                wait_for_request_slot(pacing, len(json.dumps(payload, default=str)) if isinstance(payload, dict) else 0)
             if not isinstance(payload, dict):
                 return
             # The SDK expands an extra_body envelope into the HTTP body; record it as sent.
@@ -780,7 +850,22 @@ def _construct_model(config: dict, model: dict, run_dir: Path, effective: dict):
         kwargs["extra_headers"]["x-opencode-session"] = digest(str(run_dir.resolve()))
     cls = LitellmResponseModel if model["api"] == "responses" else LitellmModel
     removal = effective.get("history_key_removal")
-    if removal is not None:
+    if removal is not None and "keys" in removal:
+        if HISTORY_KEY_DROPS.get(urlsplit(model.get("base_url") or "").hostname) is None:
+            raise ValueError("History key drops are declared only for their exact API host")
+        dropped = frozenset(removal["keys"])
+
+        class UnsupportedHistoryKeysLitellmModel(cls):
+            """The original model class; outgoing assistant copies omit keys the route rejects."""
+
+            def _prepare_messages_for_api(self, messages: list[dict]) -> list[dict]:
+                return [{key: item for key, item in message.items() if key not in dropped}
+                        if message.get("role") == removal["role"] else message
+                        for message in super()._prepare_messages_for_api(messages)]
+
+        UnsupportedHistoryKeysLitellmModel.__module__ = "native_models"
+        cls = UnsupportedHistoryKeysLitellmModel
+    elif removal is not None:
         if HISTORY_KEY_REMOVALS.get((model["provider"], model["api"], model["model"])) is None:
             raise ValueError("History key removal is declared only for its exact provider route")
 
