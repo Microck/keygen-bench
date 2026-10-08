@@ -1,0 +1,16 @@
+diff --git a/internal/registry/model_updater.go b/internal/registry/model_updater.go
+index e7bb82d..489426d 100644
+--- a/internal/registry/model_updater.go
++++ b/internal/registry/model_updater.go
+@@ -20,7 +20,11 @@ const (
+ 	modelsRefreshInterval = 3 * time.Hour
+ )
+ 
++// keygen-benchmark patch (2026-10-07): Claude Haiku 5.5 shipped before the upstream catalog listed it.
++// The embedded catalog and the first refresh source are router-for-me/models PR #80 (adds claude-haiku-5-5);
++// once that merges and its branch is gone, refresh falls through to the upstream sources below.
+ var modelsURLs = []string{
++	"https://raw.githubusercontent.com/tandetat/models/feat/claude-haiku-5-5/models.json",
+ 	"https://raw.githubusercontent.com/router-for-me/models/refs/heads/main/models.json",
+ 	"https://models.router-for.me/models.json",
+ }
