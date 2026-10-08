@@ -1,0 +1,50 @@
+{
+  "title": "Night Serial (original keygen loop, A minor)",
+  "module": {
+    "file": "tune.xm",
+    "format": "XM (FastTracker II)",
+    "channels": 12,
+    "patterns": 6,
+    "rows_per_pattern": 64,
+    "instruments": 12,
+    "tempo_bpm": 150,
+    "speed": 6,
+    "order": [
+      0,
+      1,
+      2,
+      3,
+      1,
+      4,
+      5
+    ],
+    "restart_position": 1,
+    "structure": "INTRO(pos0, plays once) | A1 A2 BREAK A1 C1 C2 (loop body, pos1-6) -> back to pos1",
+    "length_seconds_one_pass": 44.8,
+    "loop_body_seconds": 38.4
+  },
+  "sources": {
+    "sample_synthesis": "src/make_samples.py (seeded NumPy synthesis, no third-party audio)",
+    "composition": "src/compose.py (original melodies, progressions, drum and FX patterns)",
+    "batch": "src/compose_batch.json (exact FT2 call list used to build the module)"
+  },
+  "verification": {
+    "xm_header_order_restart": "parsed independently: song_len 7, restart 1, order [0,1,2,3,1,4,5]",
+    "sample_data": "all 12 instruments decode (XM delta coding) to exactly the generated WAV (src/verify_xm.py: ALL OK)",
+    "clipping": "0 full-scale samples in the preview render; peak -1.97 dBFS, RMS -17.9 dBFS",
+    "loop_seam": "C2 -> A1 join: largest sample step within +-1 ms is 0.9x the local median step (no click)",
+    "other_joins": "all other pattern joins are <= 3.5x the local median step; the largest ones are the designed kick/crash attacks on downbeats, not cut-off tones (sustained voices are released or faded before each join)"
+  },
+  "limitations": "Verified by analysis (spectra, levels, seam metrics, file parsing); the render was not auditioned by ear.",
+  "hashes_sha256": {
+    "tune.xm": "33391458a5af7f6dd40ea23653690e833f3a52d27011e9db1d98aa5fbbdc3761",
+    "tune_preview.wav": "935c82f0044907f576bb087045472e47e092f689f5deb4af0b393683484e4abc",
+    "src/analyze.py": "7f0006bbe5a6984f91d769d0a6c22b7436f266e48a7502ea8be623ddb912448b",
+    "src/compose.py": "5e6ded34c4b60404b8d7f6ec9085de5defe8325dfae4f15fdbad3543b7319eda",
+    "src/compose_batch.json": "454da149b67a72c0e92b3a14ad20f109ac5454f4fbde28af43b554923cd1ebbc",
+    "src/make_samples.py": "c43258045fd4b5240cb29ae699af2e7f604fcfeb8cf13d41d88c3947176c6dae",
+    "src/seamcheck.py": "4bd6d00afb13d6cdab18caeac4d9e3dffe2df365def6adad3686e511da149279",
+    "src/verify_xm.py": "2e9f631b3d7a43ede081fc3a10c4f6b7d76e0babf0cfa5c234e2c249efd198d6",
+    "src/xmcheck.py": "803e45a000f643632d903f2346df99313bbe346573c24d93e195eb165b35f0c8"
+  }
+}
