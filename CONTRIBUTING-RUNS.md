@@ -42,6 +42,15 @@ from another application's credential store. The bridge credential goes in
 `KEYGEN_CONTRIB_API_KEY`; only its executable digest is exported.
 Doctor checks a bridge listener without sending an inference request.
 
+Before either command runs a benchmark attempt, it performs a real native
+readiness pilot with the same model, provider, protocol, endpoint, tier,
+generation settings and agent image. The pilot makes provider requests and may
+incur cost. Each smoke or run invocation performs its own pilot, even if a prior
+smoke passed. The pilot is not a benchmark attempt. Its proof and diagnostic
+files stay in the private work directory, never in the public bundle. If the
+pilot does not verify the native route, the CLI stops before starting a smoke
+or any of the three official attempts.
+
 Try a short paid model smoke run before committing to three full attempts:
 
 ```sh
@@ -143,13 +152,17 @@ class, and executable SHA-256. It does not publish the bridge address, port,
 or executable path. The hash identifies the supplied binary; it does not prove
 which server handled requests or what that server sent upstream.
 
-Use new work and output directories. The command reuses `run.py` and native
-campaign settings. It freezes mini-swe-agent 2.4.6, one bash tool, prompt-v2,
-120 minutes per attempt, no step limit, 120 seconds per command, 60 minutes per
-request, and a 128 MiB / 4096-file submission limit. It runs all three attempts,
-including after failures. Do not rerun and choose better outcomes. If stopped,
-keep the private work and report the interruption in an issue before spending
-more. An incomplete bundle fails validation.
+Use new work and output directories. Before starting the three attempts, the
+command runs a real native readiness pilot with the exact configured route and
+settings. The pilot makes provider requests and may incur cost. Each invocation
+runs a fresh pilot, and its proof stays in the private work directory. If the
+pilot fails, no benchmark attempt starts. After qualification, the command reuses
+`run.py` and native campaign settings. It freezes mini-swe-agent 2.4.6, one bash
+tool, prompt-v2, 120 minutes per attempt, no step limit, 120 seconds per
+command, 60 minutes per request, and a 128 MiB / 4096-file submission limit. It
+runs all three attempts, including after failures. Do not rerun and choose
+better outcomes. If stopped, keep the private work and report the interruption
+in an issue before spending more. An incomplete bundle fails validation.
 
 The output directory is the package. Do not copy the private work directory.
 It contains controller files that are not for publication. The output starts

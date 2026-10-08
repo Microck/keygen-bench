@@ -19,6 +19,7 @@ from validate_bundle import (ATTEMPTS, BRIDGE_PROVIDERS, LIMITS, contract,
 HERE = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(HERE))
 import campaign
+import native_readiness
 import run
 from artifacts import ArtifactStore
 from native_models import PROVIDERS, PROTOCOLS, declared_reasoning, check_tier, validate_url
@@ -66,16 +67,20 @@ def validate_inputs(args):
     if args.api not in PROTOCOLS[args.provider]:
         raise ValueError("Protocol is not supported by this route")
     bridge_sha256 = None
+    bridge_provenance = None
     if args.provider in BRIDGE_PROVIDERS:
         if (args.bridge_binary is None or not args.bridge_binary.is_file()
                 or not os.access(args.bridge_binary, os.X_OK)):
             raise ValueError("OAuth requires --bridge-binary for your own authorized executable bridge")
         bridge_sha256 = sha(args.bridge_binary)
+        bridge_provenance = {"implementation": "user-provided authorized executable",
+                             "version": "unknown", "executable_sha256": bridge_sha256}
     elif args.bridge_binary is not None:
         raise ValueError("--bridge-binary is only for OAuth routes")
     model = {"id": "community-model", "model": args.model, "response_model": args.model,
              "provider": args.provider, "base_url": args.base_url, "api": args.api,
-             "api_key_env": "KEYGEN_CONTRIB_API_KEY", "generation": args.generation}
+             "api_key_env": "KEYGEN_CONTRIB_API_KEY", "generation": args.generation,
+             "backend_provenance": {"service_revision": None, "bridge": bridge_provenance}}
     tier_spec = {"source": args.tier_source, "level": args.reasoning_tier, "generation": args.generation}
     model["tier"] = {"level": args.reasoning_tier, "reasoning": declared_reasoning(model),
                      "spec_sha256": campaign.digest(tier_spec)}
@@ -90,6 +95,26 @@ def frozen_configuration():
                             "providers": {provider: 1 for provider in PROVIDERS}},
             "storage": {"reserve_bytes": 1024**3, "peak_bytes_per_attempt": 2 * 1024**3},
             "max_attempts": 3, "policies": {"attempt_selection": campaign.INDEPENDENT}}
+
+
+def readiness_spec(config, model, agent_image):
+    """Build the same-route, same-settings input for the native qualification pilot."""
+    fields = ("id", "model", "response_model", "provider", "api", "base_url", "api_key_env",
+              "generation", "tier", "backend_provenance")
+    return {"model": {key: model[key] for key in fields},
+            "config": {"native": config["native"]}, "image": agent_image,
+            "limits": dict(native_readiness.DEFAULT_LIMITS)}
+
+
+def qualify_model(work, config, model, agent_image, bridge_executable=None):
+    """Record a real readiness proof before allowing a community attempt."""
+    spec_path = work / "native-readiness-spec.json"
+    write_json(spec_path, readiness_spec(config, model, agent_image))
+    readiness = native_readiness.qualify(spec_path, work / "native-readiness", bridge_executable)
+    if readiness["status"] != "verified":
+        raise ValueError("Native readiness pilot did not verify; no benchmark attempt started. Inspect private readiness evidence")
+    model["readiness"] = readiness
+    return readiness
 
 
 def inspect_images(docker, agent_image, visualizer_image):
@@ -162,11 +187,14 @@ def execute(args):
         raise ValueError("Bundle directories must not contain symlinks")
     config, model, docker, images, environment = prepare_run(args)
     work.mkdir(parents=True, mode=0o700)
-    output.mkdir(parents=True, mode=0o700)
     os.chmod(work, 0o700)
-    os.chmod(output, 0o700)
-    write_json(work / "community-config.json", {"config": config, "environment": environment})
     store = ArtifactStore(config["storage"])
+    store.preflight(work, len(ATTEMPTS))
+    qualify_model(work, config, model, images["agent"], args.bridge_binary)
+    write_json(work / "community-config.json", {"config": config, "environment": environment,
+                                                 "readiness": model["readiness"]})
+    output.mkdir(parents=True, mode=0o700)
+    os.chmod(output, 0o700)
     # Reserve every slot before inference. No best-of selection or retry path.
     for ordinal, attempt in enumerate(ATTEMPTS, 1):
         run.reserve(work, model, ordinal, attempt)

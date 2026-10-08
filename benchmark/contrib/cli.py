@@ -107,8 +107,8 @@ def parser():
     doctor.add_argument("--xm", type=Path, help="Explicit synthetic XM for --sandbox")
     doctor.add_argument("--work", type=Path, help="New absolute private directory for --sandbox evidence")
     doctor.add_argument("--no-input", action="store_true", help="Doctor never prompts")
-    for name, description in (("smoke", "Spend on one bounded model attempt, never eligible for submission"),
-                              ("run", "Spend on all three frozen attempts and package every outcome")):
+    for name, description in (("smoke", "Spend on one bounded native-readiness pilot and smoke attempt; never eligible for submission"),
+                              ("run", "Spend on one native-readiness pilot plus all three frozen attempts and package every outcome")):
         command = commands.add_parser(name, help=description)
         command.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
         command.add_argument("--work", type=Path, required=True, help="New absolute private working directory outside checkout")
@@ -477,7 +477,9 @@ def sandbox_smoke(args, docker, images):
 
 
 def consent(args, config):
-    count = "three frozen independent attempts" if args.command == "run" else "one smoke attempt (180-second wall limit, 4 steps, 60-second model request limit)"
+    count = ("one native readiness pilot followed by three frozen independent attempts"
+             if args.command == "run" else
+             "one native readiness pilot followed by one smoke attempt (180-second wall limit, 4 steps, 60-second model request limit)")
     print(f"This will spend on {count} for exact model {config.model} using {config.provider}/{config.api}. Documented generation/output settings stay unchanged. Pricing and token cost are not verified.", file=sys.stderr)
     if args.yes:
         return
@@ -510,13 +512,16 @@ def model_smoke(args, settings):
     environment["contract"].update(limits=dict(config["limits"]), native=dict(config["native"]),
                                    prompt=config["prompts"])
     work = new_work(args.work)
+    store = runner.ArtifactStore(config["storage"])
+    store.preflight(work, 1)
+    runner.qualify_model(work, config, model, images["agent"], settings.bridge_binary)
     runner.write_json(work / "smoke.json", {"kind": "single-model-smoke", "submission_eligible": False,
                      "config": config, "environment": environment, "model": model})
     runner.run.reserve(work, model, 1, "smoke-attempt")
     failure = False
     try:
         runner.run.run_one(work, config, model, docker, images["agent"], images["visualizer"],
-                           1, "smoke-attempt", runner.ArtifactStore(config["storage"]))
+                           1, "smoke-attempt", store)
     except Exception:
         failure = True
     directory = work / "smoke-attempt"
