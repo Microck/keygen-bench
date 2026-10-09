@@ -118,6 +118,20 @@ def normalize_spec(spec: dict, bridge_executable: Path | None) -> dict:
     return {"model": model, "config": config, "image": spec["image"], "limits": dict(limits)}
 
 
+def worker_failure_record(exc: Exception, run_dir: Path, secrets: list[str] | tuple[str, ...] = ()) -> dict:
+    """Keep actionable HTTP metadata without saving provider response bodies."""
+    result = {"exit_status": type(exc).__name__, "failure_category": run.native_failure_category(exc, run_dir)}
+    status = getattr(exc, "status_code", None)
+    if type(status) is int and 100 <= status <= 599:
+        result["http_status"] = status
+    code = getattr(exc, "code", None)
+    if isinstance(code, str) and re.fullmatch(r"[A-Za-z][A-Za-z0-9_.-]{0,63}", code):
+        safe_code = redact_credentials(code, secrets)
+        if safe_code == code:
+            result["provider_error_code"] = code
+    return result
+
+
 def worker(spec_path: Path) -> None:
     resource.setrlimit(resource.RLIMIT_FSIZE, (MAX_ARTIFACT_BYTES, MAX_ARTIFACT_BYTES))
     spec = load_json(spec_path)
@@ -150,7 +164,7 @@ def worker(spec_path: Path) -> None:
         )
         result = agent.run(task=spec["task"], frozen_system=spec["system"])
     except Exception as exc:
-        result = {"exit_status": type(exc).__name__, "failure_category": run.native_failure_category(exc, root)}
+        result = worker_failure_record(exc, root, secrets)
     finally:
         if agent is not None:
             run.write_json(root / "trajectory.json", redact_credentials(agent.serialize(), secrets))
@@ -337,8 +351,8 @@ def execute_pilot(spec_path: Path, root: Path, bridge_executable: Path | None):
         run.shell(docker + ["pause", name])
         run.collect(docker, name, "/workspace/submission/.", root / "submission", 1024 * 1024)
     except BaseException as exc:
-        # Error bodies can echo credentials or private controller paths. Category and
-        # exception type are sufficient here; sanitized native traces retain evidence.
+        # Provider bodies can echo credentials or private paths. Keep only the redacted
+        # status/code summary and failure category in the private evidence.
         failure = {"exception_type": type(exc).__name__, "category": stage + "_error"}
         if isinstance(exc, subprocess.TimeoutExpired):
             failure["category"] = "wall_time_exceeded"

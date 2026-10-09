@@ -10,6 +10,7 @@
 - Public-launch checklist covering Git history, personal data, credentials, licenses and release verification.
 - Repository agent instructions linking the maintained guides and defining local execution, privacy, provenance and verification boundaries.
 - Guided contributor CLI for setup, private configuration, offline preflight, bounded model smoke runs and spending-authorized official submissions.
+- Same-route native readiness pilots before community smoke and full runs, with proof retained in private work directories.
 - Direct OpenAI and Anthropic API-key routes and public HTTPS custom endpoints for supported native protocols.
 - Every attempt of the maintainer max-tier prompt-v2 campaigns and earlier runs under `runs/<model>/`: the three ranked attempts plus all other attempts in `other/`, with trajectories, transport logs, modules, lossless FLAC audio and evaluations (no videos).
 - Google AI Studio and Devin native routes.

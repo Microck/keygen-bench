@@ -46,6 +46,18 @@ def responses_result(call, returncode=0):
 
 
 class QualificationBoundaryTests(unittest.TestCase):
+    def test_worker_failure_record_keeps_status_but_not_provider_body(self):
+        class ProviderAPIError(Exception):
+            status_code = 402
+            code = "insufficient_balance"
+
+        error = ProviderAPIError("private provider response body")
+        record = readiness.worker_failure_record(error, Path("/tmp/private-run"))
+        self.assertEqual(record["exit_status"], "ProviderAPIError")
+        self.assertEqual(record["http_status"], 402)
+        self.assertEqual(record["provider_error_code"], "insufficient_balance")
+        self.assertNotIn("private provider response body", json.dumps(record))
+
     def test_outer_deadline_does_not_change_declared_native_timeout(self):
         spec = pilot_spec()
         spec["model"]["readiness"] = {"status": "verified", "evidence": "old proof"}

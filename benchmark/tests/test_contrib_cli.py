@@ -228,6 +228,49 @@ class ContributionCLITests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "insufficient evaluation disk"):
                 cli.admit_artifact_disk(self.root, source)
 
+    def test_contributor_readiness_spec_preserves_exact_route_and_settings(self):
+        self.create_config()
+        settings = cli.load_config(self.config)
+        model, _ = cli.runner.validate_inputs(settings)
+        config = cli.runner.frozen_configuration()
+        model["effective_settings"] = cli.runner.campaign.normalize_native(config, [model])[0]
+        image = "sha256:" + "a" * 64
+
+        spec = cli.runner.readiness_spec(config, model, image)
+
+        for field in ("id", "model", "response_model", "provider", "api", "base_url", "api_key_env",
+                      "generation", "tier"):
+            self.assertEqual(spec["model"][field], model[field])
+        self.assertEqual(spec["model"]["backend_provenance"], {"service_revision": None, "bridge": None})
+        self.assertEqual(spec["config"], {"native": config["native"]})
+        self.assertEqual(spec["image"], image)
+        self.assertNotIn(self.environment["KEYGEN_CONTRIB_API_KEY"], json.dumps(spec))
+
+    def test_missing_credential_blocks_readiness_without_starting_attempt(self):
+        self.create_config()
+        settings = cli.load_config(self.config)
+        model, _ = cli.runner.validate_inputs(settings)
+        config = cli.runner.frozen_configuration()
+        model["effective_settings"] = cli.runner.campaign.normalize_native(config, [model])[0]
+        work = self.root / "private-run"
+        work.mkdir(mode=0o700)
+        image = "sha256:" + "b" * 64
+        previous = os.environ.pop("KEYGEN_CONTRIB_API_KEY", None)
+        try:
+            with self.assertRaisesRegex(ValueError, "Native readiness pilot did not verify"):
+                cli.runner.qualify_model(work, config, model, image)
+        finally:
+            if previous is not None:
+                os.environ["KEYGEN_CONTRIB_API_KEY"] = previous
+        proof_dir = work / "native-readiness"
+        proof = json.loads((proof_dir / "proof.json").read_text())
+        self.assertEqual(proof["status"], "blocked")
+        self.assertEqual(proof["cleanup"]["status"], "not_allocated")
+        self.assertFalse((work / "attempt-1").exists())
+        for path in proof_dir.rglob("*"):
+            if path.is_file():
+                self.assertNotIn(self.environment["KEYGEN_CONTRIB_API_KEY"], path.read_text(errors="replace"))
+
 
 if __name__ == "__main__":
     unittest.main()
