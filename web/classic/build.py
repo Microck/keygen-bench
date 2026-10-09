@@ -494,7 +494,7 @@ def build_snapshots(sources: list[Path], publish_root: Path, excluded: list[tupl
         "cohorts": cohorts,
         "limitations": [
             "This is an immutable snapshot, not a live campaign monitor.",
-            "Scores are craft-v7 auxiliary tonal-development diagnostics, not musical-quality ranks.",
+            "Scores are versioned auxiliary tonal-development diagnostics, not musical-quality ranks. Each run retains its evaluator version.",
             ATTEMPT_NOTE if groups else SAMPLE_NOTE,
             TIER_NOTE,
             *(["The musical pilot is labeled separately and is excluded from the main-campaign counts."] if pilot_count else []),

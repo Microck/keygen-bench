@@ -22,6 +22,8 @@
 
 ### Changed
 
+- Version development scoring as craft-v8: compare related changed voices across 4-, 8- and 16-beat passages, ignoring channel/instrument identities and duplicate voices. Exact copies and unrelated repeated sections cannot supply transformation evidence; accompaniment note density no longer sets its weight. Other score components retain their v7 rules.
+- Add a read-only, hash-verified review rescorer for every ranked attempt and the pinned reference corpus, with before/after evidence separate from historical profiles and live publications.
 - Keep one local Docker execution path and one website implementation. Publication tools take explicit local inputs rather than contacting private machines.
 - Keep runtime outputs and private configuration out of source control. Export only reviewed, nonidentifying community provenance.
 - Replace operator-specific setup documentation with contributor, runner and website guides.

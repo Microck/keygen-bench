@@ -132,7 +132,7 @@ def public_run(row: dict, group: dict, directory: Path, output: Path, campaign: 
         "loop": {"quality": loop.get("quality_score"), "worst": worst_transition(loop),
                  "first_pass_audible_seconds": loop.get("first_pass_audible_seconds")},
         "tonal": {key: (audio.get("spectral") or {}).get(key) for key in ("tonal_evidence_fraction", "diatonic_concentration", "effective_pitch_classes", "sustained_noise_fraction")},
-        "development": {key: structure.get(key) for key in ("arrangement_score", "sequence_coverage", "motif_recurrence", "controlled_development")},
+        "development": {key: structure.get(key) for key in ("arrangement_score", "sequence_coverage", "development_method", "development_scales")},
         "audio": {"duration": audio.get("duration_seconds"), "lufs": audio.get("lufs_integrated"), "peak": (status.get("audio") or {}).get("peak")},
         "module": {key: (status.get("module") or {}).get(key) for key in ("name", "channels", "bpm", "speed", "song_length", "loop_start")},
         "usage": {**{key: totals.get(key) for key in ("requests", "prompt_tokens", "cached_tokens", "completion_tokens", "reasoning_tokens", "commands")},

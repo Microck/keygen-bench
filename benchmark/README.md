@@ -16,7 +16,7 @@ docker build -f benchmark/Dockerfile --target visualizer -t keygen-ft2-visualize
 
 The Dockerfile pins the Debian base digest and the build script pins FT2 source. Build acceptance exercises native editing, saving, reloading and rendering. Record the final image IDs with `docker image inspect`; mutable tags are not experiment identities. Architecture and distribution package state can affect the final image.
 
-Craft-v7 additionally needs the analysis renderer. Install a C compiler, Git, pkg-config, SDL2 and libmicrohttpd development packages, then run:
+Craft scoring additionally needs the analysis renderer. Install a C compiler, Git, pkg-config, SDL2 and libmicrohttpd development packages, then run:
 
 ```sh
 python scripts/build-ft2-analysis.py
@@ -106,9 +106,28 @@ python benchmark/report.py \
 
 `score.py profile --force` creates a new immutable evaluation generation. `score.py aggregate` rebuilds the score aggregate from existing profiles. Reports read cached evaluation evidence; they do not silently rescore attempts.
 
-Craft-v7 is a tonal-development diagnostic. It combines tonal organization, development and dynamics, then adjusts for signal integrity, noise, loop continuity and audible duration. The duration factor saturates at 30 first-pass audible seconds. Short duration is not task noncompliance, and silence or repeated later playback cannot supply missing duration credit. Numerical scores do not replace listening or establish a validated musical-quality ranking.
+Craft-v8 is a tonal-development diagnostic, not a validated musical-quality rating. Tonal organization, dynamics, integrity, loop and duration rules retain craft-v7's formula and weights. Development now uses beat-synchronous symbolic self-similarity instead of adjacent 16-row four-note motif matches.
+
+At 4, 8 and 16 beats, each passage contains its distinct sequenced voices. A voice is a set of onset-tick/pitch pairs, independent of channel and instrument indices. Exact duplicate voices count once. One beat is 24 FT2 ticks; speed changes and pattern delays advance this clock, while BPM changes affect seconds, not beats. Note delays, pitch effects between triggers, envelopes and sample endings are not a full voice simulation.
+
+Each voice has two comparisons against other passages: transposition-normalized Jaccard overlap measures its strongest relationship to a changed voice; absolute-pitch overlap measures its mean contrast with the rest of the piece. An exact copy supplies no transformation evidence, even inside a different passage. The same voice must supply relationship and contrast. Its contribution is `recurrence² * contrast`; squaring recurrence suppresses incidental matches without a four-note or 50% cutoff. Average voices equally within passages, then average passages and the three timescales. Empty passages supply no contrast or development. Incomplete final passages and scales with fewer than two complete passages supply no evidence. All constants are declared policy, not fitted listener preferences.
+
+This distinguishes changes inside a short loop from changes across longer passages, accepts sparse motifs and channel handoffs between passages, and prevents a steady accompaniment from certifying an unrelated melody. It does not grade melody, musical intent, timbral development or through-composed music reliably. Handoffs inside a passage still split voices. Equal voice weighting is not perceptual loudness weighting. Exact onset matching can miss expressive timing. Fixed beat windows assume the conventional tracker beat and are not inferred musical phrase boundaries.
+
+The duration factor still saturates at 30 first-pass audible seconds. Short duration is not task noncompliance, and silence or repeated later playback cannot supply missing duration credit. Preserve old evaluation generations when rescoring; a v8 score must never be relabelled as v7.
 
 Calibration metadata is in `data/keygen-scoring-reference.json` and `data/keygen-duration-reference.json`. The reference music itself is not distributed. Changes to scoring, source, numerical dependencies or renderer identity change evaluation provenance.
+
+For a development-only review rescore without changing historical profiles:
+
+```sh
+python benchmark/rescore.py runs --root runs --output /tmp/craft-v8-runs.json
+python benchmark/rescore.py references --modules /absolute/reference-xms --output /tmp/craft-v8-reference.json
+```
+
+The first command covers every `runs/<model>/attempt-N` directory, preserves unscored outcomes, checks XM and canonical WAV hashes, verifies unchanged audio/mix/loop implementations, and recomputes the total from retained measurements. Install `flac` to restore archived WAV bytes into temporary storage with foreign metadata. It does not rerender audio or rewrite `profile.json`, and its output is not a publishable profile generation. `other/` remains historical and unranked. Reference modules must be named `<git_blob_sha>.xm` and match `data/keygen-duration-reference.json`; no network fetch occurs. The reference pass measures development only and includes all sequenced channels, unlike the archived audio-filtered scores. Both commands require a new output path and stop on changed or missing evidence. Review results and limitations before adopting v8 for a publication.
+
+The [craft-v8 review](../docs/development-v8-review.md) contains the complete before/after model table, reference distributions, verification results and limitations.
 
 For a reviewed public snapshot, follow [the website guide](../web/classic/README.md). Do not serve a run directory or the repository root as a public file server.
 

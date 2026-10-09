@@ -88,7 +88,7 @@ def contract():
         raise ValueError("Community contract requires prompt-v2")
     return {**pins(), "harness_version": "2.4.6", "prompt": campaign.prompt_manifest(LIMITS),
             "limits": LIMITS, "submission_files": 4096, "render": {"rate": 44100, "bits": 16},
-            "scorer": "craft-v7", "native": {"timeout_seconds": 3600, "retries": 2},
+            "scorer": "craft-v8", "native": {"timeout_seconds": 3600, "retries": 2},
             "attempt_selection": "independent_repetitions",
             "sources": campaign.source_provenance(),
             "requirements_sha256": sha(HERE / "requirements.txt"),

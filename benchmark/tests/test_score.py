@@ -350,6 +350,53 @@ class ScoreTests(unittest.TestCase):
         self.assertTrue(tags["wrote_xm_directly"]); self.assertTrue(tags["rendered_preview"]); self.assertTrue(tags["inspected_preview"])
         self.assertTrue(tags["edited_after_inspection"])
 
+    def test_rescore_preserves_sources_and_rejects_changed_inputs(self):
+        from benchmark import rescore
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "fixture" / "attempt-1"
+            (root / "submission").mkdir(parents=True)
+            (root / "canonical").mkdir()
+            xm_path = root / "submission/tune.xm"
+            xm_path.write_bytes(build_xm())
+            wav_path = root / "canonical/canonical.wav"
+            with wave.open(str(wav_path), "wb") as audio:
+                audio.setparams((2, 2, 8000, 0, "NONE", "not compressed"))
+                audio.writeframes(bytes(32))
+            structure, audio, _, loop = self.craft_inputs()
+            profile = {"status": "RENDERED_UNSCORED", "eligible": True, "score_version": "craft-v7",
+                       "structure": structure, "audio": audio, "loop": loop,
+                       "mix": {"audible_channels": [0, 1]}, "craft": score.craft_score(structure, audio, loop),
+                       "inputs": {"scorer": {name: rescore.digest(rescore.ROOT / "benchmark" / name)
+                                             for name in rescore.UNCHANGED_MEASUREMENTS},
+                                  "artifacts": {"submission/tune.xm": rescore.digest(xm_path),
+                                                "canonical/canonical.wav": rescore.digest(wav_path)}}}
+            path = root / "profile.json"
+            path.write_text(json.dumps(profile))
+            original = {p: p.read_bytes() for p in (path, xm_path, wav_path)}
+            compared = rescore.rescore_attempt(root)
+            self.assertEqual(compared["factors"], profile["craft"]["factors"])
+            self.assertEqual(compared["new_parts"]["tonal_organization"], profile["craft"]["parts"]["tonal_organization"])
+            for p, contents in original.items():
+                self.assertEqual(p.read_bytes(), contents)
+            wav_path.write_bytes(original[wav_path] + b"changed")
+            with self.assertRaisesRegex(ValueError, "canonical WAV"):
+                rescore.rescore_attempt(root)
+            wav_path.write_bytes(original[wav_path])
+            xm_path.write_bytes(original[xm_path] + b"changed")
+            with self.assertRaisesRegex(ValueError, "XM does not match"):
+                rescore.rescore_attempt(root)
+
+    def test_rescore_retains_unscored_slots(self):
+        from benchmark import rescore
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "fixture" / "attempt-2"
+            root.mkdir(parents=True)
+            (root / "status.json").write_text(json.dumps({"status": "INTERRUPTED"}))
+            got = rescore.ranked_runs(Path(temporary))
+            self.assertEqual(got["counts"], {"models": 1, "attempts": 1, "scored": 0, "unscored": 1})
+            self.assertIsNone(got["attempts"][0]["new_score"])
+            self.assertIsNone(got["models"][0]["new_best"])
+
 
 
 class NativeProfileTests(unittest.TestCase):

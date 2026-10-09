@@ -36,7 +36,7 @@ sys.path.insert(0, str(HERE))
 # --- XM structure ---------------------------------------------------------------------------
 
 NOTE_ON = range(1, 97)  # 97 is key-off
-SCORE_VERSION = "craft-v7"
+SCORE_VERSION = "craft-v8"
 EVALUATION_SCHEMA = 2
 ERROR_CATEGORIES = {"INFRA", "AUTH", "TRANSPORT", "PROTOCOL", "EVAL", "MODEL"}
 NON_MODEL_ERRORS = ERROR_CATEGORIES - {"MODEL"}
@@ -427,7 +427,7 @@ def craft_score(st: dict, au: dict, loop: dict) -> dict:
                 "reference": "data/keygen-duration-reference.json",
                 "note": "proportional reduction for short audible first passes, not a genre definition or task-compliance gate"},
             "reference_calibration": "data/keygen-scoring-reference.json",
-            "diagnostic_only": ["selected-lead clarity and masking", "duration beyond sufficiency", "motif recurrence alone"],
+            "diagnostic_only": ["selected-lead clarity and masking", "duration beyond sufficiency", "recurrence or contrast alone"],
             "note": "provisional tonal-development evidence, not a validated musical-quality rating; diatonic pitch assumptions and sustained-noise heuristics can disagree with listeners"}
 
 def _sha256(path: Path) -> str | None:

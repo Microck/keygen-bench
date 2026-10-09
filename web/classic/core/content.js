@@ -33,15 +33,15 @@ export const DISCLAIMER = {
   title: "Treat it as a guide",
   lines: [
     "Music can't be judged objectively. One person's favourite tune can grate on someone else, and both are right.",
-    "So this score does not say which model makes the best music. It measures things that can be counted from the audio: whether the notes fit a key, whether the tune develops instead of repeating, whether it loops cleanly, and whether it plays without technical faults.",
-    "Where music theory and taste disagree, the score goes with the theory. That's the most neutral option, but it isn't flawless. Treat the number as a guide, and listen for yourself.",
+    "The score measures tonal evidence, sequenced development, dynamics and technical checks from the audio and module. These are separate from listener preference.",
+    "Its rules make stylistic assumptions. Reference-corpus comparisons do not establish musical fairness. Treat the number as a guide, and listen for yourself.",
   ],
 };
 
 export const OVERVIEW = [
   "A score has two parts. First the tune earns up to 100 points for what the music contains. Then four checks look for faults.",
   "Each check is a multiplier from 0 to 1, so it can only take points away. A tune with no faults keeps all its points, unless one of the two caps applies (see Checks).",
-  "The scorer is called craft-v7. The score is a heuristic built from the audio and the module, not a verdict on musical quality.",
+  "The current scorer is craft-v8. Historical snapshots retain their original evaluator version. The score is a heuristic built from the audio and the module, not a verdict on musical quality.",
 ];
 
 // id, title, max (points or "x1.0" multiplier), plain summary, what earns credit, what loses it, details.
@@ -55,10 +55,10 @@ export const SCORING = [
   },
   {
     id: "development", kind: "points", max: 40, title: "Development",
-    plain: "Does the tune go somewhere, or loop the same bar?",
-    good: "Short melodic ideas that come back changed: moved to other notes, varied, handed to other parts.",
-    bad: "Copy-pasted patterns. Exact repetition earns nothing here, and neither does changing only the instrument or volume.",
-    details: "The song is split into 16-row phrases. It looks for 4-note motifs that come back at least once, and for parts that change while keeping them: the shared motifs must cover at least half of the changed part. Credit is coverage x the square root of recurrence x development, so with no development there is no credit. Parts that just duplicate another channel count once.",
+    plain: "Do related ideas change across short and long passages?",
+    good: "Recognizable note and rhythm shapes with contrasting passages, including sparse ideas and ideas handed between channels.",
+    bad: "An unchanged short cycle provides no longer-scale development. Channel numbers, instrument slots and nonzero volume changes do not earn credit.",
+    details: "Craft-v8 compares complete 4-, 8- and 16-beat passages. Each distinct voice contributes its own squared similarity to a changed idea, times its contrast with the piece. Exact copies supply no transformation evidence. Voices, passages and scales are averaged equally. A steady accompaniment cannot certify an unrelated melody. Incomplete passages supply no evidence. Timbral and through-composed development can be missed. Historical craft-v7 used adjacent 16-row phrases and shared 4-note motifs.",
   },
   {
     id: "dynamics", kind: "points", max: 10, title: "Dynamics",
