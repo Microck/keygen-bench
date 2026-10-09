@@ -63,6 +63,15 @@ Repeat `--linked ROOT COHORT` for every required linked campaign and `--snapshot
 
 The frontend groups playable attempts by model, opens the best attempt by default, and offers first/all-attempt views. Publication metadata retains the frozen campaign selection and attempt provenance. These display choices do not alter the evaluator's scores.
 
+The score display shows pitched clarity, development and dynamics,
+multiplied only by signal integrity and loop continuity. Duration and spectral
+noisiness are diagnostics. The component key `tonal_organization` measures
+pitched clarity, not key membership or pitch variety. Publication scores and
+their evaluator provenance must match the supplied evaluation evidence.
+The campaign exporter rejects evaluations from a different scorer version.
+Run `benchmark/score.py profile --force --out /absolute/campaign` before exporting
+to create a matching evaluation generation without changing submitted music.
+
 `core/intro.js` is the preloader. It is a classic script, so it paints before
 the module graph loads, and it draws with its own 5x7 font rather than waiting
 for the FT2 fonts. `app.js` reports the results and font loads through

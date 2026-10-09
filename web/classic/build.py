@@ -41,7 +41,7 @@ FLAG_RULES = {
     "FLAT": "95th-to-10th percentile block RMS range under 2 dB.",
     "SEAM": "Worst measured FT2 loop transition below 50%, or no restart observed.",
     "MASKED": "Lead melody masked in over 35% of its bands (diagnostic only).",
-    "SUSTAINED_NOISE": "Sustained-noise integrity below 0.8.",
+    "SUSTAINED_NOISE": "Sustained noise-like evidence exceeds 40% of active power-duration; diagnostic only, not proof of damaged samples.",
     "RAW_XM": "tune.xm was written without module_save (allowed; recorded).",
 }
 
@@ -494,7 +494,7 @@ def build_snapshots(sources: list[Path], publish_root: Path, excluded: list[tupl
         "cohorts": cohorts,
         "limitations": [
             "This is an immutable snapshot, not a live campaign monitor.",
-            "Scores are versioned auxiliary tonal-development diagnostics, not musical-quality ranks. Each run retains its evaluator version.",
+            "Scores measure pitched clarity, development and dynamics, with signal integrity and loop continuity checks. They do not measure listener preference.",
             ATTEMPT_NOTE if groups else SAMPLE_NOTE,
             TIER_NOTE,
             *(["The musical pilot is labeled separately and is excluded from the main-campaign counts."] if pilot_count else []),
@@ -527,12 +527,13 @@ def build_snapshots(sources: list[Path], publish_root: Path, excluded: list[tupl
             "Only its attempt 1 can be ranked, like every other model's; its later attempts are not ranked." for group in groups if group.get("roster_addition")]
         out["repetition_groups"] = sorted(groups, key=lambda group: (cohort_order(next(c for c in cohorts if c["key"] == group["cohort_key"])), group["name"].lower()))
     (dist / "data.json").write_text(json.dumps(out, separators=(",", ":"), allow_nan=False) + "\n")
-    assets = ["index.html", "app.js", "site.js"]
+    assets = ["index.html", "crypto.html", "app.js", "site.js"]
     assets += [str(path.relative_to(HERE)) for path in (HERE / "core").glob("*.js")]
     assets += ["core/ft2.css", "core/ft2gfx/tables.json", "core/ft2gfx/LICENSE-gfx.txt"]
     assets += [str(path.relative_to(HERE)) for path in (HERE / "core/fonts").glob("*.woff2")]
     assets += [str(path.relative_to(HERE)) for path in (HERE / "core/ft2gfx").glob("*.png")]
     assets += [str(path.relative_to(HERE)) for path in (HERE / "core/icons").glob("*.png")]
+    assets += [str(path.relative_to(HERE)) for path in (HERE / "core/crypto").glob("*.svg")]
     for relative in assets:
         source, target = HERE / relative, publish_root / relative
         if source.is_symlink():

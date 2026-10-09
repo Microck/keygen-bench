@@ -106,7 +106,12 @@ python benchmark/report.py \
 
 `score.py profile --force` creates a new immutable evaluation generation. `score.py aggregate` rebuilds the score aggregate from existing profiles. Reports read cached evaluation evidence; they do not silently rescore attempts.
 
-Craft-v8 is a tonal-development diagnostic, not a validated musical-quality rating. Tonal organization, dynamics, integrity, loop and duration rules retain craft-v7's formula and weights. Development now uses beat-synchronous symbolic self-similarity instead of adjacent 16-row four-note motif matches.
+Craft-v9 is a pitched-clarity/development diagnostic, not a validated musical-quality rating. Its content weights are 50 points for pitched clarity, 40 for development and 10 for dynamics. Only signal integrity and loop continuity multiply the content total. No elapsed-duration or noise-texture multiplier applies.
+
+Pitched clarity is the active-duration mean captured harmonic-power fraction, with full credit at 0.50, the reference-corpus bound. Scale membership and pitch-class variety are whole-recording diagnostics only: a slow melody, a chromatic melody or a stationary tone can be clearly pitched. This component does not assess melodic merit, tuning to a prescribed key, or rhythmic activity. The pitch detector can miss weak fundamentals, confuse harmonically related simultaneous notes, and mistake periodic corruption for an instrument. Noise-like music can earn less pitched-clarity credit without being defective; the score does not claim stylistic neutrality.
+
+The serialized component `tonal_organization` measures pitched clarity.
+Evaluation provenance records `score_version` alongside the measurements.
 
 At 4, 8 and 16 beats, each passage contains its distinct sequenced voices. A voice is a set of onset-tick/pitch pairs, independent of channel and instrument indices. Exact duplicate voices count once. One beat is 24 FT2 ticks; speed changes and pattern delays advance this clock, while BPM changes affect seconds, not beats. Note delays, pitch effects between triggers, envelopes and sample endings are not a full voice simulation.
 
@@ -114,20 +119,20 @@ Each voice has two comparisons against other passages: transposition-normalized 
 
 This distinguishes changes inside a short loop from changes across longer passages, accepts sparse motifs and channel handoffs between passages, and prevents a steady accompaniment from certifying an unrelated melody. It does not grade melody, musical intent, timbral development or through-composed music reliably. Handoffs inside a passage still split voices. Equal voice weighting is not perceptual loudness weighting. Exact onset matching can miss expressive timing. Fixed beat windows assume the conventional tracker beat and are not inferred musical phrase boundaries.
 
-The duration factor still saturates at 30 first-pass audible seconds. Short duration is not task noncompliance, and silence or repeated later playback cannot supply missing duration credit. Preserve old evaluation generations when rescoring; a v8 score must never be relabelled as v7.
+Duration and sustained spectral noisiness are descriptive measurements. Order-list unrolling cannot earn a duration bonus, and deliberate noise percussion does not reduce unrelated content points through a separate multiplier. These rules do not establish that every short or noisy composition is good. Evaluation generations are immutable; rescoring writes separate evidence with its own provenance.
 
 Calibration metadata is in `data/keygen-scoring-reference.json` and `data/keygen-duration-reference.json`. The reference music itself is not distributed. Changes to scoring, source, numerical dependencies or renderer identity change evaluation provenance.
 
-For a development-only review rescore without changing historical profiles:
+For a read-only review rescore without changing historical profiles:
 
 ```sh
-python benchmark/rescore.py runs --root runs --output /tmp/craft-v8-runs.json
-python benchmark/rescore.py references --modules /absolute/reference-xms --output /tmp/craft-v8-reference.json
+python benchmark/rescore.py runs --root runs --output /tmp/craft-v9-runs.json
+python benchmark/rescore.py references --modules /absolute/reference-xms --output /tmp/craft-v9-reference.json
 ```
 
-The first command covers every `runs/<model>/attempt-N` directory, preserves unscored outcomes, checks XM and canonical WAV hashes, verifies unchanged audio/mix/loop implementations, and recomputes the total from retained measurements. Install `flac` to restore archived WAV bytes into temporary storage with foreign metadata. It does not rerender audio or rewrite `profile.json`, and its output is not a publishable profile generation. `other/` remains historical and unranked. Reference modules must be named `<git_blob_sha>.xm` and match `data/keygen-duration-reference.json`; no network fetch occurs. The reference pass measures development only and includes all sequenced channels, unlike the archived audio-filtered scores. Both commands require a new output path and stop on changed or missing evidence. Review results and limitations before adopting v8 for a publication.
+The first command covers every `runs/<model>/attempt-N` directory, preserves unscored outcomes, checks XM and canonical WAV hashes, recomputes spectral and structural evidence, and retains the unchanged signal, dynamics and loop measurements with their source provenance. Install `flac` to restore archived WAV bytes into temporary storage with foreign metadata. The output includes the complete new craft breakdown but is not a replacement profile generation. `other/` remains historical and unranked. Reference modules must be named `<git_blob_sha>.xm` and match `data/keygen-duration-reference.json`; the reference pass uses the pinned native renderer to analyze first-pass PCM and reports tonal/development components, not invented totals from rounded historical factors. Both commands require a new output path and stop on changed or missing evidence. No inference or network fetch occurs.
 
-The [craft-v8 review](../docs/development-v8-review.md) contains the complete before/after model table, reference distributions, verification results and limitations.
+The [scoring review](../docs/scoring-review.md) contains the model table, reference distributions, verification results and limitations. It records pitched-clarity saturation and the tradeoff between clear repetitive music and developed noisier music.
 
 For a reviewed public snapshot, follow [the website guide](../web/classic/README.md). Do not serve a run directory or the repository root as a public file server.
 

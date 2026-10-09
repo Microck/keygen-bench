@@ -36,7 +36,7 @@ sys.path.insert(0, str(HERE))
 # --- XM structure ---------------------------------------------------------------------------
 
 NOTE_ON = range(1, 97)  # 97 is key-off
-SCORE_VERSION = "craft-v8"
+SCORE_VERSION = "craft-v9"
 EVALUATION_SCHEMA = 2
 ERROR_CATEGORIES = {"INFRA", "AUTH", "TRANSPORT", "PROTOCOL", "EVAL", "MODEL"}
 NON_MODEL_ERRORS = ERROR_CATEGORIES - {"MODEL"}
@@ -330,7 +330,7 @@ FLAG_RULES = {
     "FLAT": "95th-to-10th percentile non-silent block RMS range under 2 dB",
     "SEAM": "worst measured continuous FT2 transition quality below 50%, or no runtime return observed",
     "MASKED": "mean target-weighted masked-band fraction over active melody frames exceeds 35%",
-    "SUSTAINED_NOISE": "full-band sustained-noise integrity below 0.8; possible noise effects or corrupted timbre, not proof of an encoding error",
+    "SUSTAINED_NOISE": "sustained noise-like spectral evidence exceeds 40% of active power-duration; diagnostic only, not proof of damaged samples",
     "RAW_XM": "the trajectory wrote tune.xm without module_save (allowed; recorded)",
 }
 
@@ -360,7 +360,7 @@ def flags(st: dict, au: dict, pt: dict, mix: dict, loop: dict) -> list[str]:
         out.append("SEAM")
     if mix["masking_fraction"] > 0.35:
         out.append("MASKED")
-    if au["spectral"]["noise_integrity"] < 0.8:
+    if au["spectral"]["sustained_noise_fraction"] > 0.4:
         out.append("SUSTAINED_NOISE")
     if pt.get("wrote_xm_directly", False):
         out.append("RAW_XM")
@@ -379,7 +379,6 @@ def band(x, zero_low, full_low, full_high, zero_high) -> float:
 
 CAP_SUSPECTED_BAKED = 40
 CRAFT_WEIGHTS = {"tonal_organization": 50, "development": 40, "dynamics": 10}
-DURATION_SUFFICIENT_SECONDS = 30.0
 # DC full credit is the rounded upper quartile of the calibration half of
 # archived keygen XMs (data/keygen-scoring-reference.json). Tracker samples
 # commonly carry DC bias: the former 0.002 bound penalized 89% of references.
@@ -388,7 +387,7 @@ DC_OFFSET_FULL, DC_OFFSET_ZERO = 0.03, 0.15
 
 
 def craft_score(st: dict, au: dict, loop: dict) -> dict:
-    """Content evidence scaled by integrity, never free points for clean noise."""
+    """Content evidence scaled only by signal integrity and authored loop quality."""
     integrity = (0.35 * band(au["clip_fraction"], 0, 0, 0, 0.001)
                  + 0.15 * band(abs(au["dc_offset"]), 0, 0, DC_OFFSET_FULL, DC_OFFSET_ZERO)
                  + 0.10 * band(au["true_peak_dbtp"], -120, -120, 0, 3)
@@ -399,13 +398,8 @@ def craft_score(st: dict, au: dict, loop: dict) -> dict:
                 + 0.75 * band(au["phrase_rms_range_db"], 0, 1, 10, 24))
     normalized = {"tonal_organization": au["spectral"]["tonal_organization"],
                   "development": st["arrangement_score"], "dynamics": dynamics}
-    audible_seconds = loop["first_pass_audible_seconds"]
-    if not math.isfinite(audible_seconds) or not 0 <= audible_seconds <= loop["analysis_duration_seconds"]:
-        raise ValueError("audible duration must be finite and within the measured first pass")
     factors = {"signal_integrity": integrity * audible,
-               "noise_integrity": au["spectral"]["noise_integrity"],
-               "loop_continuity": 0.75 + 0.25 * loop["quality_score"],
-               "duration_sufficiency": min(1.0, audible_seconds / DURATION_SUFFICIENT_SECONDS)}
+               "loop_continuity": 0.75 + 0.25 * loop["quality_score"]}
     if any(not math.isfinite(v) or not 0 <= v <= 1 for v in (*normalized.values(), *factors.values())):
         raise ValueError("score components and factors must be finite and bounded in [0, 1]")
     parts = {key: round(CRAFT_WEIGHTS[key] * value, 2) for key, value in normalized.items()}
@@ -422,13 +416,10 @@ def craft_score(st: dict, au: dict, loop: dict) -> dict:
             "craft_score": value, "uncapped": total, "parts": parts,
             "content_score": round(content, 2), "factors": factors,
             "weights": CRAFT_WEIGHTS, "capped": value < total, "caps": caps,
-            "formula": "sum(unrounded content parts) * signal_integrity * noise_integrity * loop_continuity * duration_sufficiency, then artifact caps; round once to 0.1",
-            "duration_policy": {"full_credit_seconds": DURATION_SUFFICIENT_SECONDS,
-                "reference": "data/keygen-duration-reference.json",
-                "note": "proportional reduction for short audible first passes, not a genre definition or task-compliance gate"},
+            "formula": "sum(unrounded content parts) * signal_integrity * loop_continuity, then artifact caps; round once to 0.1",
             "reference_calibration": "data/keygen-scoring-reference.json",
-            "diagnostic_only": ["selected-lead clarity and masking", "duration beyond sufficiency", "recurrence or contrast alone"],
-            "note": "provisional tonal-development evidence, not a validated musical-quality rating; diatonic pitch assumptions and sustained-noise heuristics can disagree with listeners"}
+            "diagnostic_only": ["selected-lead clarity and masking", "audible duration", "sustained spectral noisiness", "key concentration and pitch variety", "recurrence or contrast alone"],
+            "note": "provisional pitched-clarity and development evidence, not a validated musical-quality rating; harmonic-power detection and sequence heuristics can disagree with listeners"}
 
 def _sha256(path: Path) -> str | None:
     if not path.is_file():
@@ -804,8 +795,8 @@ def _report(out: Path, profiles: list[dict]) -> list[dict]:
     lines += ["", f"`craft` is the auxiliary {SCORE_VERSION} tonal-development heuristic (weights: "
               + ", ".join(f"{k} {v}" for k, v in CRAFT_WEIGHTS.items()) + ").",
               "No human, LLM, provider or process inputs enter the numeric heuristic. Pinned FT2 supplies continuous loop captures and masking stems; submitted XM and canonical audio are unchanged.",
-              f"Content points are multiplied by signal integrity, sustained-noise integrity, bounded loop continuity and min(1, first-pass audible seconds / {DURATION_SUFFICIENT_SECONDS:g}).",
-              "The task allows freely chosen duration. Short duration is not a task-compliance failure; the duration factor is only an auxiliary preference. Later playback and silent padding add no duration credit.",
+              "Content points are multiplied by signal integrity and bounded loop continuity only.",
+              "Duration, noise texture, key concentration and pitch variety are diagnostics, not score multipliers.",
               "Selected-lead masking earns no craft points. These tonal-development heuristics require independent listener validation before any musical-quality ranking claim.", "",
               "Flags:"] + [f"- `{k}`: {v}" for k, v in FLAG_RULES.items()]
     reports = out / "evaluation-reports"

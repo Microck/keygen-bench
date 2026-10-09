@@ -49,9 +49,9 @@ STATIC_HEADERS = """
 
 SITE_NAME = "Keygen Bench"
 SITE_SUMMARY = ("Keygen Bench asks AI models to compose a keygen-style chiptune in FastTracker II, with no network and a "
-                "Bash tool, three independent attempts each at its highest declared reasoning tier. A trusted FT2 render of "
-                "each XM module supplies audio evidence for a versioned craft score (tonal organization, development, dynamics, signal, "
-                "noise, loop and duration). Models are ranked by their best of three attempts.")
+                "Bash tool, three independent attempts each at its highest declared reasoning tier. The score measures pitched "
+                "clarity, development and dynamics from the XM module and a trusted FT2 render, with signal integrity and "
+                "loop continuity checks. Models are ranked by their best of three attempts.")
 
 
 def model_name(name: str) -> str:
@@ -152,7 +152,7 @@ def export(publication: Path, out: Path, site_url: str, mapping: dict, redirect_
             link_or_copy(path, out / rel)
     data = json.loads((publication / "dist/data.json").read_text())
     traces = out / "dist/traces"
-    traces.mkdir(parents=True)
+    traces.mkdir(parents=True, exist_ok=True)
     for run in data["runs"]:
         media = run.get("media") or {}
         media.pop("evaluation", None)

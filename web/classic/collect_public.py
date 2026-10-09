@@ -23,6 +23,9 @@ from benchmark.artifacts import ArtifactStore
 from benchmark.report import INDEPENDENT_SELECTION, QUEUE_SELECTION, build_report, finite_json
 from build import FLAG_RULES, compact_trace, estimate_cost, estimate_cost_range, price_id, public_maker, public_price, slug, worst_transition
 
+# Publication reads the evaluator's version without loading its numerical dependencies.
+SCORE_VERSION = re.search(r'^SCORE_VERSION = "([^"]+)"$', (ROOT / "benchmark/score.py").read_text(), re.M)[1]
+
 
 def sha256(path: Path) -> str:
     result = hashlib.sha256()
@@ -86,6 +89,8 @@ def verified_media(directory: Path, profile: dict, output: Path) -> dict:
 def public_run(row: dict, group: dict, directory: Path, output: Path, campaign: dict,
                scope: str, prices: dict, roster_addition: bool = False) -> dict:
     profile = row["profile"]
+    if profile.get("score_version") != SCORE_VERSION or row.get("score_version") != SCORE_VERSION:
+        raise ValueError(f"Publication requires {SCORE_VERSION} evaluations; run score.py profile --force before exporting")
     name = price_id(row["model"])
     repetition = scope == "repetitions"
     queue = campaign.get("attempt_selection") == QUEUE_SELECTION
@@ -126,7 +131,7 @@ def public_run(row: dict, group: dict, directory: Path, output: Path, campaign: 
         "status": row["status"], "error": "", "score": row["craft"],
         "parts": {key: craft["parts"][key] for key in ("tonal_organization", "development", "dynamics")},
         "weights": {key: craft["weights"][key] for key in ("tonal_organization", "development", "dynamics")},
-        "factors": {key: craft["factors"][key] for key in ("signal_integrity", "noise_integrity", "loop_continuity", "duration_sufficiency")},
+        "factors": {key: craft["factors"][key] for key in ("signal_integrity", "loop_continuity")},
         "uncapped": craft["uncapped"], "content": craft["content_score"], "caps": craft.get("caps") or [],
         "flags": [{"id": flag, "rule": FLAG_RULES.get(flag, "")} for flag in profile.get("flags") or []],
         "loop": {"quality": loop.get("quality_score"), "worst": worst_transition(loop),

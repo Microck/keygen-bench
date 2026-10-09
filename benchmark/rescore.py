@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Recompute development without mutating runs or re-rendering unchanged audio.
+"""Recompute spectral and structural evidence without mutating historical runs.
 
-    python benchmark/rescore.py runs --root runs --output /tmp/craft-v8-runs.json
-    python benchmark/rescore.py references --modules /tmp/reference-xms --output /tmp/craft-v8-reference.json
+    python benchmark/rescore.py runs --root runs --output /tmp/craft-v9-runs.json
+    python benchmark/rescore.py references --modules /tmp/reference-xms --output /tmp/craft-v9-reference.json
 
 Reference files are named <git_blob_sha>.xm from the pinned duration manifest.
-Outputs are review evidence, not replacement profile.json files or publications.
+Reference PCM is rendered locally; ranked-run PCM is verified and reused.
 """
 from __future__ import annotations
 
@@ -22,9 +22,10 @@ import numpy as np
 
 import score
 from score_structure import DEVELOPMENT_METHOD, structure_metrics
+from score_audio import spectral_metrics
 
 ROOT = Path(__file__).resolve().parent.parent
-UNCHANGED_MEASUREMENTS = ("score_audio.py", "score_mix.py", "score_loop.py", "score_playback.py")
+UNCHANGED_MEASUREMENTS = ("score_mix.py", "score_loop.py", "score_playback.py")
 
 
 def digest(path):
@@ -35,10 +36,24 @@ def digest(path):
 def provenance():
     return {"score_version": score.SCORE_VERSION, "development_method": DEVELOPMENT_METHOD,
             "scorer_sha256": {name: digest(ROOT / "benchmark" / name)
-                              for name in ("score.py", "score_structure.py", "rescore.py")},
+                              for name in ("score.py", "score_audio.py", "score_structure.py", "rescore.py")},
             "python": platform.python_version(), "numpy": np.__version__,
-            "scope": "Recomputed XM development and total; unchanged audio/mix/loop measurements retained with source hashes.",
+            "scope": "Recomputed spectral/structural evidence and total; retained signal, dynamics, mix and loop measurements with source hashes.",
             "listener_validated": False}
+
+
+def spectral_wav(path, end_frame=None):
+    """Memory-map PCM so the spectral worker keeps its bounded window storage."""
+    from scipy.io import wavfile
+    rate, pcm = wavfile.read(path, mmap=True)
+    try:
+        if pcm.dtype != np.dtype("int16") or pcm.ndim not in (1, 2) or (pcm.ndim == 2 and pcm.shape[1] not in (1, 2)):
+            raise ValueError("Expected signed-16 mono/stereo canonical PCM")
+        if end_frame is not None and not 0 < end_frame <= len(pcm):
+            raise ValueError("First-pass boundary lies outside captured PCM")
+        return spectral_metrics(pcm[:end_frame], rate)
+    finally:
+        pcm._mmap.close()
 
 
 def rescore_attempt(directory):
@@ -64,34 +79,31 @@ def rescore_attempt(directory):
     if xm_hash != inputs["artifacts"]["submission/tune.xm"]:
         raise ValueError(f"{directory.parent.name}/{directory.name}: XM does not match the source profile")
     wav_path = directory / "canonical/canonical.wav"
-    if wav_path.exists():
-        wav_hash = digest(wav_path)
-    else:
-        with tempfile.TemporaryDirectory(prefix="keygen-rescore-") as temporary:
-            restored = Path(temporary) / "canonical.wav"
+    with tempfile.TemporaryDirectory(prefix="keygen-rescore-") as temporary:
+        measured_path = wav_path
+        if not wav_path.exists():
+            measured_path = Path(temporary) / "canonical.wav"
             subprocess.run(["flac", "--decode", "--silent", "--keep-foreign-metadata",
-                            "--output-name=" + str(restored), str(wav_path.with_suffix(".wav.flac"))],
+                            "--output-name=" + str(measured_path), str(wav_path.with_suffix(".wav.flac"))],
                            check=True, capture_output=True, timeout=120)
-            wav_hash = digest(restored)
-    if wav_hash != inputs["artifacts"]["canonical/canonical.wav"]:
-        raise ValueError(f"{directory.parent.name}/{directory.name}: canonical WAV does not match the source profile")
-    # Check that all retained inputs still reproduce the source total. This also
-    # rejects a change to any other content weight, factor, cap or rounding rule.
-    old = score.craft_score(profile["structure"], profile["audio"], profile["loop"])
-    for field in ("craft_score", "parts", "factors", "caps", "content_score", "uncapped"):
-        if old[field] != profile["craft"][field]:
-            raise ValueError(f"{directory.parent.name}/{directory.name}: retained {field} no longer reproduces the source score")
+        if digest(measured_path) != inputs["artifacts"]["canonical/canonical.wav"]:
+            raise ValueError(f"{directory.parent.name}/{directory.name}: canonical WAV does not match the source profile")
+        spectral = spectral_wav(measured_path)
+    old = profile["craft"]
     xm = score.parse_xm(xm_path.read_bytes())
     structure = structure_metrics(xm, set(profile["mix"]["audible_channels"]))
     if not structure["sequence_complete"]:
         raise ValueError(f"{directory.parent.name}/{directory.name}: incomplete sequence")
-    new = score.craft_score(structure, profile["audio"], profile["loop"])
+    audio = dict(profile["audio"], spectral=spectral)
+    new = score.craft_score(structure, audio, profile["loop"])
     return {**record, "xm_sha256": xm_hash,
             "canonical_wav_sha256": inputs["artifacts"]["canonical/canonical.wav"],
             "retained_measurement_sha256": {name: inputs["scorer"][name] for name in UNCHANGED_MEASUREMENTS},
             "old_score": old["craft_score"], "new_score": new["craft_score"],
             "old_parts": old["parts"], "new_parts": new["parts"], "factors": new["factors"],
-            "caps": new["caps"], "development_scales": structure["development_scales"]}
+            "caps": new["caps"], "craft": new, "spectral": spectral,
+            "arrangement_score": structure["arrangement_score"],
+            "development_scales": structure["development_scales"]}
 
 
 def ranked_runs(root):
@@ -113,7 +125,7 @@ def ranked_runs(root):
                         key=lambda m: (-m[f"{version}_best"], m["model"]))
         for rank, model in enumerate(ranked, 1):
             model[f"{version}_rank"] = rank
-    return {"schema": "keygen-development-rescore-1", **provenance(),
+    return {"schema": "keygen-fairness-rescore-1", **provenance(),
             "selection": "Every attempt-N directory; other/ excluded, original slots unchanged. Ties use model name for display only.",
             "counts": {"models": len(models), "attempts": len(records),
                        "scored": sum(r["eligible"] for r in records), "unscored": sum(not r["eligible"] for r in records)},
@@ -134,23 +146,45 @@ def reference_scores(modules):
         if not structure["sequence_complete"]:
             raise ValueError(f"Reference traversal incomplete: {entry['git_blob_sha']}")
         previous = baseline[entry["git_blob_sha"]]
+        from score_playback import capture, renderer_identity
+        from score_loop import runtime_returns
+        # Use the native first return or F00 stop, not the static duration,
+        # as the boundary. Both looping and finite compositions are valid.
+        seconds = max(entry["first_subsong_seconds"], structure["sequence_seconds"]) + 10
+        with tempfile.TemporaryDirectory(prefix="keygen-reference-") as temporary:
+            captured = capture(path, Path(temporary), seconds)
+            returns = runtime_returns(captured["rows"])
+            boundaries = [row["frame"] for row in returns]
+            boundaries.extend(row["frame"] for row in captured["rows"] if row["speed"] == 0)
+            if not boundaries:
+                raise ValueError(f"Reference has no captured return or stop: {entry['git_blob_sha']}")
+            end_frame = min(boundaries)
+            spectral = spectral_wav(Path(captured["wav_path"]), end_frame)
         records.append({"git_blob_sha": entry["git_blob_sha"], "xm_sha256": entry["sha256"],
+                        "first_pass_frames": end_frame,
+                        "first_pass_end": "return" if returns and returns[0]["frame"] == end_frame else "stop",
                         "split": previous["split"], "old_development": previous["v7_parts"]["development"],
                         "new_development": round(40 * structure["arrangement_score"], 2),
-                        "development_scales": structure["development_scales"]})
+                        "old_tonal": previous["v7_parts"]["tonal_organization"],
+                        "new_tonal": round(50 * spectral["tonal_organization"], 2),
+                        "spectral": spectral, "development_scales": structure["development_scales"]})
     summaries = {}
     for split in ("all", "calibration", "held_out", "unscored_in_v6"):
         selected = [r for r in records if split == "all" or r["split"] == split]
         summaries[split] = {"count": len(selected)}
-        for version in ("old", "new"):
-            values = np.array([r[f"{version}_development"] for r in selected])
-            summaries[split][version] = {key: round(float(v), 3) for key, v in zip(
-                ("min", "median", "p75", "p90", "max"), np.quantile(values, (0, .5, .75, .9, 1)))}
-    return {"schema": "keygen-development-reference-1", **provenance(),
+        for component in ("tonal", "development"):
+            summaries[split][component] = {}
+            for version in ("old", "new"):
+                values = np.array([r[f"{version}_{component}"] for r in selected])
+                summaries[split][component][version] = {key: round(float(v), 3) for key, v in zip(
+                    ("min", "median", "p75", "p90", "max"), np.quantile(values, (0, .5, .75, .9, 1)))}
+    identity = renderer_identity()
+    return {"schema": "keygen-fairness-reference-1", **provenance(),
             "source_manifest_sha256": digest(duration_path), "baseline_sha256": digest(baseline_path),
-            "scope": "Development only; pinned XM bytes, all sequenced channels. No new audio or aesthetic evaluation.",
+            "renderer": {key: identity[key] for key in ("binary_sha256", "source_commit", "patch_sha256", "architecture")},
+            "scope": "Tonal/development components only; pinned XM bytes and native first-pass PCM, all sequenced channels. No invented reference totals or aesthetic evaluation.",
             "limitations": ["Convenience corpus, not listener judgments.",
-                            "Archived v7 values used rendered audibility filtering; v8 reference diagnostics include all sequenced channels.",
+                            "Archived v7 values used rendered audibility filtering; reference structure includes all sequenced channels.",
                             "No constants were fitted to the reference distribution or model rankings."],
             "summary": summaries, "records": records}
 
@@ -158,9 +192,9 @@ def reference_scores(modules):
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="kind", required=True)
-    runs = sub.add_parser("runs", help="Rescore every ranked attempt using verified retained measurements")
+    runs = sub.add_parser("runs", help="Recompute spectrum and development for every ranked attempt")
     runs.add_argument("--root", type=Path, required=True)
-    references = sub.add_parser("references", help="Compare development on the pinned reference XM corpus")
+    references = sub.add_parser("references", help="Render and compare tonal/development evidence on the pinned XM corpus")
     references.add_argument("--modules", type=Path, required=True)
     for command in (runs, references):
         command.add_argument("--output", type=Path, required=True, help="New JSON file; existing paths are never overwritten")
@@ -172,7 +206,7 @@ def main():
         with args.output.open("x") as stream:
             json.dump(payload, stream, indent=2, allow_nan=False)
             stream.write("\n")
-    except (OSError, ValueError, KeyError, subprocess.SubprocessError) as exc:
+    except (OSError, ValueError, KeyError, RuntimeError, subprocess.SubprocessError) as exc:
         print(f"Rescore failed: {exc}", file=sys.stderr)
         return 1
     counts = payload["counts"] if args.kind == "runs" else {"references": len(payload["records"])}
