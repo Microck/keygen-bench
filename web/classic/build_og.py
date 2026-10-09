@@ -155,7 +155,7 @@ def model_card(m, total, path):
     text(d, (64 * K, 66 * K), f"{m['maker']}  |  rank {m['rank']} of {total}", SMALL, PAL["dim"])
     text(d, (W - 8 * K, 38 * K), f"{r['score']:.1f}", HUGE, PAL["white"], PAL["looppin"], anchor="ra")
     sunken(d, [5 * K, 92 * K, W - 5 * K - 1, H - 6 * K - 1])
-    parts = [("Tonal", r["parts"]["tonal_organization"], 50), ("Development", r["parts"]["development"], 40), ("Dynamics", r["parts"]["dynamics"], 10)]
+    parts = [("Pitch", r["parts"]["tonal_organization"], 50), ("Development", r["parts"]["development"], 40), ("Dynamics", r["parts"]["dynamics"], 10)]
     for i, (k, v, mx) in enumerate(parts):
         y = 100 * K + i * 18 * K
         text(d, (12 * K, y), k, SMALL, PAL["pattext"])

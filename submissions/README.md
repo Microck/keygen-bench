@@ -62,7 +62,7 @@ python benchmark/contrib/validate_bundle.py submissions/MODEL/DATE-HANDLE \
   --rescore-out /tmp/keygen-trusted-review
 ```
 
-This uses 44.1 kHz / 16-bit FT2 rendering and the existing craft-v7 scorer. It
+This uses 44.1 kHz / 16-bit FT2 rendering and the repository's current scorer. It
 keeps trusted results outside the sealed bundle. Do not load contributor-selected
 Docker images or trust supplied scores. Inspect the resulting profiles for
 eligibility and evaluation errors. The analysis renderer has a separate bounded

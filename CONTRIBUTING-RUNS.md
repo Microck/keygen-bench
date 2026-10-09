@@ -100,7 +100,7 @@ runner and submission contract as the explicit invocation.
    docker build -f benchmark/Dockerfile --target visualizer -t keygen-ft2-visualizer:local .
    ```
 
-4. Craft-v7 needs the trusted analysis build too. Follow the prerequisites and
+4. Scoring needs the trusted analysis build too. Follow the prerequisites and
    build instructions in `scripts/build-ft2-analysis.py`. It verifies the same
    FT2 commit and the capture patch. Install the script's stated SDL2 and
    libmicrohttpd development packages, then run:

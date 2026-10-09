@@ -86,9 +86,11 @@ def pins():
 def contract():
     if campaign.PROMPT_VERSION != "prompt-v2":
         raise ValueError("Community contract requires prompt-v2")
+    # Setup reads the contract before installing NumPy and the evaluator's dependencies.
+    scorer = re.search(r'^SCORE_VERSION = "([^"]+)"$', (HERE / "score.py").read_text(), re.M)[1]
     return {**pins(), "harness_version": "2.4.6", "prompt": campaign.prompt_manifest(LIMITS),
             "limits": LIMITS, "submission_files": 4096, "render": {"rate": 44100, "bits": 16},
-            "scorer": "craft-v7", "native": {"timeout_seconds": 3600, "retries": 2},
+            "scorer": scorer, "native": {"timeout_seconds": 3600, "retries": 2},
             "attempt_selection": "independent_repetitions",
             "sources": campaign.source_provenance(),
             "requirements_sha256": sha(HERE / "requirements.txt"),

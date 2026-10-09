@@ -49,9 +49,9 @@ STATIC_HEADERS = """
 
 SITE_NAME = "Keygen Bench"
 SITE_SUMMARY = ("Keygen Bench asks AI models to compose a keygen-style chiptune in FastTracker II, with no network and a "
-                "Bash tool, three independent attempts each at its highest declared reasoning tier. A trusted FT2 render of "
-                "each XM module is scored from the audio by craft-v7 (tonal organization, development, dynamics, signal, "
-                "noise, loop and duration). Models are ranked by their best of three attempts.")
+                "Bash tool, three independent attempts each at its highest declared reasoning tier. The score measures pitched "
+                "clarity, development and dynamics from the XM module and a trusted FT2 render, with signal integrity and "
+                "loop continuity checks. Models are ranked by their best of three attempts.")
 
 
 def model_name(name: str) -> str:
@@ -79,7 +79,7 @@ def seo_head(route: str, site_url: str, info: dict, board: list[dict], generated
              {"@type": "Dataset", "@id": site_url + "/#results", "name": "Keygen Bench results", "description": SITE_SUMMARY,
               "url": site_url + "/rankings", "dateModified": generated, "creator": {"@type": "Person", "name": "Microck", "url": "https://github.com/Microck"},
               "isAccessibleForFree": True, "keywords": ["AI benchmark", "LLM benchmark", "FastTracker II", "chiptune", "keygen music", "XM module"],
-              "variableMeasured": "craft-v7 score (0-100)",
+              "variableMeasured": "versioned craft score (0-100)",
               "distribution": [{"@type": "DataDownload", "encodingFormat": "application/json", "contentUrl": site_url + "/dist/data.json"}]}]
     if route in ("/", "/rankings"):
         graph.append({"@type": "ItemList", "name": "Keygen Bench ranking (best of 3)", "numberOfItems": len(board),
@@ -112,7 +112,7 @@ def site_files(out: Path, site_url: str, meta: dict, board: list[dict], generate
              f"Results snapshot: {day}. Full data: {site_url}/dist/data.json. Source and every run: https://github.com/Microck/keygen-bench", "",
              "## Pages", "", f"- [Rankings]({site_url}/rankings): best-of-3 ranking with every attempt",
              f"- [Tracker]({site_url}/tracker): play each module in an FT2-style pattern view",
-             f"- [Scoring]({site_url}/scoring): how craft-v7 scores the audio", f"- [Support]({site_url}/support): costs and how to fund or contribute runs", "",
+             f"- [Scoring]({site_url}/scoring): how craft scores audio and XM structure", f"- [Support]({site_url}/support): costs and how to fund or contribute runs", "",
              "## Ranking (best of 3)", "", "| Rank | Model | Maker | Best | Attempts |", "| --- | --- | --- | --- | --- |"]
     # Model pages are keyed by model (see build_og.py); their card title starts with the model's label.
     pages = {meta[route]["title"].split(":")[0]: route for route in meta if route.startswith("/tracker/") and route.count("/") == 2}
@@ -152,7 +152,7 @@ def export(publication: Path, out: Path, site_url: str, mapping: dict, redirect_
             link_or_copy(path, out / rel)
     data = json.loads((publication / "dist/data.json").read_text())
     traces = out / "dist/traces"
-    traces.mkdir(parents=True)
+    traces.mkdir(parents=True, exist_ok=True)
     for run in data["runs"]:
         media = run.get("media") or {}
         media.pop("evaluation", None)

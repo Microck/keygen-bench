@@ -80,7 +80,7 @@ class ScoreTests(unittest.TestCase):
         au = {"duration_seconds": 90.0, "clip_fraction": 0.0, "dc_offset": 0.0, "true_peak_dbtp": -2.0,
               "lufs_integrated": -18.0, "silent_fraction": 0.0, "longest_silence_seconds": 0.0,
               "tail_silence_seconds": 0.0, "block_rms_range_db": 8.0, "phrase_rms_range_db": 3.0,
-              "spectral": {"tonal_organization": 1.0, "noise_integrity": 1.0}}
+              "spectral": {"tonal_organization": 1.0, "sustained_noise_fraction": 0.0}}
         mix = {"clarity_score": 1.0, "masking_fraction": 0.0}
         loop = {"quality_score": 1.0, "analysis_duration_seconds": 90.0, "first_pass_audible_seconds": 90.0}
         return st, au, mix, loop
@@ -90,40 +90,33 @@ class ScoreTests(unittest.TestCase):
         baseline = score.craft_score(st, au, loop)["craft_score"]
         broken = score.craft_score(st, au, dict(loop, quality_score=0))
         clipping = score.craft_score(st, dict(au, clip_fraction=0.01), loop)
-        noisy = score.craft_score(st, dict(au, spectral={
-            "tonal_organization": 1.0, "noise_integrity": 0.2}), loop)
         self.assertLess(broken["craft_score"], baseline)
         self.assertGreaterEqual(broken["craft_score"], baseline * 0.75)
         self.assertLess(clipping["craft_score"], baseline)
-        self.assertLess(noisy["craft_score"], clipping["craft_score"])
         empty = score.craft_score(dict(st, arrangement_score=0), dict(
             au, block_rms_range_db=0, phrase_rms_range_db=0,
-            spectral={"tonal_organization": 0.0, "noise_integrity": 1.0}), loop)
+            spectral={"tonal_organization": 0.0, "sustained_noise_fraction": 0.0}), loop)
         self.assertEqual(empty["craft_score"], 0)
 
-    def test_short_first_pass_reduces_score_without_a_duration_bonus(self):
+    def test_duration_and_noise_diagnostics_do_not_discount_content(self):
         st, au, _, loop = self.craft_inputs()
-        for seconds, expected in ((0, 0), (15, 50), (29.9, 99.7), (30, 100), (60, 100)):
-            with self.subTest(seconds=seconds):
-                measured = dict(loop, analysis_duration_seconds=seconds, first_pass_audible_seconds=seconds)
-                self.assertEqual(score.craft_score(st, au, measured)["craft_score"], expected)
-
-    def test_export_length_cannot_supply_missing_first_pass_duration(self):
-        st, au, _, loop = self.craft_inputs()
-        loop.update(analysis_duration_seconds=15, first_pass_audible_seconds=15)
-        for exported_seconds in (15, 90, 600):
-            self.assertEqual(score.craft_score(st, dict(au, duration_seconds=exported_seconds),
-                                              loop)["craft_score"], 50)
-
-    def test_invalid_first_pass_measurements_are_rejected(self):
-        st, au, _, loop = self.craft_inputs()
-        for seconds in (-1, float("nan"), float("inf"), 91):
-            with self.subTest(seconds=seconds), self.assertRaises(ValueError):
-                score.craft_score(st, au, dict(loop, first_pass_audible_seconds=seconds))
+        baseline = score.craft_score(st, au, loop)
+        for seconds in (1.92, 15, 30, 60):
+            for noisiness in (0, .4, 1):
+                with self.subTest(seconds=seconds, noisiness=noisiness):
+                    measured = dict(loop, analysis_duration_seconds=seconds, first_pass_audible_seconds=seconds)
+                    audio = dict(au, duration_seconds=seconds,
+                                 spectral=dict(au["spectral"], sustained_noise_fraction=noisiness))
+                    self.assertEqual(score.craft_score(st, audio, measured), baseline)
 
     def test_repeated_noise_cannot_buy_credit_with_clean_delivery(self):
         from benchmark.score_loop import transition_metrics
-        st, _, _, loop = self.craft_inputs()
+        from benchmark.tests.test_score_structure import module, phrase
+        from benchmark.score_structure import structure_metrics
+        # The actual repeated sequence has no development; do not inject a
+        # perfect development score into an otherwise unstructured noise loop.
+        st = structure_metrics(module([phrase([49] * 8)], [0] * 8))
+        loop = {"quality_score": 1.0}
         fs = 44100
         noise = np.random.default_rng(731).normal(0, 0.07, (fs * 4, 2))
         repeated = np.tile(noise, (3, 1))
@@ -349,6 +342,54 @@ class ScoreTests(unittest.TestCase):
         self.assertEqual(tags["commands"], 6)
         self.assertTrue(tags["wrote_xm_directly"]); self.assertTrue(tags["rendered_preview"]); self.assertTrue(tags["inspected_preview"])
         self.assertTrue(tags["edited_after_inspection"])
+
+    def test_rescore_preserves_sources_and_rejects_changed_inputs(self):
+        from benchmark import rescore
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "fixture" / "attempt-1"
+            (root / "submission").mkdir(parents=True)
+            (root / "canonical").mkdir()
+            xm_path = root / "submission/tune.xm"
+            xm_path.write_bytes(build_xm())
+            wav_path = root / "canonical/canonical.wav"
+            with wave.open(str(wav_path), "wb") as audio:
+                audio.setparams((2, 2, 8000, 0, "NONE", "not compressed"))
+                audio.writeframes(bytes(32))
+            structure, audio, _, loop = self.craft_inputs()
+            profile = {"status": "RENDERED_UNSCORED", "eligible": True, "score_version": "craft-v7",
+                       "structure": structure, "audio": audio, "loop": loop,
+                       "mix": {"audible_channels": [0, 1]}, "craft": score.craft_score(structure, audio, loop),
+                       "inputs": {"scorer": {name: rescore.digest(rescore.ROOT / "benchmark" / name)
+                                             for name in rescore.UNCHANGED_MEASUREMENTS},
+                                  "artifacts": {"submission/tune.xm": rescore.digest(xm_path),
+                                                "canonical/canonical.wav": rescore.digest(wav_path)}}}
+            path = root / "profile.json"
+            path.write_text(json.dumps(profile))
+            original = {p: p.read_bytes() for p in (path, xm_path, wav_path)}
+            compared = rescore.rescore_attempt(root)
+            self.assertEqual(compared["factors"], profile["craft"]["factors"])
+            self.assertEqual(compared["new_parts"]["tonal_organization"], 0)
+            self.assertEqual(compared["new_parts"]["dynamics"], profile["craft"]["parts"]["dynamics"])
+            for p, contents in original.items():
+                self.assertEqual(p.read_bytes(), contents)
+            wav_path.write_bytes(original[wav_path] + b"changed")
+            with self.assertRaisesRegex(ValueError, "canonical WAV"):
+                rescore.rescore_attempt(root)
+            wav_path.write_bytes(original[wav_path])
+            xm_path.write_bytes(original[xm_path] + b"changed")
+            with self.assertRaisesRegex(ValueError, "XM does not match"):
+                rescore.rescore_attempt(root)
+
+    def test_rescore_retains_unscored_slots(self):
+        from benchmark import rescore
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "fixture" / "attempt-2"
+            root.mkdir(parents=True)
+            (root / "status.json").write_text(json.dumps({"status": "INTERRUPTED"}))
+            got = rescore.ranked_runs(Path(temporary))
+            self.assertEqual(got["counts"], {"models": 1, "attempts": 1, "scored": 0, "unscored": 1})
+            self.assertIsNone(got["attempts"][0]["new_score"])
+            self.assertIsNone(got["models"][0]["new_best"])
 
 
 

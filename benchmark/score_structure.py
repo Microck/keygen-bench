@@ -1,12 +1,18 @@
 """Content-based XM sequencing evidence; no audio renderer or external dependencies."""
 from __future__ import annotations
 
-from collections import Counter, defaultdict
+from collections import defaultdict
 import math
 
 PHRASE_ROWS = 16
 MAX_SEQUENCE_ROWS = 65536
 MAX_SEQUENCE_EVENTS = 65536
+TICKS_PER_BEAT = 24
+DEVELOPMENT_BEATS = (4, 8, 16)
+# Bound pairwise work by coalescing identical passages and rejecting excessive
+# unique content rather than silently scoring only a prefix of the composition.
+MAX_PASSAGE_COMPARISONS = 8_000_000
+DEVELOPMENT_METHOD = "voice-self-similarity-4-8-16-beats-v1"
 
 
 def _sample(xm, instrument, note):
@@ -42,7 +48,8 @@ def _sequence(xm):
     order_index = row = 0
     seen, reached, samples, active_channels = set(), set(), set(), set()
     rows, seconds, warnings = [], 0.0, set()
-    command_phrases = []
+    row_ticks = []
+    ticks = 0
     event_total = 0
     row_cache = {}
     reason = "order_table_end"
@@ -109,8 +116,6 @@ def _sequence(xm):
             elif effect == 0x11:
                 warnings.add("global volume slides are not simulated")
         events = []
-        if len(rows) % PHRASE_ROWS == 0:
-            command_phrases.append(defaultdict(list))
         changed = set()
         for _, channel, note, instrument, vol, effect, param in cells:
             changed.add(channel)
@@ -123,7 +128,6 @@ def _sequence(xm):
             if note == 97 or (effect == 0x14 and param == 0):
                 voices[channel] = None
             if new_note:
-                command_phrases[-1][channel].append((len(rows) % PHRASE_ROWS, note))
                 target = _sample(xm, memory[channel], note)
                 porta = effect in (3, 5) or vol >> 4 == 15
                 if not porta or voices[channel] is None:
@@ -183,6 +187,8 @@ def _sequence(xm):
                 active_channels.add(channel)
             audible[channel] = now_audible
         rows.append(tuple(sorted(events)))
+        row_ticks.append(ticks)
+        ticks += speed * (delay + 1)
         event_total += len(events)
         seconds += 2.5 * speed / bpm * (delay + 1)
         if loop_row is not None and (jump is not None or break_row is not None):
@@ -199,137 +205,93 @@ def _sequence(xm):
             order_index += 1
             row = 0
             starts, counts = [0] * channels, [0] * channels
-    return rows, samples, active_channels, reached, seconds, reason, sorted(warnings), command_phrases
+    return rows, samples, active_channels, reached, seconds, reason, sorted(warnings), row_ticks, ticks
+
+
+def _overlap(left, right):
+    """Jaccard similarity on nonempty onset/pitch sets."""
+    intersection = len(left & right)
+    return intersection / (len(left) + len(right) - intersection)
+
+
+def _development(rows, row_ticks, ticks):
+    """Compare each voice with other passages, never borrowing another's coherence."""
+    scales = []
+    for beats in DEVELOPMENT_BEATS:
+        width = beats * TICKS_PER_BEAT
+        count = ticks // width
+        grouped = defaultdict(lambda: defaultdict(set))
+        for position, row in zip(row_ticks, rows):
+            passage = position // width
+            if passage >= count:
+                break
+            for channel, note, _, _ in row:
+                grouped[passage][channel].add((position % width, note))
+        # Counts retain the time occupied by repeats without storing an NxN SSM.
+        passages = defaultdict(int)
+        for voices in grouped.values():
+            content = tuple(sorted({tuple(sorted(voice)) for voice in voices.values()}))
+            passages[content] += 1
+        passages[()] += count - len(grouped)
+        entries = []
+        for content, repeats in passages.items():
+            if repeats:
+                voices = [(frozenset(voice), frozenset((t, p - voice[0][1]) for t, p in voice))
+                          for voice in content]
+                entries.append((voices, repeats))
+        voice_count = sum(len(voices) for voices, _ in entries)
+        if voice_count * voice_count > MAX_PASSAGE_COMPARISONS:
+            raise ValueError("development exceeds the bounded unique-passage comparison limit")
+        value = recurrence = contrast = 0.0
+        if count >= 2:
+            for index, (voices, repeats) in enumerate(entries):
+                for absolute, shape in voices:
+                    strongest = 0.0
+                    difference = 0.0
+                    for other_index, (others, other_repeats) in enumerate(entries):
+                        if other_index == index or not others:
+                            continue
+                        closest = related = 0.0
+                        for other_absolute, other_shape in others:
+                            closest = max(closest, _overlap(absolute, other_absolute))
+                            # Exact copies establish repetition, not a relationship
+                            # between changed ideas. Exclude them even when another
+                            # voice makes the containing passage different.
+                            if absolute != other_absolute:
+                                related = max(related, _overlap(shape, other_shape))
+                        strongest = max(strongest, related)
+                        difference += (1 - closest) * other_repeats
+                    difference /= count - 1
+                    weight = repeats / (count * len(voices))
+                    recurrence += weight * strongest
+                    contrast += weight * difference
+                    value += weight * strongest ** 2 * difference
+        scales.append({"beats": beats, "complete_passages": count,
+                       "distinct_passages": sum(bool(content) for content in passages),
+                       "recurrence": round(recurrence, 6), "contrast": round(contrast, 6),
+                       "development": round(value, 6)})
+    return {"arrangement_score": round(sum(s["development"] for s in scales) / len(scales), 6),
+            "development_method": DEVELOPMENT_METHOD, "development_scales": scales}
 
 
 def structure_metrics(xm: dict, audible_channels: set[int] | None = None) -> dict:
-    """Measure recurring sequence content, not pattern/instrument counts.
+    """Measure multiscale sequenced development; counts remain artifact diagnostics.
 
-    Sixteen traversed rows form a phrase, independent of pattern boundaries.
-    A motif is four successive notes on one channel: inter-onset row distances,
-    pitch intervals, and resolved instrument/sample identities. Transposition
-    preserves it. Every pitch, including percussion pitches, is treated alike.
-    Motifs need a second non-overlapping occurrence. Complete recurring phrases
-    also count, so sparse recurring parts need not contain four notes.
-
-    Optional zero-based audible channels come from auxiliary rendered stems.
-    Their filter is applied after traversal, retaining all global commands.
-
-    Coverage = phrases with triggers at >=2 row positions / all phrases.
-    Recurrence = fraction of note events covered by recurring motifs/phrases.
-    Development = mean event-weighted supported fraction per adjacent active
-    phrase pair. A changed channel must share motifs covering >=50% of its own
-    events in each phrase; unchanged channels and unsupported changes remain in
-    the denominator. Both note commands and audible row/pitch content must
-    change; instrument/volume changes alone cannot establish development.
-    Exact duplicate full-song channel trajectories receive one scoring vote,
-    weighted by their event count, but raw event/channel diagnostics remain.
-    Arrangement = coverage * sqrt(recurrence * development).
+    Channel numbers and sample identities do not define musical identity. Each
+    complete passage contributes equally, and distinct voices contribute equally
+    within it. Global commands still run on excluded PCM-silent channels.
     """
-    rows, used, channels, reached, seconds, reason, warnings, command_phrases = _sequence(xm)
+    rows, used, channels, reached, seconds, reason, warnings, row_ticks, ticks = _sequence(xm)
     if audible_channels is not None:
         rows = [tuple(event for event in row if event[0] in audible_channels) for row in rows]
         used = {(event[2], event[3]) for row in rows for event in row}
         channels = {event[0] for row in rows for event in row}
-    trajectories = defaultdict(list)
-    for row_index, row in enumerate(rows):
-        for channel, note, instrument, sample in row:
-            trajectories[channel].append((row_index, note, instrument, sample))
-    unique_channels = {}
-    for channel, trajectory in trajectories.items():
-        command_trajectory = tuple(tuple(phrase.get(channel, ())) for phrase in command_phrases)
-        unique_channels.setdefault((tuple(trajectory), command_trajectory), channel)
-    scoring_channels = set(unique_channels.values())
-    phrases = []
-    for offset in range(0, len(rows), PHRASE_ROWS):
-        events = tuple((r, *event) for r, row in enumerate(rows[offset:offset + PHRASE_ROWS]) for event in row)
-        phrases.append(events)
-    # Relative pitch per channel makes a transposed phrase the same motif.
-    normalized = []
-    for events in phrases:
-        anchors = {}
-        normalized.append(tuple((r, ch, note - anchors.setdefault(ch, note), inst, sample)
-                                for r, ch, note, inst, sample in events))
-    phrase_counts = Counter(p for p in normalized if p)
-    motif_occurrences = defaultdict(list)
-    phrase_motifs = [defaultdict(set) for _ in phrases]
-    phrase_channels = []
-    for phrase_index, events in enumerate(phrases):
-        per_channel = defaultdict(list)
-        for event_index, event in enumerate(events):
-            per_channel[event[1]].append((event_index, event))
-        phrase_channels.append(per_channel)
-        for channel, notes in per_channel.items():
-            for start in range(len(notes) - 3):
-                window = notes[start:start + 4]
-                first_row, _, first_note, _, _ = window[0][1]
-                motif = (channel, tuple((event[0] - first_row, event[2] - first_note, event[3], event[4])
-                                        for _, event in window))
-                indices = tuple(index for index, _ in window)
-                motif_occurrences[motif].append((phrase_index, indices))
-                phrase_motifs[phrase_index][motif].update(indices)
-    covered = [set() for _ in phrases]
-    recurrent_motif_count = 0
-    for motif, occurrences in motif_occurrences.items():
-        first_phrase, first_indices = occurrences[0]
-        # Four-note windows sharing notes do not prove recurrence by themselves.
-        if any(p != first_phrase or min(indices) > max(first_indices) for p, indices in occurrences[1:]):
-            recurrent_motif_count += 1
-            for phrase_index, indices in occurrences:
-                covered[phrase_index].update(indices)
-    for index, fingerprint in enumerate(normalized):
-        if fingerprint and phrase_counts[fingerprint] > 1:
-            covered[index].update(range(len(phrases[index])))
-    event_count = sum(map(len, phrases))
-    scoring_event_count = sum(len(trajectories[channel]) for channel in scoring_channels)
-    recurrent_event_count = sum(
-        phrases[index][event_index][1] in scoring_channels
-        for index, indices in enumerate(covered) for event_index in indices
-    )
-    recurrence = recurrent_event_count / scoring_event_count if scoring_event_count else 0.0
-    sequencing_phrases = sum(len({event[0] for event in events}) >= 2 for events in phrases)
+    development = _development(rows, row_ticks, ticks)
+    # Retain the existing sparse-sequencing artifact cap independently of v8.
+    phrases = [rows[offset:offset + PHRASE_ROWS] for offset in range(0, len(rows), PHRASE_ROWS)]
+    sequencing_phrases = sum(sum(bool(row) for row in phrase) >= 2 for phrase in phrases)
     coverage = sequencing_phrases / len(phrases) if phrases else 0.0
-    transitions = development_count = 0
-    development_fraction_sum = 0.0
-    active_channel_events = changed_channel_events = supported_channel_events = 0
-    for index in range(1, len(phrases)):
-        previous, current = phrases[index - 1], phrases[index]
-        if not previous or not current:
-            continue
-        transitions += 1
-        previous_channels, current_channels = phrase_channels[index - 1:index + 1]
-        shared = phrase_motifs[index - 1].keys() & phrase_motifs[index].keys()
-        previous_shared, current_shared = defaultdict(set), defaultdict(set)
-        for motif in shared:
-            channel = motif[0]
-            previous_shared[channel].update(phrase_motifs[index - 1][motif])
-            current_shared[channel].update(phrase_motifs[index][motif])
-        transition_events = transition_supported = 0
-        for channel in scoring_channels & (previous_channels.keys() | current_channels.keys()):
-            before = previous_channels.get(channel, ())
-            after = current_channels.get(channel, ())
-            channel_events = len(before) + len(after)
-            transition_events += channel_events
-            if (command_phrases[index - 1].get(channel, ())
-                    == command_phrases[index].get(channel, ())):
-                continue
-            # Timbre identities still help establish recurrence, but cannot
-            # themselves establish melodic/rhythmic development.
-            if tuple((event[0], event[2]) for _, event in before) == tuple(
-                (event[0], event[2]) for _, event in after
-            ):
-                continue
-            changed_channel_events += channel_events
-            if (before and after
-                    and len(previous_shared[channel]) >= len(before) / 2
-                    and len(current_shared[channel]) >= len(after) / 2):
-                transition_supported += channel_events
-        active_channel_events += transition_events
-        supported_channel_events += transition_supported
-        if transition_supported:
-            development_count += 1
-            development_fraction_sum += transition_supported / transition_events
-    development = development_fraction_sum / transitions if transitions else 0.0
+    event_count = sum(map(len, rows))
     used_samples = []
     for instrument, sample_index in sorted(used):
         sample_seconds = float(xm["instruments"][instrument - 1]["samples"][sample_index]["seconds_at_c4"])
@@ -343,34 +305,19 @@ def structure_metrics(xm: dict, audible_channels: set[int] | None = None) -> dic
         "Voice envelopes, sample endings, PCM silence, instrument-only retriggers, and tick pitch effects are not simulated.",
         "Volume-slide parameter memory is not simulated; note delays/cuts only affect trigger eligibility and row audibility.",
         "E6x loop markers reset on order transitions; unusual FT2 loop/break combinations may differ.",
-        "Sixteen-row phrase boundaries and four-note motifs can miss longer, irregular, or continuously developing forms.",
-        "Development requires shared four-note motifs on the changed channel covering at least half its events in each adjacent phrase.",
-        "Development averages supported-event fractions over active phrase transitions; each denominator includes both phrases' changed and unchanged channel events, including entries/exits.",
-        "Development event totals count interior phrases twice; controlled_development is the mean transition fraction, not the ratio of those totals.",
-        "Exact duplicate full-song audible event and note-command channel trajectories count once for recurrence and development; raw note/channel/motif counts still include copies.",
-        "Duplicate detection retains instrument/sample identities; differently identified sample copies remain distinct.",
-        "Note commands are compared before volume gating; instrument/sample index or volume changes alone are not development. Sparse, timbral, or envelope-only development may be missed.",
+        "Development compares complete 4-, 8- and 16-beat passages on a 24-tick beat grid; incomplete tails supply no evidence.",
+        "Each voice combines its own transposition-normalized recurrence and absolute-pitch contrast; these are not listener ratings.",
+        "Channel/instrument identities and exact duplicate voices are ignored; distinct voices receive equal, not loudness-based, weight.",
+        "Exact onset matching can miss expressive timing, and first-note normalization can miss ornamented motif starts.",
+        "Through-composed, timbral and envelope-only development can be underestimated; pitches including percussion are treated alike.",
         "Used sample lengths are unique referenced sample lengths at C4, not cumulative playback time.",
     ]
     return {
-        "arrangement_score": round(coverage * math.sqrt(recurrence * development), 6),
+        **development,
         "sequence_coverage": round(coverage, 6),
-        "motif_recurrence": round(recurrence, 6),
-        "controlled_development": round(development, 6),
         "phrase_rows": PHRASE_ROWS,
         "phrase_count": len(phrases),
         "sequencing_phrases": sequencing_phrases,
-        "distinct_phrase_contents": len(set(p for p in phrases if p)),
-        "distinct_transposition_normalized_phrases": len(phrase_counts),
-        "recurrent_motif_count": recurrent_motif_count,
-        "developed_transitions": development_count,
-        "active_phrase_transitions": transitions,
-        "development_transition_fraction_sum": round(development_fraction_sum, 6),
-        "development_active_channel_events": active_channel_events,
-        "development_changed_channel_events": changed_channel_events,
-        "development_supported_channel_events": supported_channel_events,
-        "scoring_note_ons": scoring_event_count,
-        "scoring_channels_used": len(scoring_channels),
         "sequenced_note_ons": event_count,
         "note_ons": event_count,
         "note_ons_per_second": round(event_count / seconds, 6) if seconds else 0.0,

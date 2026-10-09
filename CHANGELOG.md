@@ -23,6 +23,10 @@
 
 ### Changed
 
+- Score pitched clarity, development across 4-, 8- and 16-beat passages, and dynamics. Signal integrity and loop continuity multiply the content total; artifact caps limit the result. Duration, noise texture, key concentration and pitch variety are diagnostics.
+- Add a read-only, hash-verified rescorer for ranked attempts and the pinned reference corpus, with separate evaluation evidence and native reference return/stop boundaries.
+- Derive the contributor contract's scorer identity from the evaluator and reject mismatched campaign evaluations at publication export.
+- Include the donation page and its QR images in fresh website publications, and preserve existing external playback traces during static export.
 - Keep one local Docker execution path and one website implementation. Publication tools take explicit local inputs rather than contacting private machines.
 - Keep runtime outputs and private configuration out of source control. Export only reviewed, nonidentifying community provenance.
 - Replace operator-specific setup documentation with contributor, runner and website guides.

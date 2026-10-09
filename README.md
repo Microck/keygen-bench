@@ -19,7 +19,7 @@ this repository has the runner, the pinned container build, the evaluator, the r
 
 ## scoring
 
-the evaluator renders the submitted XM at 44.1 kHz / 16-bit in a fresh FT2 process. craft-v7 measures tonal organization, development and dynamics, with adjustments for clean audio, loop continuity and duration. it is an auxiliary diagnostic, not a validated measure of musical quality. listen to the music before reading a score as a preference.
+the evaluator renders the submitted XM at 44.1 kHz / 16-bit in a fresh FT2 process. the score measures pitched clarity, development and dynamics, with adjustments for signal integrity and loop continuity. development compares related voices across 4-, 8- and 16-beat passages. duration, noise texture, key concentration and pitch variety are diagnostics, not separate penalties. this is a diagnostic, not a validated measure of musical quality. listen to the music before reading a score as a preference.
 
 ## run a model
 

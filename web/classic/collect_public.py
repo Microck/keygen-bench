@@ -23,6 +23,9 @@ from benchmark.artifacts import ArtifactStore
 from benchmark.report import INDEPENDENT_SELECTION, QUEUE_SELECTION, build_report, finite_json
 from build import FLAG_RULES, compact_trace, estimate_cost, estimate_cost_range, price_id, public_maker, public_price, slug, worst_transition
 
+# Publication reads the evaluator's version without loading its numerical dependencies.
+SCORE_VERSION = re.search(r'^SCORE_VERSION = "([^"]+)"$', (ROOT / "benchmark/score.py").read_text(), re.M)[1]
+
 
 def sha256(path: Path) -> str:
     result = hashlib.sha256()
@@ -86,6 +89,8 @@ def verified_media(directory: Path, profile: dict, output: Path) -> dict:
 def public_run(row: dict, group: dict, directory: Path, output: Path, campaign: dict,
                scope: str, prices: dict, roster_addition: bool = False) -> dict:
     profile = row["profile"]
+    if profile.get("score_version") != SCORE_VERSION or row.get("score_version") != SCORE_VERSION:
+        raise ValueError(f"Publication requires {SCORE_VERSION} evaluations; run score.py profile --force before exporting")
     name = price_id(row["model"])
     repetition = scope == "repetitions"
     queue = campaign.get("attempt_selection") == QUEUE_SELECTION
@@ -126,13 +131,13 @@ def public_run(row: dict, group: dict, directory: Path, output: Path, campaign: 
         "status": row["status"], "error": "", "score": row["craft"],
         "parts": {key: craft["parts"][key] for key in ("tonal_organization", "development", "dynamics")},
         "weights": {key: craft["weights"][key] for key in ("tonal_organization", "development", "dynamics")},
-        "factors": {key: craft["factors"][key] for key in ("signal_integrity", "noise_integrity", "loop_continuity", "duration_sufficiency")},
+        "factors": {key: craft["factors"][key] for key in ("signal_integrity", "loop_continuity")},
         "uncapped": craft["uncapped"], "content": craft["content_score"], "caps": craft.get("caps") or [],
         "flags": [{"id": flag, "rule": FLAG_RULES.get(flag, "")} for flag in profile.get("flags") or []],
         "loop": {"quality": loop.get("quality_score"), "worst": worst_transition(loop),
                  "first_pass_audible_seconds": loop.get("first_pass_audible_seconds")},
         "tonal": {key: (audio.get("spectral") or {}).get(key) for key in ("tonal_evidence_fraction", "diatonic_concentration", "effective_pitch_classes", "sustained_noise_fraction")},
-        "development": {key: structure.get(key) for key in ("arrangement_score", "sequence_coverage", "motif_recurrence", "controlled_development")},
+        "development": {key: structure.get(key) for key in ("arrangement_score", "sequence_coverage", "development_method", "development_scales")},
         "audio": {"duration": audio.get("duration_seconds"), "lufs": audio.get("lufs_integrated"), "peak": (status.get("audio") or {}).get("peak")},
         "module": {key: (status.get("module") or {}).get(key) for key in ("name", "channels", "bpm", "speed", "song_length", "loop_start")},
         "usage": {**{key: totals.get(key) for key in ("requests", "prompt_tokens", "cached_tokens", "completion_tokens", "reasoning_tokens", "commands")},
