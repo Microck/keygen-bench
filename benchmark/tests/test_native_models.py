@@ -13,6 +13,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import patch
 
+from benchmark import campaign
 from benchmark import native_models as native
 from benchmark import run
 
@@ -435,6 +436,10 @@ class NativeProtocolTests(unittest.TestCase):
                     self.assertEqual(slept, [run.UPSTREAM_WAIT_SECONDS] * waits)
                     totals = run.summarize(root, spec)
                     self.assertEqual((totals["upstream_waits"], totals["transport_retries"]), (waits, 0))
+                    records = [json.loads(line) for line in (root / "transport.jsonl").read_text().splitlines()]
+                    # The discarded outage sends leave one complete exchange for the audit.
+                    kept = [record["event"] for record in campaign.unblocked_exchanges(records)]
+                    self.assertEqual(kept, ["request", "response"] if expected is dict else ["request"])
                     if expected is Exception:
                         self.assertEqual(run.failure_category(outcome), "QUOTA")
 

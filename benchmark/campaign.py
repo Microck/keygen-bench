@@ -77,14 +77,16 @@ def upstream_provenance(api: str) -> dict:
 
 
 def unblocked_exchanges(records: list) -> list:
-    """Transport records without the sends a content-filter block discarded.
+    """Transport records without the sends a content-filter block or an upstream outage discarded.
 
     run.bound_content_filter appends a ``content_filter_block`` record after each blocked send
-    (its request, plus its response when the block arrived as HTTP 200); the re-send follows.
+    (its request, plus its response when the block arrived as HTTP 200), and
+    run.wait_out_upstream_outage an ``upstream_unavailable`` record after each outage reply; the
+    identical re-send follows.
     """
     kept, start = [], None
     for record in records:
-        if record.get("event") == "content_filter_block":
+        if record.get("event") in {"content_filter_block", "upstream_unavailable"}:
             if start is not None:
                 del kept[start:]
             start = None
