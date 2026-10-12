@@ -8,6 +8,7 @@ from pathlib import Path
 import platform
 import re
 import shutil
+import stat
 import sys
 import subprocess
 import time
@@ -49,9 +50,64 @@ def argument_parser():
     parser.add_argument("--handle", required=True)
     parser.add_argument("--out", required=True, type=Path, help="New submission bundle directory")
     parser.add_argument("--work", required=True, type=Path, help="New private working directory, never commit")
+    parser.add_argument("--readiness", required=True, type=Path,
+                        help="Verified readiness.json and sibling proof.json for this exact model route")
     parser.add_argument("--agent-image", default="keygen-ft2-benchmark:local")
     parser.add_argument("--visualizer-image", default="keygen-ft2-visualizer:local")
     return parser
+
+
+MAX_READINESS_BYTES = 16 * 1024**2
+
+
+def attach_readiness(model, config, path, bridge_sha256):
+    """Bind the actual private pilot proof to this exact route and SDK settings."""
+    if path is None or not Path(path).is_absolute():
+        raise ValueError("Pass an absolute readiness.json path from a completed native pilot")
+    path = Path(path)
+    if any(parent.is_symlink() for parent in (path, *path.parents)):
+        raise ValueError("Readiness proof paths must not contain symlinks")
+    path = path.resolve(strict=True)
+    if path.name != "readiness.json" or not path.is_file() or path.stat().st_size > MAX_READINESS_BYTES:
+        raise ValueError("Readiness must be a bounded readiness.json file")
+    root_stat = path.parent.stat()
+    if root_stat.st_uid != os.getuid() or root_stat.st_mode & 0o077:
+        raise ValueError("Readiness evidence directory must be owner-only")
+    proof_path = path.with_name("proof.json")
+    proof_stat = proof_path.lstat()
+    if (not stat.S_ISREG(proof_stat.st_mode) or proof_stat.st_uid != os.getuid()
+            or proof_stat.st_size > MAX_READINESS_BYTES):
+        raise ValueError("Readiness requires an owner-only sibling proof.json")
+    try:
+        readiness = json.loads(path.read_text(encoding="utf-8"))
+        proof = json.loads(proof_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, ValueError):
+        raise ValueError("Readiness artifacts are not valid JSON") from None
+    evidence = readiness.get("evidence") if isinstance(readiness, dict) else None
+    payload = evidence.get("payload") if isinstance(evidence, dict) else None
+    if (readiness.get("status") != "verified" or not isinstance(payload, dict)
+            or payload != proof or evidence.get("payload_sha256") != campaign.digest(payload)
+            or evidence.get("artifact_sha256") != campaign.file_digest(proof_path)):
+        raise ValueError("Readiness proof status or artifact hashes do not verify")
+    route = payload.get("route")
+    if not isinstance(route, dict) or any(route.get(key) != model.get(key) for key in
+            ("provider", "api", "base_url", "model", "response_model")):
+        raise ValueError("Readiness proof belongs to a different provider, protocol or model")
+    backend = route.get("backend_provenance")
+    if not isinstance(backend, dict) or set(backend) != {"service_revision", "bridge"}:
+        raise ValueError("Readiness proof has invalid backend provenance")
+    bridge = backend["bridge"]
+    if model["provider"] in BRIDGE_PROVIDERS:
+        if (not isinstance(bridge, dict) or bridge.get("executable_sha256") != bridge_sha256
+                or not bridge.get("implementation") or not bridge.get("version")):
+            raise ValueError("Readiness proof does not match the configured bridge executable")
+    elif bridge is not None:
+        raise ValueError("A direct route cannot use bridge readiness evidence")
+    model["backend_provenance"] = backend
+    model["readiness"] = readiness
+    effective = campaign.normalize_native(config, [model])[0]
+    model["effective_settings"] = effective
+    campaign.validate_readiness(model, effective)
 
 
 def validate_inputs(args):
@@ -152,7 +208,7 @@ def prepare_run(args, *, require_key=True):
     if require_key and not os.environ.get("KEYGEN_CONTRIB_API_KEY"):
         raise ValueError("Set KEYGEN_CONTRIB_API_KEY in the controller environment")
     config = frozen_configuration()
-    model["effective_settings"] = campaign.normalize_native(config, [model])[0]
+    attach_readiness(model, config, args.readiness, bridge_sha256)
     from score_playback import renderer_identity
     renderer_identity()  # Never spend if trusted scoring cannot run.
     docker = run.docker_command()

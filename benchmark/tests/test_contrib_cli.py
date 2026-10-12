@@ -4,6 +4,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import socket
 import subprocess
 import sys
@@ -33,7 +34,10 @@ class ContributionCLITests(unittest.TestCase):
         self.environment["KEYGEN_CONTRIB_API_KEY"] = "FAKE_CLI_CREDENTIAL_DO_NOT_ECHO"
 
     def command(self, *arguments, environment=None):
-        return subprocess.run([sys.executable, str(CONTRIB / "cli.py"), *map(str, arguments)],
+        command = list(map(str, arguments))
+        if command and command[0] in {"run", "smoke"} and "--readiness" not in command:
+            command.extend(["--readiness", str(self.root / "readiness.json")])
+        return subprocess.run([sys.executable, str(CONTRIB / "cli.py"), *command],
                               env=environment or self.environment, input="", text=True,
                               capture_output=True, timeout=60)
 
@@ -53,6 +57,37 @@ class ContributionCLITests(unittest.TestCase):
         result = self.command(*self.configure_arguments())
         self.assertEqual(result.returncode, 0, result.stderr)
         return json.loads(self.config.read_text())
+
+    def test_readiness_attachment_rejects_a_proof_for_another_route(self):
+        proof_dir = self.root / "proof"
+        proof_dir.mkdir(mode=0o700)
+        proof_path = proof_dir / "proof.json"
+        proof_path.write_text("{}")
+        proof_path.chmod(0o600)
+        payload = {}
+        evidence = {"payload": payload,
+                    "payload_sha256": cli.runner.campaign.digest(payload),
+                    "artifact_sha256": cli.runner.campaign.file_digest(proof_path)}
+        readiness_path = proof_dir / "readiness.json"
+        readiness_path.write_text(json.dumps({"status": "verified", "evidence": evidence}))
+        readiness_path.chmod(0o600)
+        model = {"provider": "go", "api": "chat", "base_url": "https://opencode.ai/zen/go/v1",
+                 "model": "exact-model", "response_model": "exact-model"}
+        with self.assertRaisesRegex(ValueError, "different provider"):
+            cli.runner.attach_readiness(model, {"native": {"timeout_seconds": 10, "retries": 0}},
+                                       readiness_path, None)
+
+    def test_smoke_and_run_require_an_explicit_readiness_proof(self):
+        for command in ("smoke", "run"):
+            with self.subTest(command=command):
+                args = [command, "--config", str(self.config), "--work", str(self.root / "work")]
+                if command == "run":
+                    args.extend(["--out", str(self.root / "bundle")])
+                readiness = self.root / "readiness.json"
+                parsed = cli.parser().parse_args(args + ["--readiness", str(readiness)])
+                self.assertEqual(parsed.readiness, readiness)
+                with self.assertRaises(SystemExit):
+                    cli.parser().parse_args(args)
 
     def test_noninteractive_configuration_preserves_exact_settings_without_secret(self):
         value = self.create_config()
@@ -169,6 +204,91 @@ class ContributionCLITests(unittest.TestCase):
         self.assertEqual(values["base_url"], "http://127.0.0.1:54321/v1")
         self.assertEqual(values["bridge_binary"], str(Path(sys.executable).resolve()))
         self.assertIn("no account tokens are extracted", result.stderr)
+
+    def test_xai_oauth_configuration_uses_responses_and_requires_omp_bridge(self):
+        arguments = self.configure_arguments(provider="xai_oauth", model="grok-4.5",
+                     **{"base-url": "http://127.0.0.1:54321/v1", "tier-source": "https://docs.x.ai/docs/models/grok-4.5",
+                        "generation": '{"max_output_tokens":32768,"reasoning":{"effort":"xhigh"}}',
+                        "reasoning-tier": "xhigh"})
+        result = self.command(*arguments, "--bridge-binary", sys.executable)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        saved = json.loads(self.config.read_text())
+        self.assertEqual((saved["provider"], saved["model"], saved["api"]),
+                         ("xai_oauth", "grok-4.5", "responses"))
+        self.assertEqual(saved["bridge_binary"], str(Path(sys.executable).resolve()))
+
+    def test_xai_model_catalog_verification_checks_exact_identity_and_protocol(self):
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.assert_authorization()
+                body = json.dumps({"object": "list", "data": [
+                    {"id": "xai-oauth/grok-4.5", "api": "openai-responses"}]}).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def assert_authorization(self):
+                if self.headers.get("Authorization") != "Bearer FAKE_CLI_CREDENTIAL_DO_NOT_ECHO":
+                    raise AssertionError("gateway bearer was not sent")
+
+            def log_message(self, format, *args):
+                pass
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        self.addCleanup(thread.join, 2)
+        settings = argparse.Namespace(provider="xai_oauth", api="responses", model="grok-4.5",
+                                      base_url=f"http://127.0.0.1:{server.server_port}/v1",
+                                      bridge_binary=Path(sys.executable))
+        previous = os.environ.get("KEYGEN_CONTRIB_API_KEY")
+        os.environ["KEYGEN_CONTRIB_API_KEY"] = "FAKE_CLI_CREDENTIAL_DO_NOT_ECHO"
+        try:
+            cli.verify_xai_catalog(settings)
+            with self.assertRaisesRegex(cli.CLIError, "did not advertise exactly"):
+                cli.verify_xai_catalog(argparse.Namespace(**{**vars(settings), "model": "grok-4.6"}))
+        finally:
+            if previous is None:
+                os.environ.pop("KEYGEN_CONTRIB_API_KEY", None)
+            else:
+                os.environ["KEYGEN_CONTRIB_API_KEY"] = previous
+
+    def test_xai_model_catalog_rejects_oversized_response(self):
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                body = (b'{"object":"list","data":[{"id":"xai-oauth/grok-4.5","api":"openai-responses"}]}'
+                        + b" " * (cli.MAX_MODEL_CATALOG_BYTES + 1))
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, format, *args):
+                pass
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        self.addCleanup(thread.join, 2)
+        settings = argparse.Namespace(provider="xai_oauth", api="responses", model="grok-4.5",
+                                      base_url=f"http://127.0.0.1:{server.server_port}/v1")
+        previous = os.environ.get("KEYGEN_CONTRIB_API_KEY")
+        os.environ["KEYGEN_CONTRIB_API_KEY"] = "FAKE_CLI_CREDENTIAL_DO_NOT_ECHO"
+        try:
+            with self.assertRaisesRegex(cli.CLIError, "exceeds 2 MiB"):
+                cli.verify_xai_catalog(settings)
+        finally:
+            if previous is None:
+                os.environ.pop("KEYGEN_CONTRIB_API_KEY", None)
+            else:
+                os.environ["KEYGEN_CONTRIB_API_KEY"] = previous
 
     def test_bridge_doctor_uses_tcp_only_and_reports_closed_listener(self):
         listener = socket.socket()

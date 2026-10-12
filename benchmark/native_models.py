@@ -25,11 +25,12 @@ from typing import Any
 from urllib.parse import urlsplit
 
 LITELLM_VERSION = "1.102.1"
-PROVIDERS = {"go", "vercel", "nim", "google", "mistral", "cohere", "devin", "anthropic_oauth", "codex_oauth", "openai", "anthropic", "custom"}
-BRIDGE_PROVIDERS = {"devin", "anthropic_oauth", "codex_oauth"}
+PROVIDERS = {"go", "vercel", "nim", "google", "mistral", "cohere", "devin", "anthropic_oauth", "codex_oauth", "xai_oauth", "openai", "anthropic", "custom"}
+BRIDGE_PROVIDERS = {"devin", "anthropic_oauth", "codex_oauth", "xai_oauth"}
 # Protocol selection controls the native SDK, never a provider-name heuristic.
 PROTOCOLS = {"go": {"chat", "responses", "messages"}, "vercel": {"chat", "responses"}, "nim": {"chat"},
              "google": {"chat"}, "mistral": {"chat"}, "cohere": {"chat"}, "devin": {"chat"}, "anthropic_oauth": {"messages"}, "codex_oauth": {"responses"},
+             "xai_oauth": {"responses"},
              "openai": {"chat", "responses"}, "anthropic": {"messages"},
              "custom": {"chat", "responses", "messages"}}
 # LiteLLM provider prefix per route; Google AI Studio uses LiteLLM's native Gemini provider

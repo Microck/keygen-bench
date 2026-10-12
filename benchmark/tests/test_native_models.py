@@ -509,6 +509,16 @@ class NativePolicyTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 native.validate_url("https://different.example.com/v1", provider)
 
+    def test_xai_oauth_responses_uses_loopback_bridge_and_exact_model(self):
+        spec = model_spec("responses", "xai_oauth", "http://127.0.0.1:8417/v1")
+        spec["model"] = spec["response_model"] = "grok-4.5"
+        spec = tiered(spec, "xhigh", reasoning={"effort": "xhigh"})
+        effective = native.validate_model(CONFIG, spec)
+        self.assertEqual(effective["model_name"], "openai/grok-4.5")
+        self.assertEqual(effective["model_kwargs"]["api_base"], "http://127.0.0.1:8417/v1")
+        with self.assertRaisesRegex(ValueError, "Credential bridge"):
+            native.validate_model(CONFIG, {**spec, "base_url": "https://api.x.ai/v1"})
+
     def test_custom_public_url_policy(self):
         for url in ("https://api.example.com/v1", "https://api.example.com/service/v1",
                     "https://api.example.com:8443/v1", "https://8.8.8.8/v1"):

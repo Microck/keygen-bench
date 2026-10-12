@@ -61,7 +61,12 @@ Use the [guided contributor CLI](../CONTRIBUTING-RUNS.md#guided-setup-and-run) f
 | `custom` | Chat Completions, Responses or Messages | User-selected public HTTPS endpoint |
 | `anthropic_oauth` | Messages | User-owned authorized loopback bridge |
 | `codex_oauth` | Responses | User-owned authorized loopback bridge |
+| `xai_oauth` | Responses | OMP `auth-gateway` on loopback, backed by an authorized OMP auth broker |
 
+For xAI OAuth, use the contributor CLI's `verify` command before any inference.
+It checks authenticated `/v1/models` discovery for the exact `xai-oauth/<model>`
+ID and Responses protocol. OMP's auth-gateway serves the local OMP credential store
+through an auth broker bound to loopback; both local services must be running.
 The endpoint is a base URL, not the full request path. Custom service support requires compatible tool calling, generation controls and exact response-model identity. Selecting a protocol does not translate arbitrary service APIs or guarantee that a proxy forwards the requested settings. Public custom URLs are included in submission provenance; keep private endpoints and identifying tenant paths out of public bundles.
 
 Only OAuth bridges use private loopback HTTP. Bridge login and server lifecycle remain the user's responsibility; the CLI records the executable digest rather than its private path or address. Never route a direct API key through a bridge without deliberately configuring that service.

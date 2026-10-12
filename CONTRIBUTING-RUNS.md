@@ -35,12 +35,23 @@ Use `--no-input` and explicit configuration flags for automation; see
 `configure --help`. Presets supply endpoint defaults, not guessed model settings.
 
 For API-key routes, set `KEYGEN_CONTRIB_API_KEY` privately as shown below.
-For `anthropic_oauth` or `codex_oauth`, first install and sign in to your own
+For `anthropic_oauth` or `codex_oauth`, install and sign in to your own
 authorized bridge, start its loopback server, and provide its URL and executable
-path to the wizard. The CLI does not implement an OAuth login or extract tokens
-from another application's credential store. The bridge credential goes in
-`KEYGEN_CONTRIB_API_KEY`; only its executable digest is exported.
-Doctor checks a bridge listener without sending an inference request.
+path to the wizard. For `xai_oauth`, use OMP's `auth-gateway` backed by an
+authorized OMP auth broker that holds the xAI OAuth credential. OMP's gateway
+can serve the local OMP credential store through a broker bound to loopback.
+Start `omp auth-broker serve` on its default `127.0.0.1:8765` listener, then
+start the gateway with
+`OMP_AUTH_BROKER_URL=http://127.0.0.1:8765 omp auth-gateway serve --bind=127.0.0.1:8766`.
+Set the gateway's `/v1` URL as `--base-url`, and set the OMP executable as
+`--bridge-binary`. Create its inbound bearer with `omp auth-gateway token`, then
+supply that value privately as `KEYGEN_CONTRIB_API_KEY`. The contributor CLI
+never extracts or stores the xAI OAuth token. Before inference, run:
+`"$PYTHON" benchmark/contrib/cli.py verify --config "$CONFIG"`. This sends only
+an authenticated `GET /v1/models` request and confirms that the exact model is
+advertised by OMP as `xai-oauth/<model>` on Responses. It does not prove that an
+inference request will succeed. Doctor checks only that the listener accepts a
+TCP connection; it does not authenticate or send a provider request.
 
 Before either command runs a benchmark attempt, it performs a real native
 readiness pilot with the same model, provider, protocol, endpoint, tier,
@@ -55,10 +66,27 @@ Try a short paid model smoke run before committing to three full attempts:
 
 ```sh
 "$PYTHON" benchmark/contrib/cli.py smoke --config "$CONFIG" \
+  --readiness "$HOME/.local/share/keygen-bench/readiness-01/readiness.json" \
   --work "$HOME/.local/share/keygen-bench/smoke-01"
 ```
 
-Smoke outputs are private diagnostics, not eligible submission bundles.
+Smoke outputs are private diagnostics, not eligible submission bundles. Before
+smoke or a full run, generate and retain a native-readiness proof for the exact
+provider, model, protocol, bridge binary, and effective settings:
+
+```sh
+"$PYTHON" benchmark/native_readiness.py \
+  --spec "$HOME/.local/share/keygen-bench/model-readiness-spec.json" \\
+  --out "$HOME/.local/share/keygen-bench/readiness-01" \\
+  --bridge-executable /path/to/authorized-bridge
+```
+
+The sanitized spec must include the exact model and native config, an immutable
+agent image digest, backend provenance, and bounded pilot limits. The pilot uses
+the real provider through a credential-free offline tool sandbox. Keep both
+`proof.json` and `readiness.json` in their private owner-only directory. Do not
+reuse proof across models, endpoints, protocols, bridge binaries, or effective
+settings. A failed pilot is evidence, not permission to bypass the gate.
 Smoke and official runs require interactive spending consent or `--yes`.
 Consent authorizes requests; it is not a dollar cap or a guarantee of model access.
 Doctor makes no provider requests and does not verify authentication or billing.
@@ -67,6 +95,7 @@ When ready, run all three official attempts:
 
 ```sh
 "$PYTHON" benchmark/contrib/cli.py run --config "$CONFIG" \
+  --readiness "$HOME/.local/share/keygen-bench/readiness-01/readiness.json" \
   --work "$HOME/.local/share/keygen-bench/run-01" \
   --out submissions/MODEL/DATE-YOUR-HANDLE
 ```
@@ -117,7 +146,8 @@ runner and submission contract as the explicit invocation.
    Chat Completions, Responses, or Messages. Protocol compatibility does not
    establish model identity or equivalent reasoning behavior. See
    `benchmark/README.md` for route restrictions. `codex_oauth` and
-   `anthropic_oauth` require your own authorized loopback bridge.
+   `anthropic_oauth` require your own authorized loopback bridge. `xai_oauth`
+   requires the OMP auth-broker/gateway path described above.
 6. Set your credential privately. Do not put it in a command, config, PR, or
    committed file. Bash can read it without showing it or saving it in history:
 

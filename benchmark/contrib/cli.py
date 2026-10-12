@@ -30,6 +30,7 @@ import subprocess
 import sys
 import tempfile
 from urllib.parse import urlsplit
+from urllib.request import Request, urlopen
 import uuid
 
 CONTRIB = Path(__file__).resolve().parent
@@ -54,6 +55,7 @@ AGENT_IMAGE = "keygen-ft2-benchmark:local"
 VISUALIZER_IMAGE = "keygen-ft2-visualizer:local"
 APT_GUIDANCE = "sudo apt-get update && sudo apt-get install -y python3-venv build-essential git pkg-config libsdl2-dev libmicrohttpd-dev"
 CREDENTIAL_NAME = re.compile(r"(?:key|token)$|(?:^|_)(?:key|token|secret|password)(?:_|$)", re.I)
+MAX_MODEL_CATALOG_BYTES = 2 * 1024 * 1024
 
 
 class CLIError(ValueError):
@@ -107,11 +109,15 @@ def parser():
     doctor.add_argument("--xm", type=Path, help="Explicit synthetic XM for --sandbox")
     doctor.add_argument("--work", type=Path, help="New absolute private directory for --sandbox evidence")
     doctor.add_argument("--no-input", action="store_true", help="Doctor never prompts")
+    verify = commands.add_parser("verify", help="Check an xAI OAuth bridge catalog and exact model identity without inference")
+    verify.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
     for name, description in (("smoke", "Spend on one bounded native-readiness pilot and smoke attempt; never eligible for submission"),
                               ("run", "Spend on one native-readiness pilot plus all three frozen attempts and package every outcome")):
         command = commands.add_parser(name, help=description)
         command.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
         command.add_argument("--work", type=Path, required=True, help="New absolute private working directory outside checkout")
+        command.add_argument("--readiness", type=Path, required=True,
+                             help="Verified native-readiness.json and sibling proof.json from the exact route")
         if name == "run":
             command.add_argument("--out", type=Path, required=True, help="New bundle directory; review before publishing")
         command.add_argument("--yes", action="store_true", help="Explicitly authorize model spending")
@@ -352,6 +358,37 @@ def bridge_check(config):
     return runner.sha(config.bridge_binary)
 
 
+def verify_xai_catalog(config):
+    """Confirm the OMP OAuth gateway lists the exact Responses model before inference."""
+    if config.provider != "xai_oauth" or config.api != "responses":
+        raise CLIError("Catalog verification is currently defined only for the xAI OAuth Responses route")
+    if not os.environ.get("KEYGEN_CONTRIB_API_KEY"):
+        raise CLIError("Set KEYGEN_CONTRIB_API_KEY to the local OMP gateway bearer token; no inference was sent")
+    endpoint = config.base_url.rstrip("/") + "/models"
+    request = Request(endpoint, headers={"Authorization": "Bearer " + os.environ["KEYGEN_CONTRIB_API_KEY"],
+                                         "Accept": "application/json",
+                                         "User-Agent": "OpenAI File Downloader, XaiImageApiFetch/1.0"})
+    try:
+        with urlopen(request, timeout=10) as response:
+            if response.status != 200:
+                raise CLIError(f"OMP gateway model catalog returned HTTP {response.status}; no inference was sent")
+            catalog_bytes = response.read(MAX_MODEL_CATALOG_BYTES + 1)
+            if len(catalog_bytes) > MAX_MODEL_CATALOG_BYTES:
+                raise CLIError("OMP gateway model catalog exceeds 2 MiB; no inference was sent")
+            payload = json.loads(catalog_bytes)
+    except CLIError:
+        raise
+    except Exception as exc:
+        raise CLIError(f"Could not read OMP gateway model catalog ({type(exc).__name__}); no inference was sent") from None
+    if not isinstance(payload, dict) or not isinstance(payload.get("data"), list):
+        raise CLIError("OMP gateway returned an unsupported model catalog; no inference was sent")
+    expected_id = "xai-oauth/" + config.model
+    matches = [item for item in payload["data"] if isinstance(item, dict) and item.get("id") == expected_id]
+    if len(matches) != 1 or matches[0].get("api") != "openai-responses":
+        raise CLIError(f"OMP gateway did not advertise exactly {expected_id} on openai-responses; no inference was sent")
+    print(f"Verified OMP gateway catalog: {expected_id} (openai-responses). No inference was sent.")
+
+
 def admit_artifact_disk(directory, synthetic_xm=None):
     if synthetic_xm is None:
         runner.ArtifactStore(runner.frozen_configuration()["storage"]).preflight(directory, 1)
@@ -479,7 +516,7 @@ def sandbox_smoke(args, docker, images):
 def consent(args, config):
     count = ("one native readiness pilot followed by three frozen independent attempts"
              if args.command == "run" else
-             "one native readiness pilot followed by one smoke attempt (180-second wall limit, 4 steps, 60-second model request limit)")
+             "one native readiness pilot followed by one smoke attempt (180-second wall limit, 4 steps, declared native request settings)")
     print(f"This will spend on {count} for exact model {config.model} using {config.provider}/{config.api}. Documented generation/output settings stay unchanged. Pricing and token cost are not verified.", file=sys.stderr)
     if args.yes:
         return
@@ -505,7 +542,6 @@ def model_smoke(args, settings):
     bridge_check(settings)
     config["limits"].update(wall_seconds=180, steps=4, request_seconds=60, command_seconds=30,
                             render_seconds=90, video_seconds=90)
-    config["native"]["timeout_seconds"] = 60
     config["prompts"] = runner.campaign.prompt_manifest(config["limits"])
     config["max_attempts"] = 1
     model["effective_settings"] = runner.campaign.normalize_native(config, [model])[0]
@@ -563,8 +599,13 @@ def main(argv=None):
             configure(args)
         elif args.command == "doctor":
             return doctor(args)
+        elif args.command == "verify":
+            settings = load_config(args.config)
+            verify_xai_catalog(settings)
+            return 0
         else:
             settings = load_config(args.config)
+            settings.readiness = args.readiness
             work = runner.private_work_path(args.work)
             if work.exists():
                 raise CLIError("Use a new work directory; existing attempt evidence must not be overwritten")
