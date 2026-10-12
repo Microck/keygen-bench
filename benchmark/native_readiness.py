@@ -154,7 +154,9 @@ def worker(spec_path: Path) -> None:
             "backend_provenance": model["backend_provenance"],
         }
         run.write_json(root / "runtime-provenance.json", provenance)
-        native = run.bound_content_filter(build_probe_model(spec["config"], model, root), model, root)
+        # The pilot runs the production request path: outage waits inside the content-filter bound.
+        native = run.wait_out_upstream_outage(build_probe_model(spec["config"], model, root), model, root)
+        native = run.bound_content_filter(native, model, root)
         agent = DefaultAgent(
             native, run.Sandbox(spec["docker"], spec["container"], spec["limits"]["command_seconds"]),
             system_template="{{ frozen_system }}", instance_template="{{ task }}",
@@ -267,7 +269,7 @@ def verify_pilot(spec: dict, root: Path, marker: str) -> dict:
             or provenance["backend_provenance"] != model["backend_provenance"]):
         raise ValueError("Pilot executable/package/backend provenance changed during qualification")
     records = transport_records(root)
-    # A content-filter-blocked send never reached native history (run.bound_content_filter).
+    # A content-filter-blocked send or an upstream outage reply never reached native history.
     events = [record.get("event") for record in campaign.unblocked_exchanges(records)]
     if len(events) < 4 or len(events) % 2 or events != ["request", "response"] * (len(events) // 2):
         raise ValueError("Pilot audit does not contain complete sequential wire exchanges")
