@@ -433,6 +433,16 @@ SEQUENCE_STOPPING_FAILURES = {"QUOTA", "AUTH", "CONTENT_FILTER"}
 CONTENT_FILTER_SENDS = 3
 CONTENT_FILTER_PROVIDERS = {"anthropic_oauth", "anthropic"}
 CONTENT_FILTER_MARKER = "output blocked by content filtering policy"
+# OpenCode Go answers HTTP 429 or 502 "Upstream request failed: Endpoint is unavailable" while one model's
+# upstream endpoint is briefly down. Measured 2026-10-12 with one key: step-5-preview-free answered 7 of 20
+# requests sent 5 s apart, failing in runs of about 30 s, while longcat-2.5-preview-free answered 20 of 20.
+# It is not a quota body (those carry QUOTA_MARKERS). Without a wait, one outage ended the whole attempt
+# as QUOTA. The identical request is re-sent after UPSTREAM_WAIT_SECONDS, at most UPSTREAM_WAITS times
+# (10 minutes) per request; the wait counts toward the attempt's wall time.
+UPSTREAM_UNAVAILABLE_MARKER = "upstream request failed: endpoint is unavailable"
+UPSTREAM_WAIT_PROVIDERS = {"go"}
+UPSTREAM_WAIT_SECONDS = 15
+UPSTREAM_WAITS = 40
 
 
 class ContentFilterBlocked(RuntimeError):
@@ -481,6 +491,30 @@ def bound_content_filter(native, model: dict, run_dir: Path):
     return native
 
 
+def wait_out_upstream_outage(native, model: dict, run_dir: Path, sleep=time.sleep):
+    """Re-send a request on this native model instance while its upstream endpoint is briefly unavailable.
+    Each outage reply is audited as a transport.jsonl ``upstream_unavailable`` record after its send.
+    The instance keeps its original class, history handling and serialization.
+    """
+    if model["provider"] not in UPSTREAM_WAIT_PROVIDERS:
+        return native
+    send = native._query
+    def query(messages, **kwargs):
+        for wait in range(1, UPSTREAM_WAITS + 1):
+            try:
+                return send(messages, **kwargs)
+            except Exception as exc:
+                if UPSTREAM_UNAVAILABLE_MARKER not in str(exc).lower():
+                    raise
+            with (run_dir / "transport.jsonl").open("a", encoding="utf-8") as stream:
+                stream.write(json.dumps({"event": "upstream_unavailable", "wait": wait,
+                                         "seconds": UPSTREAM_WAIT_SECONDS}) + "\n")
+            sleep(UPSTREAM_WAIT_SECONDS)
+        return send(messages, **kwargs)
+    native._query = query
+    return native
+
+
 def native_failure_category(exc, run_dir=None) -> str:
     return "content_filter" if isinstance(exc, ContentFilterBlocked) else classify_error(exc, run_dir)
 
@@ -503,7 +537,8 @@ def worker(spec_path: Path) -> None:
     secrets = [os.environ[target]]
     agent = None
     try:
-        agent = DefaultAgent(bound_content_filter(build_model(config, model, run_dir), model, run_dir),
+        native = wait_out_upstream_outage(build_model(config, model, run_dir), model, run_dir)
+        agent = DefaultAgent(bound_content_filter(native, model, run_dir),
                              Sandbox(spec["docker"], spec["container"], config["limits"]["command_seconds"]),
                              system_template="{{ frozen_system }}", instance_template="{{ task }}",
                              step_limit=config["limits"]["steps"], cost_limit=0,
@@ -551,7 +586,7 @@ def summarize(run_dir: Path, model: dict | None = None, *, interrupted=False) ->
               "cached_tokens": 0, "completion_tokens": 0, "reasoning_tokens": 0,
               "model_seconds": 0.0, "sandbox_seconds": 0.0, "commands": 0,
               "in_flight_usage_unknown": bool(interrupted), "identity_mismatch": False,
-              "transport_retries": 0, "content_filter_blocks": 0}
+              "transport_retries": 0, "content_filter_blocks": 0, "upstream_waits": 0}
     path = run_dir / "trajectory.json"
     trajectory = {}
     if path.exists():
@@ -592,6 +627,10 @@ def summarize(run_dir: Path, model: dict | None = None, *, interrupted=False) ->
                 # The block answered its send; the bounded re-send is not a transport retry.
                 unanswered = False
                 totals["content_filter_blocks"] += 1
+            if record.get("event") == "upstream_unavailable":
+                # The outage reply answered its send; the wait and re-send are not transport retries.
+                unanswered = False
+                totals["upstream_waits"] += 1
             if record.get("event") == "response":
                 unanswered = False
                 callbacks.append(record)

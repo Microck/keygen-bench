@@ -611,6 +611,9 @@ def validate_model(config: dict, model: dict) -> dict:
         "retry_policy": {"mini_attempts": 1, "sdk_transport_retries": native["retries"],
                          "retried": "timeouts, HTTP 500 (incl. connection resets), HTTP 503",
                          "never_retried": "HTTP 4xx incl. 429 quota/rate limits, 502 and other unmapped errors",
+                         **({"upstream_outage": "OpenCode Go 'Endpoint is unavailable' (429/502): re-sent "
+                                                "every 15 s, up to 40 times per request (run.UPSTREAM_WAITS)"}
+                            if provider == "go" else {}),
                          "caveat": "LiteLLM gates retries on the first error; a later re-send counts toward the same bound",
                          "recorded_as": "status totals.transport_retries"},
         "cost_policy": "native estimate when positive; zero/missing is unknown, not free",

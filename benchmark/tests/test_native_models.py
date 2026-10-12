@@ -412,6 +412,32 @@ class NativeProtocolTests(unittest.TestCase):
                 self.totals = run.summarize(root, spec)
                 return outcome, seen, events
 
+    def test_go_upstream_outage_is_waited_out_and_other_errors_are_not(self):
+        outage = "Upstream request failed: Endpoint is unavailable."
+        cases = (([(429, outage), (502, outage)], dict, 3, 2),
+                 ([(429, "Go usage limit exceeded")], Exception, 1, 0))
+        for failures, expected, sends, waits in cases:
+            with self.subTest(first=failures[0]), tempfile.TemporaryDirectory() as temporary, \
+                    peer("chat", failures=failures) as (base, seen):
+                root = Path(temporary)
+                spec = model_spec("chat", "go", base)
+                spec["model"] = spec["response_model"] = "kimi-k3"
+                slept = []
+                with patch.object(native, "validate_url", return_value=base), worker_env(root, spec):
+                    model = run.wait_out_upstream_outage(native.build_probe_model(CONFIG, spec, root), spec, root,
+                                                         sleep=slept.append)
+                    try:
+                        outcome = model.query([{"role": "user", "content": "Use bash"}])
+                    except Exception as error:  # noqa: BLE001 - the classified failure is the outcome
+                        outcome = error
+                    self.assertIsInstance(outcome, expected)
+                    self.assertEqual(len(seen), sends)
+                    self.assertEqual(slept, [run.UPSTREAM_WAIT_SECONDS] * waits)
+                    totals = run.summarize(root, spec)
+                    self.assertEqual((totals["upstream_waits"], totals["transport_retries"]), (waits, 0))
+                    if expected is Exception:
+                        self.assertEqual(run.failure_category(outcome), "QUOTA")
+
     def test_content_filter_block_is_resent_up_to_three_sends(self):
         blocked = (400, "Output blocked by content filtering policy")
         for form, kwargs, events in (
