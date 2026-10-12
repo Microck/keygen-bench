@@ -1,0 +1,1011 @@
+{
+  "config": {
+    "limits": {
+      "steps": 0,
+      "wall_seconds": 7200,
+      "request_seconds": 3600,
+      "command_seconds": 120,
+      "render_seconds": 300,
+      "video_seconds": 600,
+      "artifact_bytes": 134217728
+    },
+    "native": {
+      "timeout_seconds": 3600,
+      "retries": 2
+    },
+    "prompts": {
+      "version": "prompt-v2",
+      "system_template_sha256": "208f0608f60694b3a0ff68a30b260c881b4731ac74568db2e03527857ef7ef3f",
+      "task_sha256": "ca1bf032fc28d26e82045c96285336a6d154a74c159b5a42c929fdf9274c67b2",
+      "system": "You are composing music in an isolated workspace. Use the bash tool to run commands and complete the task.\nEach command runs in /workspace in a fresh bash shell; files and the FT2 session persist between commands. Budget: no limit on steps, 120 minutes; a step is one reply, and every tool call in it runs in order. Every tool result ends with <time_left>, the minutes remaining.\nA command still running after 120 seconds is stopped and returns exit code 124 (137 if it had to be killed). Command output over 20,000 bytes shows only its first and last 10,000 bytes.\nThe `ft2 list` command describes the tracker tools. `ft2 call TOOL 'JSON_OBJECT'` calls one tool. `ft2 batch FILE.json` executes a list of {\"name\": TOOL, \"arguments\": {...}} calls in order.\nThis FT2 build exposes samples, instruments by name, patterns, order, tempo, save and render. Envelopes and note-to-sample mapping are unavailable; shape sounds in the sample data itself.\nPython 3 and NumPy are available for creating original sound material, editing files, and analyzing renders. Writing the XM bytes yourself is allowed. Keep it a real tracker module, with instruments and patterns doing the work, not one long pre-rendered sample.\nThe workspace is offline: no network, no coding-agent client, no skill library. You cannot hear audio; render to WAV with module_render and inspect the result with NumPy to check your work, then revise.\nA keygen tune plays in a loop. Compose so the module loops cleanly from its end back to its restart position.\nSave the final editable module as /workspace/submission/tune.xm. A WAV preview and source scripts may accompany it. The submission directory may hold at most 128 MiB in at most 4096 regular files (subdirectories are fine; links and special files are not). If the accompanying files break these limits they are dropped and only tune.xm is kept. A trusted process renders the final XM separately.\nIf the time budget runs out, the session stops and the tune.xm saved at that moment is collected as the submission.\nSubmit by running exactly this command:\necho COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT\nSubmission ends the session. There is no second attempt or post-submission repair.\n",
+      "task": "You have FastTracker II and Python/NumPy at your disposal. Make an original keygen tune. Music only.\nChoose the sound, tempo, harmony, rhythm, instruments, length and arrangement yourself.\n"
+    },
+    "transport": {
+      "backend": "local"
+    },
+    "concurrency": {
+      "workers": 1,
+      "render": 1,
+      "video": 1,
+      "key_pools": {},
+      "providers": {
+        "nim": 1,
+        "custom": 1,
+        "devin": 1,
+        "openai": 1,
+        "anthropic": 1,
+        "codex_oauth": 1,
+        "vercel": 1,
+        "google": 1,
+        "go": 1,
+        "xai_oauth": 1,
+        "anthropic_oauth": 1
+      }
+    },
+    "storage": {
+      "reserve_bytes": 1073741824,
+      "peak_bytes_per_attempt": 2147483648
+    },
+    "max_attempts": 3,
+    "policies": {
+      "attempt_selection": "independent_repetitions"
+    },
+    "image": "sha256:1b9b56eb7bb117ad736fee09aea457fa3f480ee6633532372fc18ae6583eae2b",
+    "visualizer_image": "sha256:b2af47bc794d5c006b2f06a29ef1ec05798d2823fa730bc869e42dc66aba64b1"
+  },
+  "model": {
+    "id": "community-model",
+    "model": "grok-build",
+    "response_model": "grok-build",
+    "provider": "xai_oauth",
+    "base_url": "http://127.0.0.1:41507/v1",
+    "api": "responses",
+    "api_key_env": "KEYGEN_CONTRIB_API_KEY",
+    "generation": {
+      "max_output_tokens": 64000
+    },
+    "tier": {
+      "level": "none-available",
+      "reasoning": {},
+      "spec_sha256": "73445bbdf43c089dba77f96f46e916f7b44779ffec111a4f89dab5293e6b2173"
+    },
+    "backend_provenance": {
+      "service_revision": null,
+      "bridge": {
+        "implementation": "OMP auth-gateway",
+        "version": "18.8.8",
+        "executable_sha256": "9cc9060abd444cfaaf5174bafb12c6c17484c93549bc7792e8933a34692bc221"
+      }
+    },
+    "readiness": {
+      "status": "verified",
+      "verified_at": "2026-10-11T14:16:43.994329+00:00",
+      "evidence": {
+        "artifact_sha256": "6acbadbba1274237af9f9f5b97c8ae6112b5484fcc9c5cb45ed09e266c15225d",
+        "payload": {
+          "schema": "keygen-native-readiness-1",
+          "verified_at": "2026-10-11T14:16:43.994329+00:00",
+          "route": {
+            "provider": "xai_oauth",
+            "api": "responses",
+            "base_url": "http://127.0.0.1:41507/v1",
+            "model": "grok-build",
+            "response_model": "grok-build",
+            "backend_provenance": {
+              "service_revision": null,
+              "bridge": {
+                "implementation": "OMP auth-gateway",
+                "version": "18.8.8",
+                "executable_sha256": "9cc9060abd444cfaaf5174bafb12c6c17484c93549bc7792e8933a34692bc221"
+              }
+            }
+          },
+          "effective_settings": {
+            "model_class": "LitellmResponseModel",
+            "model_name": "openai/grok-build",
+            "model_kwargs": {
+              "api_base": "http://127.0.0.1:41507/v1",
+              "timeout": 3600,
+              "max_retries": 0,
+              "retry_policy": {
+                "TimeoutErrorRetries": 2,
+                "InternalServerErrorRetries": 2,
+                "ServiceUnavailableErrorRetries": 2,
+                "BadRequestErrorRetries": 0,
+                "AuthenticationErrorRetries": 0,
+                "RateLimitErrorRetries": 0,
+                "ContentPolicyViolationErrorRetries": 0,
+                "DefaultRetries": 0
+              },
+              "drop_params": false,
+              "max_output_tokens": 64000,
+              "store": false
+            },
+            "requested_generation": {
+              "max_output_tokens": 64000
+            },
+            "declared_tier": "none-available",
+            "declared_reasoning": {},
+            "transmitted_reasoning": {},
+            "expected_transmitted_generation": {
+              "max_output_tokens": 64000
+            },
+            "delivered_generation": null,
+            "settings_evidence": "pinned native SDK transformation only; endpoint delivery remains unverified",
+            "sdk_capability_override": null,
+            "effective_generation": {
+              "max_output_tokens": 64000
+            },
+            "output_limit": 64000,
+            "output_limit_enforced": null,
+            "retry_policy": {
+              "mini_attempts": 1,
+              "sdk_transport_retries": 2,
+              "retried": "timeouts, HTTP 500 (incl. connection resets), HTTP 503",
+              "never_retried": "HTTP 4xx incl. 429 quota/rate limits, 502 and other unmapped errors",
+              "caveat": "LiteLLM gates retries on the first error; a later re-send counts toward the same bound",
+              "recorded_as": "status totals.transport_retries"
+            },
+            "cost_policy": "native estimate when positive; zero/missing is unknown, not free",
+            "observation_time_left": "every tool result, rendered by original native formatter"
+          },
+          "native_source_sha256": "96ac0f12ca03e649d9cabcedcaba5ab7220730f4c885f4803294ac32289e8847",
+          "upstream_source_sha256": {
+            "DefaultAgent": "e8ef8aa365942d739c2ec5cb0879f60f377d2dc2de8ec670aaedf3bafb45a4c2",
+            "LitellmResponseModel": "968de298d508b0de58f52548472e47135efff3891ddda157a9740e7571a6e8c8"
+          },
+          "runtime_provenance": {
+            "captured_at": "2026-10-11T14:16:33.007085+00:00",
+            "native_source_sha256": "96ac0f12ca03e649d9cabcedcaba5ab7220730f4c885f4803294ac32289e8847",
+            "readiness_source_sha256": "755ed9ddb775c7ce701c29b30199975f93f31a5f6bf60e72adf1bc167607f559",
+            "sandbox_source_sha256": "ac134f32fea4b67417708b0c959d553ce737b7ff40690096d26247bd590b217c",
+            "upstream_source_sha256": {
+              "DefaultAgent": "e8ef8aa365942d739c2ec5cb0879f60f377d2dc2de8ec670aaedf3bafb45a4c2",
+              "LitellmResponseModel": "968de298d508b0de58f52548472e47135efff3891ddda157a9740e7571a6e8c8"
+            },
+            "packages": [
+              [
+                "Jinja2",
+                "3.1.6"
+              ],
+              [
+                "MarkupSafe",
+                "3.0.3"
+              ],
+              [
+                "PyYAML",
+                "6.0.2"
+              ],
+              [
+                "Pygments",
+                "2.21.0"
+              ],
+              [
+                "aiohappyeyeballs",
+                "2.7.1"
+              ],
+              [
+                "aiohttp",
+                "3.14.3"
+              ],
+              [
+                "aiosignal",
+                "1.4.0"
+              ],
+              [
+                "annotated-doc",
+                "0.0.5"
+              ],
+              [
+                "annotated-types",
+                "0.8.0"
+              ],
+              [
+                "anyio",
+                "4.15.1"
+              ],
+              [
+                "attrs",
+                "26.1.0"
+              ],
+              [
+                "boto3",
+                "1.43.101"
+              ],
+              [
+                "botocore",
+                "1.43.101"
+              ],
+              [
+                "certifi",
+                "2026.7.22"
+              ],
+              [
+                "charset-normalizer",
+                "3.5.1"
+              ],
+              [
+                "click",
+                "8.5.0"
+              ],
+              [
+                "datasets",
+                "5.1.0"
+              ],
+              [
+                "dill",
+                "0.4.1"
+              ],
+              [
+                "distro",
+                "1.9.0"
+              ],
+              [
+                "fastuuid",
+                "0.14.0"
+              ],
+              [
+                "filelock",
+                "4.0.3"
+              ],
+              [
+                "frozenlist",
+                "1.8.0"
+              ],
+              [
+                "fsspec",
+                "2026.6.0"
+              ],
+              [
+                "h11",
+                "0.16.0"
+              ],
+              [
+                "hf-xet",
+                "1.6.0"
+              ],
+              [
+                "httpcore",
+                "1.0.9"
+              ],
+              [
+                "httpx",
+                "0.28.1"
+              ],
+              [
+                "huggingface_hub",
+                "1.33.0"
+              ],
+              [
+                "idna",
+                "3.20"
+              ],
+              [
+                "importlib_metadata",
+                "8.9.0"
+              ],
+              [
+                "jiter",
+                "0.17.0"
+              ],
+              [
+                "jmespath",
+                "1.1.0"
+              ],
+              [
+                "jsonschema",
+                "4.26.0"
+              ],
+              [
+                "jsonschema-specifications",
+                "2025.9.1"
+              ],
+              [
+                "linkify-it-py",
+                "2.2.0"
+              ],
+              [
+                "litellm",
+                "1.102.1"
+              ],
+              [
+                "markdown-it-py",
+                "4.2.0"
+              ],
+              [
+                "mdit-py-plugins",
+                "0.6.1"
+              ],
+              [
+                "mdurl",
+                "0.1.2"
+              ],
+              [
+                "mini-swe-agent",
+                "2.4.6"
+              ],
+              [
+                "multidict",
+                "6.9.1"
+              ],
+              [
+                "multiprocess",
+                "0.70.19"
+              ],
+              [
+                "numpy",
+                "2.5.4"
+              ],
+              [
+                "openai",
+                "2.54.0"
+              ],
+              [
+                "packaging",
+                "26.3"
+              ],
+              [
+                "pandas",
+                "3.0.6"
+              ],
+              [
+                "pip",
+                "25.0.1"
+              ],
+              [
+                "platformdirs",
+                "4.13.0"
+              ],
+              [
+                "prompt_toolkit",
+                "3.0.53"
+              ],
+              [
+                "propcache",
+                "0.5.4"
+              ],
+              [
+                "pyarrow",
+                "26.0.0"
+              ],
+              [
+                "pydantic",
+                "2.13.5"
+              ],
+              [
+                "pydantic-settings",
+                "2.15.0"
+              ],
+              [
+                "pydantic_core",
+                "2.46.5"
+              ],
+              [
+                "python-dateutil",
+                "2.9.0.post0"
+              ],
+              [
+                "python-dotenv",
+                "1.2.3"
+              ],
+              [
+                "referencing",
+                "0.37.0"
+              ],
+              [
+                "regex",
+                "2026.9.10"
+              ],
+              [
+                "requests",
+                "2.34.2"
+              ],
+              [
+                "rich",
+                "15.0.0"
+              ],
+              [
+                "rpds-py",
+                "2026.6.3"
+              ],
+              [
+                "s3transfer",
+                "0.19.2"
+              ],
+              [
+                "scipy",
+                "1.17.1"
+              ],
+              [
+                "shellingham",
+                "1.5.4"
+              ],
+              [
+                "six",
+                "1.17.0"
+              ],
+              [
+                "sniffio",
+                "1.3.1"
+              ],
+              [
+                "tenacity",
+                "9.2.1"
+              ],
+              [
+                "textual",
+                "8.2.8"
+              ],
+              [
+                "tiktoken",
+                "0.14.0"
+              ],
+              [
+                "tokenizers",
+                "0.23.2"
+              ],
+              [
+                "tqdm",
+                "4.70.1"
+              ],
+              [
+                "typer",
+                "0.27.3"
+              ],
+              [
+                "typing-inspection",
+                "0.4.4"
+              ],
+              [
+                "typing_extensions",
+                "4.16.0"
+              ],
+              [
+                "urllib3",
+                "2.8.0"
+              ],
+              [
+                "wcwidth",
+                "0.9.2"
+              ],
+              [
+                "xxhash",
+                "4.0.1"
+              ],
+              [
+                "yarl",
+                "1.25.1"
+              ],
+              [
+                "zipp",
+                "4.1.0"
+              ]
+            ],
+            "python": "3.12.15 (main, Oct  9 2026, 15:21:34) [Clang 22.1.3 ]",
+            "backend_provenance": {
+              "service_revision": null,
+              "bridge": {
+                "implementation": "OMP auth-gateway",
+                "version": "18.8.8",
+                "executable_sha256": "9cc9060abd444cfaaf5174bafb12c6c17484c93549bc7792e8933a34692bc221"
+              }
+            }
+          },
+          "trajectory": {
+            "info": {
+              "model_stats": {
+                "instance_cost": 0.0,
+                "api_calls": 3
+              },
+              "config": {
+                "agent": {
+                  "system_template": "{{ frozen_system }}",
+                  "instance_template": "{{ task }}",
+                  "step_limit": 5,
+                  "cost_limit": 0.0,
+                  "wall_time_limit_seconds": 180,
+                  "max_consecutive_format_errors": 3,
+                  "output_path": "/home/ubuntu/.local/share/keygen-xai-oauth-20261011-1558822294728474697/work/readiness-grok-build/isolated-host-home/trajectory.private.json"
+                },
+                "agent_type": "minisweagent.agents.default.DefaultAgent",
+                "model": {
+                  "model_name": "openai/grok-build",
+                  "model_kwargs": {
+                    "api_base": "http://127.0.0.1:41507/v1",
+                    "timeout": 3600,
+                    "max_retries": 0,
+                    "retry_policy": {
+                      "TimeoutErrorRetries": 2,
+                      "InternalServerErrorRetries": 2,
+                      "ServiceUnavailableErrorRetries": 2,
+                      "BadRequestErrorRetries": 0,
+                      "AuthenticationErrorRetries": 0,
+                      "RateLimitErrorRetries": 0,
+                      "ContentPolicyViolationErrorRetries": 0,
+                      "DefaultRetries": 0
+                    },
+                    "drop_params": false,
+                    "max_output_tokens": 64000,
+                    "store": false
+                  },
+                  "litellm_model_registry": null,
+                  "set_cache_control": null,
+                  "cost_tracking": "ignore_errors",
+                  "format_error_template": "{{ error }}{% if finish_reason == 'length' %} Your previous reply was cut off at the output token limit before it contained a complete tool call.{% endif %}",
+                  "observation_template": "{% if output.get('exception_info') %}<exception>{{output.exception_info}}</exception>\n{% endif %}<returncode>{{output.returncode}}</returncode>\n<output>\n{{output.output}}</output>{% if wall_time_limit_seconds > 0 %}\n<time_left>{{ ([0, (wall_time_limit_seconds - elapsed_seconds) / 60] | max) | int }} min</time_left>{% endif %}",
+                  "multimodal_regex": ""
+                },
+                "model_type": "minisweagent.models.litellm_response_model.LitellmResponseModel"
+              },
+              "mini_version": "2.4.6",
+              "exit_status": "Submitted",
+              "submission": "submission/tune.xm",
+              "sandbox": {
+                "image_container": "keygen-readiness-724345a79c6945279310",
+                "network": "none",
+                "skills": false
+              }
+            },
+            "messages": [
+              {
+                "role": "system",
+                "content": "You are a careful shell assistant completing a short file task. Use only the declared bash function tool inside the workspace. A reply may contain one or several bash tool calls; every tool call in a reply runs in order. Work only inside the workspace directory. Follow the task's turns in order and wait for each turn's executed tool results before the next turn."
+              },
+              {
+                "role": "user",
+                "content": "Work in successive turns. Turn 1, one bash tool call: mkdir -p submission and write the single line native-history-river-orchid-cedar-falcon-plum-garnet to submission/readiness.txt; print created. Wait for its executed tool result. Turn 2, two bash tool calls, preferably both in one reply, otherwise one per reply: the first runs cat submission/readiness.txt; the second tests that the file content equals native-history-river-orchid-cedar-falcon-plum-garnet, for example test \"$(cat submission/readiness.txt)\" = native-history-river-orchid-cedar-falcon-plum-garnet. Wait for both executed tool results. Final turn, one bash tool call: echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT. Do not submit before both turn-2 results."
+              },
+              {
+                "id": "resp_bGl0ZWxsbTpjdXN0b21fbGxtX3Byb3ZpZGVyOm9wZW5haTttb2RlbF9pZDpOb25lO3Jlc3BvbnNlX2lkOnJlc3BfYzg3ZjdhNzcyZjVjNDFiOTg2NGViM2ZlZmFkZTExN2I=",
+                "created_at": 1791728195,
+                "error": null,
+                "incomplete_details": null,
+                "instructions": null,
+                "metadata": null,
+                "model": "grok-build",
+                "object": "response",
+                "output": [
+                  {
+                    "id": "rs_0ba891fb-29a6-91a9-9d5e-b4c1d711194d",
+                    "summary": [
+                      {
+                        "text": "The task is: Work in successive turns. Turn 1, one bash tool call: mkdir -p submission and write the single line native-history-river-orchid-cedar-falcon-plum-garnet to submission/readiness.txt; print created. Wait for its executed tool result. Turn 2, two bash tool calls, preferably both in one reply, otherwise one per reply: the first runs cat submission/readiness.txt; the second tests that the ...\n\n\n\n",
+                        "type": "summary_text"
+                      }
+                    ],
+                    "type": "reasoning",
+                    "encrypted_content": "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",
+                    "status": "completed"
+                  },
+                  {
+                    "arguments": "{\"command\":\"mkdir -p submission && echo \\\"native-history-river-orchid-cedar-falcon-plum-garnet\\\" > submission/readiness.txt && echo created\"}",
+                    "call_id": "call-66df919d-b882-460b-9d6a-900a8addb1df-0",
+                    "name": "bash",
+                    "type": "function_call",
+                    "id": "fc_3e49a0f826b24af0a11bc9a1ca75cf03",
+                    "caller": null,
+                    "namespace": null,
+                    "status": "completed"
+                  }
+                ],
+                "parallel_tool_calls": null,
+                "temperature": null,
+                "tool_choice": null,
+                "tools": null,
+                "top_p": null,
+                "max_output_tokens": null,
+                "previous_response_id": null,
+                "reasoning": null,
+                "status": "completed",
+                "text": null,
+                "truncation": null,
+                "usage": {
+                  "input_tokens": 518,
+                  "input_tokens_details": {
+                    "audio_tokens": null,
+                    "cached_tokens": 128,
+                    "text_tokens": null
+                  },
+                  "output_tokens": 473,
+                  "output_tokens_details": {
+                    "audio_tokens": null,
+                    "reasoning_tokens": 432,
+                    "text_tokens": null
+                  },
+                  "total_tokens": 991,
+                  "cost": null
+                },
+                "user": null,
+                "store": null,
+                "extra": {
+                  "actions": [
+                    {
+                      "command": "mkdir -p submission && echo \"native-history-river-orchid-cedar-falcon-plum-garnet\" > submission/readiness.txt && echo created",
+                      "tool_call_id": "call-66df919d-b882-460b-9d6a-900a8addb1df-0"
+                    }
+                  ],
+                  "cost": 0.0,
+                  "timestamp": 1791728198.2798395
+                }
+              },
+              {
+                "extra": {
+                  "raw_output": "created\n",
+                  "returncode": 0,
+                  "timestamp": 1791728198.3554378,
+                  "exception_info": null,
+                  "duration_seconds": 0.06885123800020665
+                },
+                "type": "function_call_output",
+                "call_id": "call-66df919d-b882-460b-9d6a-900a8addb1df-0",
+                "output": "<returncode>0</returncode>\n<output>\ncreated\n</output>\n<time_left>2 min</time_left>"
+              },
+              {
+                "id": "resp_bGl0ZWxsbTpjdXN0b21fbGxtX3Byb3ZpZGVyOm9wZW5haTttb2RlbF9pZDpOb25lO3Jlc3BvbnNlX2lkOnJlc3BfYmU2YjMxMGU1M2I3NDBlNTk1MjRmOTUzNzA2MjY5NDk=",
+                "created_at": 1791728198,
+                "error": null,
+                "incomplete_details": null,
+                "instructions": null,
+                "metadata": null,
+                "model": "grok-build",
+                "object": "response",
+                "output": [
+                  {
+                    "id": "rs_d88a7857-15f6-9a50-bb23-0358a7aa4817",
+                    "summary": [
+                      {
+                        "text": "The task specifies: Work in successive turns.\n\n\n",
+                        "type": "summary_text"
+                      }
+                    ],
+                    "type": "reasoning",
+                    "encrypted_content": "sact6e6r0lxbZig0Z7JjbROK1d/a6l+2DMOuOkSz7N1ifUlh1DdL7PZlhcJqfCPI30kaxa0C9S/14Miik6azLpCs3TTkbmv6HrHd/Zx8Ih3HAilwgo6+WWcMVK5yj3lcvjXM4ZLJcig9jGt7haQ+HvV9f2wcDCPRvOSD+2dsTWQOVu4DyMaNryblgBaR4USImx+jY6bI7TkOZgb7lszToSlbUNY4SiWL5feJBgCUbs1qpHYks4Pvzec7t2wPHUfo50Vioi/+2ra4XTVuw1221nyjGXYvv1A6Pqsybehzvjd87TJgFPpIBx8+fAFYyHwsm6CqgpZWz14aiELK/Ihc/I/5gnUWWDUFw7HN8CPPOaLyswvw2f2QzeL5SXQ89xGD6EhLzyd5YBCEJ3FWvHJcIJ8CQpAGW/gIFxahmkFlrwyIqoz9z/3qPdUhTULXWfsbnAB+RiGlZZli5j3g8vXlcuLT2ra/uyIEMGCBktEJA+YJBweAPc7hjQ5WfiuJv6RqKXVNfS6J9ePY45H/a9LLqMnuorCFREHncHUIs9r1g9NTlW5t+AThUHbZd/UJP2Ii1gy4Ol4FaZfuUINcjZQPgRfjjqfH6Hut41Qqh1njfLOlWF7SxSKf/GnTnF6vCclDK297OzerJWn9iRkc5va1BDN7+3PADEU12KOZRRNF8CIvii/B5hXjDZX5v4ZhsLNIBqdqx4OCEL/G3W4hXqPT7Y+r2cVmKdYRMmi+pdoYm8qRZIEAg1ny515Sva+KAuIhb634cloPVaRl+bcVo+96k0ql0FX9mk7lYZzYg3+nJqYyAps1vKiPqo7d0Lzpd0EzlNUKnqRJYMKGsyl4Xr8XUllKQz2QM6Xa1QjMXqwuqtvp3Oi5dvcGCkMzsZZFp1mCZyXnaOa6BbUPhVw5wjD+Zel3dnzPrk8qUCdcoHuRMk95gdItHZ/RvGxjDKlBkYb9ptfKy4vxFJvjwe54yjXDJfv1BBtpCs9DLHYqu/itweME7/zPafJgtuPsXPaQTRL6W0+eFQ7+exoAHJVagCBiepxgPHuydjYnBJ0/BA4ccCfyAz61XFQGj0tu42GPo0dw8+rJpZvvKHntbH2iZyCDt889wlMt2pCIwTi99dHJ/se4R4nxBG5ItewyEQUHux6EafUCQpAGXq09CS6kxZl0Gi3BwhpOR/N0RuhRtskb7l8XkppXKtu8Aw5uJgUc+B5b1dlv6bUXhujDsudtbWa8sPTrFqdjG6h/dqZtSSuWseqNy16vbxdYq7L22NnOQFdBQdLs/E46gYaDJjhb60CaqZI/yNWxAZ+UMjO3eW8zV98kC7SpuYAf4O8MO5BdCgtwvktR5KUr9AjS/E3IIVy5eWPnckiOQ71rVwBH27PEPYihOvTkti0JRPOjCKltFBS6P9NlU9XmZ7CzESpU//a3C2mfJVimWTnDLo1JNGnUUXq1NtbcA2EJ5EDc/s66cN97DR+qJJMcdJ+/rWHqb1xjqoI+znYKesl0eR+nBT8IJMtb8wXJycD16AqcwocxDd5Uhfy1BFSESmJnSYKR/qt6dlS9p4OyaB9rd469bkWUI5Nbu+1RWg/wOUpQuCmI0v024sKhEje6bp6o5ctOtANKCh4sxLTE1I/UHc1tfVTW6zh2tSd1lSoC2F+q+YZw3MgX0wxuPFCt82KcEtPW+zgdbniUaw9mP0DYkqtS4iXCphG19Yl5mSgpJo2cqv/Ol68oP4yi/wqWYZyqHNuljUhehj/4Ir4ckiv+98Ihvm7+NinVFP6L",
+                    "status": "completed"
+                  },
+                  {
+                    "arguments": "{\"command\":\"cat submission/readiness.txt\"}",
+                    "call_id": "call-ebd9221c-55f4-4077-94b4-56b680e00213-1",
+                    "name": "bash",
+                    "type": "function_call",
+                    "id": "fc_2602ba3e5e6a456e91e99c058dedc548",
+                    "caller": null,
+                    "namespace": null,
+                    "status": "completed"
+                  },
+                  {
+                    "arguments": "{\"command\":\"test \\\"$(cat submission/readiness.txt)\\\" = native-history-river-orchid-cedar-falcon-plum-garnet && echo \\\"test passed\\\" || echo \\\"test failed\\\"\"}",
+                    "call_id": "call-ebd9221c-55f4-4077-94b4-56b680e00213-2",
+                    "name": "bash",
+                    "type": "function_call",
+                    "id": "fc_0dd12288c6284bc99b470cb5bf753b5d",
+                    "caller": null,
+                    "namespace": null,
+                    "status": "completed"
+                  }
+                ],
+                "parallel_tool_calls": null,
+                "temperature": null,
+                "tool_choice": null,
+                "tools": null,
+                "top_p": null,
+                "max_output_tokens": null,
+                "previous_response_id": null,
+                "reasoning": null,
+                "status": "completed",
+                "text": null,
+                "truncation": null,
+                "usage": {
+                  "input_tokens": 697,
+                  "input_tokens_details": {
+                    "audio_tokens": null,
+                    "cached_tokens": 512,
+                    "text_tokens": null
+                  },
+                  "output_tokens": 364,
+                  "output_tokens_details": {
+                    "audio_tokens": null,
+                    "reasoning_tokens": 306,
+                    "text_tokens": null
+                  },
+                  "total_tokens": 1061,
+                  "cost": null
+                },
+                "user": null,
+                "store": null,
+                "extra": {
+                  "actions": [
+                    {
+                      "command": "cat submission/readiness.txt",
+                      "tool_call_id": "call-ebd9221c-55f4-4077-94b4-56b680e00213-1"
+                    },
+                    {
+                      "command": "test \"$(cat submission/readiness.txt)\" = native-history-river-orchid-cedar-falcon-plum-garnet && echo \"test passed\" || echo \"test failed\"",
+                      "tool_call_id": "call-ebd9221c-55f4-4077-94b4-56b680e00213-2"
+                    }
+                  ],
+                  "cost": 0.0,
+                  "timestamp": 1791728201.3562238
+                }
+              },
+              {
+                "extra": {
+                  "raw_output": "native-history-river-orchid-cedar-falcon-plum-garnet\n",
+                  "returncode": 0,
+                  "timestamp": 1791728201.4635274,
+                  "exception_info": null,
+                  "duration_seconds": 0.05074925196822733
+                },
+                "type": "function_call_output",
+                "call_id": "call-ebd9221c-55f4-4077-94b4-56b680e00213-1",
+                "output": "<returncode>0</returncode>\n<output>\nnative-history-river-orchid-cedar-falcon-plum-garnet\n</output>\n<time_left>2 min</time_left>"
+              },
+              {
+                "extra": {
+                  "raw_output": "test passed\n",
+                  "returncode": 0,
+                  "timestamp": 1791728201.4654548,
+                  "exception_info": null,
+                  "duration_seconds": 0.05399147793650627
+                },
+                "type": "function_call_output",
+                "call_id": "call-ebd9221c-55f4-4077-94b4-56b680e00213-2",
+                "output": "<returncode>0</returncode>\n<output>\ntest passed\n</output>\n<time_left>2 min</time_left>"
+              },
+              {
+                "id": "resp_bGl0ZWxsbTpjdXN0b21fbGxtX3Byb3ZpZGVyOm9wZW5haTttb2RlbF9pZDpOb25lO3Jlc3BvbnNlX2lkOnJlc3BfODM0MmQ0NTkxMjVhNGI0YjllNmM3MWRhMWIxYjdlYmE=",
+                "created_at": 1791728201,
+                "error": null,
+                "incomplete_details": null,
+                "instructions": null,
+                "metadata": null,
+                "model": "grok-build",
+                "object": "response",
+                "output": [
+                  {
+                    "id": "rs_16782a29-c45b-97dd-a42e-a72b4288debc",
+                    "summary": [
+                      {
+                        "text": "The task says: Final turn, one bash tool call: echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT. Do not submit before both turn-2 results.\n\n\n",
+                        "type": "summary_text"
+                      }
+                    ],
+                    "type": "reasoning",
+                    "encrypted_content": "KsL58zwsNOljNqf0SkLf8yyLZlwcFQzCmytckeugQj5FoZPp3O+wJ6DfHOCvVGOor74kODX1rri+J9zcju7nKfd/ZTxX1rFZ/4p1nCo2oX6vm4CnkanjVuqnnPCuR8PNTOwR7Xb1t7osoyJU2X9rasEgkoeYzzadlm02M8619yxt75NTQHD9l7KvRxFH2xGDH4Q8JNoE3sgOGjToIuaeUoQHWEjUhPD2EW+gthr2JsO4FtKDExa1Bp0e6oQUPQmz6jZcJkiPwWj4DMrEE9PwmKmoiornssMQYk2oECPPsrd4fpYyffhi+whVCsPux4Y39U8uKUdP2hFdUvHpHHthpj01Z2zIYMikwe4v12YmxUZu8eyHx8BCiSEanyggwmT8PNWn+UcswC/hcgxwWe46ckcXWChrOU6v5k4FeEmEaM9BzOblt4jyRXE2LlN2se7ystBC7cqNgvHqkba1EvnPFklNnf6UPcAtdQA6+OQDX/R/f0A6CLEvQYdHrguh/rmMaWsMYjNhmuh/JoGbZkeNa5I54v2rm1uTIaQX6G6q/lXYC55f+E8zPhe6KehlLJ5qqL6A8C0+n4xTV5sFT8yUe0kdcEx9jInVb6nzC5wPUFautQ",
+                    "status": "completed"
+                  },
+                  {
+                    "arguments": "{\"command\":\"echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT\"}",
+                    "call_id": "call-ce0e2100-8efd-41d2-b3d9-f510baf47e4d-3",
+                    "name": "bash",
+                    "type": "function_call",
+                    "id": "fc_7308e84cfa5d4904a4b989069bb71fc3",
+                    "caller": null,
+                    "namespace": null,
+                    "status": "completed"
+                  }
+                ],
+                "parallel_tool_calls": null,
+                "temperature": null,
+                "tool_choice": null,
+                "tools": null,
+                "top_p": null,
+                "max_output_tokens": null,
+                "previous_response_id": null,
+                "reasoning": null,
+                "status": "completed",
+                "text": null,
+                "truncation": null,
+                "usage": {
+                  "input_tokens": 855,
+                  "input_tokens_details": {
+                    "audio_tokens": null,
+                    "cached_tokens": 640,
+                    "text_tokens": null
+                  },
+                  "output_tokens": 119,
+                  "output_tokens_details": {
+                    "audio_tokens": null,
+                    "reasoning_tokens": 103,
+                    "text_tokens": null
+                  },
+                  "total_tokens": 974,
+                  "cost": null
+                },
+                "user": null,
+                "store": null,
+                "extra": {
+                  "actions": [
+                    {
+                      "command": "echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT",
+                      "tool_call_id": "call-ce0e2100-8efd-41d2-b3d9-f510baf47e4d-3"
+                    }
+                  ],
+                  "cost": 0.0,
+                  "timestamp": 1791728202.5873823
+                }
+              },
+              {
+                "role": "exit",
+                "content": "Submitted",
+                "extra": {
+                  "exit_status": "Submitted",
+                  "submission": "submission/tune.xm"
+                }
+              }
+            ],
+            "trajectory_format": "mini-swe-agent-1.1"
+          },
+          "transport": [
+            {
+              "event": "request",
+              "model": "grok-build",
+              "settings": {
+                "max_output_tokens": 64000,
+                "store": false
+              },
+              "input_sha256": "c6cb61ff5787185f9ab02e5d01736de11da6a069ae42e3dcc94712aafefa1856",
+              "tools_sha256": "b80cabac55c92e3161198e69de5d80895e7c8815b6e4c5fe3b5b0cd0b063a4c8",
+              "payload_scope": "controller_to_endpoint",
+              "provider_received_verified": false
+            },
+            {
+              "requested_model": "grok-build",
+              "expected_response_model": "grok-build",
+              "response_model": "grok-build",
+              "identity_status": "identity_match",
+              "usage": {
+                "input_tokens": 518,
+                "input_tokens_details": {
+                  "cached_tokens": 128
+                },
+                "output_tokens": 473,
+                "output_tokens_details": {
+                  "reasoning_tokens": 432
+                },
+                "total_tokens": 991
+              },
+              "event": "response"
+            },
+            {
+              "event": "request",
+              "model": "grok-build",
+              "settings": {
+                "max_output_tokens": 64000,
+                "store": false
+              },
+              "input_sha256": "f8b18c40d4521848e9a079eaf852bf5e0a92878dd01279224b4679108deef537",
+              "tools_sha256": "b80cabac55c92e3161198e69de5d80895e7c8815b6e4c5fe3b5b0cd0b063a4c8",
+              "payload_scope": "controller_to_endpoint",
+              "provider_received_verified": false
+            },
+            {
+              "requested_model": "grok-build",
+              "expected_response_model": "grok-build",
+              "response_model": "grok-build",
+              "identity_status": "identity_match",
+              "usage": {
+                "input_tokens": 697,
+                "input_tokens_details": {
+                  "cached_tokens": 512
+                },
+                "output_tokens": 364,
+                "output_tokens_details": {
+                  "reasoning_tokens": 306
+                },
+                "total_tokens": 1061
+              },
+              "event": "response"
+            },
+            {
+              "event": "request",
+              "model": "grok-build",
+              "settings": {
+                "max_output_tokens": 64000,
+                "store": false
+              },
+              "input_sha256": "da6b980df0bd757f55cff7f6957884ce3567458f9d4d3f3d347784b3924cdc5a",
+              "tools_sha256": "b80cabac55c92e3161198e69de5d80895e7c8815b6e4c5fe3b5b0cd0b063a4c8",
+              "payload_scope": "controller_to_endpoint",
+              "provider_received_verified": false
+            },
+            {
+              "requested_model": "grok-build",
+              "expected_response_model": "grok-build",
+              "response_model": "grok-build",
+              "identity_status": "identity_match",
+              "usage": {
+                "input_tokens": 855,
+                "input_tokens_details": {
+                  "cached_tokens": 640
+                },
+                "output_tokens": 119,
+                "output_tokens_details": {
+                  "reasoning_tokens": 103
+                },
+                "total_tokens": 974
+              },
+              "event": "response"
+            }
+          ],
+          "sandbox": {
+            "image": "sha256:1b9b56eb7bb117ad736fee09aea457fa3f480ee6633532372fc18ae6583eae2b",
+            "network": "none",
+            "read_only": true,
+            "user": "10001:10001",
+            "memory_bytes": 134217728,
+            "credential_environment_present": false,
+            "host_bind_mounts": false,
+            "public_image_gpg_key": false,
+            "ft2_acceptance_claim": false
+          },
+          "cleanup": {
+            "status": "removed",
+            "container": "keygen-readiness-724345a79c6945279310",
+            "export_helper": "keygen-readiness-724345a79c6945279310-files",
+            "volume": "keygen-readiness-724345a79c6945279310-work"
+          },
+          "tool_artifact_sha256": "58508c6dd5dd6c301cfb56ce0607e4dd4ca9e383f658ec4fda4b73a4edc38874",
+          "payload_scope": "controller_to_endpoint",
+          "provider_received_settings_verified": false
+        },
+        "payload_sha256": "38c7e953c33367876fd2defe4e16728440901344d4598c43c91544229925225d",
+        "provider_received_settings_verified": false
+      }
+    },
+    "effective_settings": {
+      "model_class": "LitellmResponseModel",
+      "model_name": "openai/grok-build",
+      "model_kwargs": {
+        "api_base": "http://127.0.0.1:41507/v1",
+        "timeout": 3600,
+        "max_retries": 0,
+        "retry_policy": {
+          "TimeoutErrorRetries": 2,
+          "InternalServerErrorRetries": 2,
+          "ServiceUnavailableErrorRetries": 2,
+          "BadRequestErrorRetries": 0,
+          "AuthenticationErrorRetries": 0,
+          "RateLimitErrorRetries": 0,
+          "ContentPolicyViolationErrorRetries": 0,
+          "DefaultRetries": 0
+        },
+        "drop_params": false,
+        "max_output_tokens": 64000,
+        "store": false
+      },
+      "requested_generation": {
+        "max_output_tokens": 64000
+      },
+      "declared_tier": "none-available",
+      "declared_reasoning": {},
+      "transmitted_reasoning": {},
+      "expected_transmitted_generation": {
+        "max_output_tokens": 64000
+      },
+      "delivered_generation": null,
+      "settings_evidence": "pinned native SDK transformation only; endpoint delivery remains unverified",
+      "sdk_capability_override": null,
+      "effective_generation": {
+        "max_output_tokens": 64000
+      },
+      "output_limit": 64000,
+      "output_limit_enforced": null,
+      "retry_policy": {
+        "mini_attempts": 1,
+        "sdk_transport_retries": 2,
+        "retried": "timeouts, HTTP 500 (incl. connection resets), HTTP 503",
+        "never_retried": "HTTP 4xx incl. 429 quota/rate limits, 502 and other unmapped errors",
+        "caveat": "LiteLLM gates retries on the first error; a later re-send counts toward the same bound",
+        "recorded_as": "status totals.transport_retries"
+      },
+      "cost_policy": "native estimate when positive; zero/missing is unknown, not free",
+      "observation_time_left": "every tool result, rendered by original native formatter"
+    }
+  },
+  "docker": [
+    "/usr/bin/docker",
+    "--host",
+    "unix:///var/run/docker.sock"
+  ],
+  "container": "keygen-create-5c1a4f372830489d"
+}
