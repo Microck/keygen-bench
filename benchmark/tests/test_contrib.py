@@ -124,6 +124,20 @@ class ContribTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'Secret'):
             validator.validate(self.bundle)
 
+    def test_lowercase_user_field_and_ciphertext_do_not_look_like_secrets(self):
+        self.mutate_json('attempt-1/trajectory.json', lambda t: t.update(
+            messages=[{'role': 'user', 'content': {'user': 'fixture',
+                      'encrypted_content': 'akia' + 'a' * 16}}]))
+        self.assertIsNotNone(validator.validate(self.bundle))
+
+    def test_uppercase_user_field_and_aws_access_key_remain_rejected(self):
+        payloads = (b'{"USER":"fixture"}', b'{"access_key":"AKIA' + b'A' * 16 + b'"}')
+        for payload in payloads:
+            with self.subTest(payload=payload), self.assertRaisesRegex(ValueError, 'Secret'):
+                (self.bundle / 'attempt-1/transport.jsonl').write_bytes(payload + b'\n')
+                self.reseal()
+                validator.validate(self.bundle)
+
     def test_missing_tune_requires_failure(self):
         self.mutate_json('attempt-3/status.json', lambda s: s.update(eligible=True, failure_category=None))
         with self.assertRaisesRegex(ValueError, 'Missing trajectory|Failed attempts'):
@@ -230,15 +244,19 @@ class ContribTests(unittest.TestCase):
                     validator.validate(self.bundle)
 
     def test_oauth_provenance_without_private_endpoint(self):
-        for provider, api in (('anthropic_oauth', 'messages'), ('codex_oauth', 'responses')):
+        for provider, api in (("anthropic_oauth", "messages"), ("codex_oauth", "responses"),
+                              ("xai_oauth", "responses")):
             with self.subTest(provider=provider):
-                manifest = json.loads((self.bundle / 'manifest.json').read_text())
-                environment = manifest['environment']
-                model = environment['model']
-                model.update(provider=provider, api=api, base_url='http://127.0.0.1:8765/v1')
-                if api == 'responses':
-                    model['generation'] = {'max_output_tokens': 32768, 'reasoning': {'effort': 'high'}}
-                    model['tier'].update(level='high', reasoning={'reasoning': {'effort': 'high'}})
+                manifest = json.loads((self.bundle / "manifest.json").read_text())
+                environment = manifest["environment"]
+                model = environment["model"]
+                model.update(provider=provider, api=api, base_url="http://127.0.0.1:8765/v1")
+                if api == "responses":
+                    reasoning_level = "xhigh"
+                    model["generation"] = {"max_output_tokens": 32768,
+                                            "reasoning": {"effort": reasoning_level}}
+                    model["tier"].update(level=reasoning_level,
+                                          reasoning={"reasoning": {"effort": reasoning_level}})
                 model['tier']['spec_sha256'] = validator.campaign.digest(
                     {'source': environment['tier_source'], 'level': model['tier']['level'],
                      'generation': model['generation']})

@@ -21,9 +21,9 @@ LIMITS = {"steps": 0, "wall_seconds": 7200, "request_seconds": 3600,
 ATTEMPTS = ["attempt-1", "attempt-2", "attempt-3"]
 DIGEST = re.compile(r"sha256:[a-f0-9]{64}")
 # Scan binary artifacts too: sample names can carry secrets. Chunk overlap catches splits.
-SECRET = re.compile(rb"(?:(?:sk-|oc_sk_)[A-Za-z0-9_-]{12,}|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|AKIA[A-Z0-9]{16}|-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY|(?:authorization|x-api-key)\s*[\"']?\s*[:=]|(?:api[_-]?key|access[_-]?token|secret[_-]?key)\s*[\"']?\s*[:=]\s*[\"']?(?!\[REDACTED\])[A-Za-z0-9_/-]{12,}|(?:OPENAI|ANTHROPIC|AWS|KEYGEN|OPENCODE)[A-Z0-9_]*(?:KEY|TOKEN|SECRET)\s*[\"']?\s*[:=]|(?:declare -x |os\.environ|printenv|env dump|[\"'](?:PATH|HOME|USER)[\"']\s*:))", re.I)
+SECRET = re.compile(rb"(?:(?:sk-|oc_sk_)[A-Za-z0-9_-]{12,}|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|(?-i:AKIA[A-Z0-9]{16})|-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY|(?:authorization|x-api-key)\s*[\"']?\s*[:=]|(?:api[_-]?key|access[_-]?token|secret[_-]?key)\s*[\"']?\s*[:=]\s*[\"']?(?!\[REDACTED\])[A-Za-z0-9_/-]{12,}|(?:OPENAI|ANTHROPIC|AWS|KEYGEN|OPENCODE)[A-Z0-9_]*(?:KEY|TOKEN|SECRET)\s*[\"']?\s*[:=]|(?:declare -x |os\.environ|printenv|env dump|(?-i:[\"'](?:PATH|HOME|USER)[\"']\s*:)))", re.I)
 PRIVATE = re.compile(rb"""(?:/(?:home|Users)/[^/\s"'\\]+|[A-Z]:\\+(?:Users|Documents and Settings)\\+|["'](?:hostname|username|user_name|home_directory|repo_digests)["']\s*:)""", re.I)
-BRIDGE_PROVIDERS = frozenset({"codex_oauth", "anthropic_oauth"})
+BRIDGE_PROVIDERS = frozenset({"codex_oauth", "anthropic_oauth", "xai_oauth"})
 MODEL_FIELDS = frozenset({"id", "model", "response_model", "provider", "api", "base_url",
                           "api_key_env", "generation", "tier", "bridge"})
 STATUS_FIELDS = frozenset({"status", "attempt_id", "repetition", "model", "started_at",
