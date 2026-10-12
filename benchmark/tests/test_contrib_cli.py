@@ -35,8 +35,6 @@ class ContributionCLITests(unittest.TestCase):
 
     def command(self, *arguments, environment=None):
         command = list(map(str, arguments))
-        if command and command[0] in {"run", "smoke"} and "--readiness" not in command:
-            command.extend(["--readiness", str(self.root / "readiness.json")])
         return subprocess.run([sys.executable, str(CONTRIB / "cli.py"), *command],
                               env=environment or self.environment, input="", text=True,
                               capture_output=True, timeout=60)
@@ -57,37 +55,6 @@ class ContributionCLITests(unittest.TestCase):
         result = self.command(*self.configure_arguments())
         self.assertEqual(result.returncode, 0, result.stderr)
         return json.loads(self.config.read_text())
-
-    def test_readiness_attachment_rejects_a_proof_for_another_route(self):
-        proof_dir = self.root / "proof"
-        proof_dir.mkdir(mode=0o700)
-        proof_path = proof_dir / "proof.json"
-        proof_path.write_text("{}")
-        proof_path.chmod(0o600)
-        payload = {}
-        evidence = {"payload": payload,
-                    "payload_sha256": cli.runner.campaign.digest(payload),
-                    "artifact_sha256": cli.runner.campaign.file_digest(proof_path)}
-        readiness_path = proof_dir / "readiness.json"
-        readiness_path.write_text(json.dumps({"status": "verified", "evidence": evidence}))
-        readiness_path.chmod(0o600)
-        model = {"provider": "go", "api": "chat", "base_url": "https://opencode.ai/zen/go/v1",
-                 "model": "exact-model", "response_model": "exact-model"}
-        with self.assertRaisesRegex(ValueError, "different provider"):
-            cli.runner.attach_readiness(model, {"native": {"timeout_seconds": 10, "retries": 0}},
-                                       readiness_path, None)
-
-    def test_smoke_and_run_require_an_explicit_readiness_proof(self):
-        for command in ("smoke", "run"):
-            with self.subTest(command=command):
-                args = [command, "--config", str(self.config), "--work", str(self.root / "work")]
-                if command == "run":
-                    args.extend(["--out", str(self.root / "bundle")])
-                readiness = self.root / "readiness.json"
-                parsed = cli.parser().parse_args(args + ["--readiness", str(readiness)])
-                self.assertEqual(parsed.readiness, readiness)
-                with self.assertRaises(SystemExit):
-                    cli.parser().parse_args(args)
 
     def test_noninteractive_configuration_preserves_exact_settings_without_secret(self):
         value = self.create_config()

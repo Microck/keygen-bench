@@ -134,7 +134,7 @@ class ContribTests(unittest.TestCase):
         payloads = (b'{"USER":"fixture"}', b'{"access_key":"AKIA' + b'A' * 16 + b'"}')
         for payload in payloads:
             with self.subTest(payload=payload), self.assertRaisesRegex(ValueError, 'Secret'):
-                (self.bundle / 'attempt-1/transport.jsonl').write_bytes(payload + b'\\n')
+                (self.bundle / 'attempt-1/transport.jsonl').write_bytes(payload + b'\n')
                 self.reseal()
                 validator.validate(self.bundle)
 

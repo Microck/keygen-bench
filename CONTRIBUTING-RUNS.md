@@ -66,27 +66,11 @@ Try a short paid model smoke run before committing to three full attempts:
 
 ```sh
 "$PYTHON" benchmark/contrib/cli.py smoke --config "$CONFIG" \
-  --readiness "$HOME/.local/share/keygen-bench/readiness-01/readiness.json" \
   --work "$HOME/.local/share/keygen-bench/smoke-01"
 ```
 
-Smoke outputs are private diagnostics, not eligible submission bundles. Before
-smoke or a full run, generate and retain a native-readiness proof for the exact
-provider, model, protocol, bridge binary, and effective settings:
+Smoke outputs are private diagnostics, not eligible submission bundles.
 
-```sh
-"$PYTHON" benchmark/native_readiness.py \
-  --spec "$HOME/.local/share/keygen-bench/model-readiness-spec.json" \\
-  --out "$HOME/.local/share/keygen-bench/readiness-01" \\
-  --bridge-executable /path/to/authorized-bridge
-```
-
-The sanitized spec must include the exact model and native config, an immutable
-agent image digest, backend provenance, and bounded pilot limits. The pilot uses
-the real provider through a credential-free offline tool sandbox. Keep both
-`proof.json` and `readiness.json` in their private owner-only directory. Do not
-reuse proof across models, endpoints, protocols, bridge binaries, or effective
-settings. A failed pilot is evidence, not permission to bypass the gate.
 Smoke and official runs require interactive spending consent or `--yes`.
 Consent authorizes requests; it is not a dollar cap or a guarantee of model access.
 Doctor makes no provider requests and does not verify authentication or billing.
@@ -95,7 +79,6 @@ When ready, run all three official attempts:
 
 ```sh
 "$PYTHON" benchmark/contrib/cli.py run --config "$CONFIG" \
-  --readiness "$HOME/.local/share/keygen-bench/readiness-01/readiness.json" \
   --work "$HOME/.local/share/keygen-bench/run-01" \
   --out submissions/MODEL/DATE-YOUR-HANDLE
 ```

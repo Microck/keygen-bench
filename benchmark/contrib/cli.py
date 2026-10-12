@@ -116,8 +116,6 @@ def parser():
         command = commands.add_parser(name, help=description)
         command.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
         command.add_argument("--work", type=Path, required=True, help="New absolute private working directory outside checkout")
-        command.add_argument("--readiness", type=Path, required=True,
-                             help="Verified native-readiness.json and sibling proof.json from the exact route")
         if name == "run":
             command.add_argument("--out", type=Path, required=True, help="New bundle directory; review before publishing")
         command.add_argument("--yes", action="store_true", help="Explicitly authorize model spending")
@@ -366,8 +364,7 @@ def verify_xai_catalog(config):
         raise CLIError("Set KEYGEN_CONTRIB_API_KEY to the local OMP gateway bearer token; no inference was sent")
     endpoint = config.base_url.rstrip("/") + "/models"
     request = Request(endpoint, headers={"Authorization": "Bearer " + os.environ["KEYGEN_CONTRIB_API_KEY"],
-                                         "Accept": "application/json",
-                                         "User-Agent": "OpenAI File Downloader, XaiImageApiFetch/1.0"})
+                                         "Accept": "application/json"})
     try:
         with urlopen(request, timeout=10) as response:
             if response.status != 200:
@@ -605,7 +602,6 @@ def main(argv=None):
             return 0
         else:
             settings = load_config(args.config)
-            settings.readiness = args.readiness
             work = runner.private_work_path(args.work)
             if work.exists():
                 raise CLIError("Use a new work directory; existing attempt evidence must not be overwritten")
