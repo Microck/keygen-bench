@@ -63,6 +63,8 @@ TEMPLATE_SWITCHES = {"thinking", "enable_thinking", "clear_thinking", "force_non
 CAPABILITY_OVERRIDES = {
     ("go", "messages", "qwen3.8-flash"): {"effort": "xhigh"},
     ("go", "messages", "qwen3.8-max"): {"effort": "xhigh"},
+    # Gemini 4 Argon (2026-10-13) supports thinkingLevel low/medium/high; the pinned SDK map predates it.
+    ("google", "chat", "gemini-4-argon"): {"effort": "high"},
     ("devin", "chat", "devin/gpt-5-4"): {"effort": "xhigh"},
     ("devin", "chat", "devin/gpt-5-4-mini"): {"effort": "xhigh"},
     ("devin", "chat", "devin/gpt-5-3-codex"): {"effort": "xhigh"},
@@ -428,6 +430,15 @@ def _litellm():
     litellm.drop_params = False
     litellm.suppress_debug_info = True
     litellm.set_verbose = False
+    # The pinned LiteLLM recognizes the Gemini 3 API family (thinkingLevel, thought signatures, default
+    # temperature 1.0) only by the name "gemini-3"; Gemini 4 uses the same API. Unrecognized, gemini-4-argon's
+    # reasoning_effort "high" would be sent as a 4,096-token thinkingBudget instead of thinkingLevel "high".
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexGeminiConfig
+    if not getattr(VertexGeminiConfig, "_keygen_gemini_4_family", False):
+        gemini_3_family = VertexGeminiConfig._is_gemini_3_or_newer
+        VertexGeminiConfig._is_gemini_3_or_newer = staticmethod(
+            lambda model: gemini_3_family(model) or "gemini-4" in (model or ""))
+        VertexGeminiConfig._keygen_gemini_4_family = True
     for name in ("LiteLLM", "LiteLLM Router", "LiteLLM Proxy", "httpx", "httpcore", "openai",
                  "litellm_model", "litellm_response_model", "minisweagent", "agent"):
         logging.getLogger(name).disabled = True
@@ -489,6 +500,9 @@ def _register_capability_override(llm, model: dict) -> None:
     name = model["model"]
     entry = {"litellm_provider": sdk_prefix(model), "mode": "chat",
              f"supports_{override['effort']}_reasoning_effort": True}
+    if model["provider"] == "google":
+        # LiteLLM's Gemini provider accepts reasoning_effort only for models whose entry supports reasoning.
+        entry["supports_reasoning"] = True
 
     def registered() -> bool:
         current = llm.model_cost.get(name)
