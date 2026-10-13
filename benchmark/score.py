@@ -36,7 +36,7 @@ sys.path.insert(0, str(HERE))
 # --- XM structure ---------------------------------------------------------------------------
 
 NOTE_ON = range(1, 97)  # 97 is key-off
-SCORE_VERSION = "craft-v9"
+SCORE_VERSION = "craft-v10"
 EVALUATION_SCHEMA = 2
 ERROR_CATEGORIES = {"INFRA", "AUTH", "TRANSPORT", "PROTOCOL", "EVAL", "MODEL"}
 NON_MODEL_ERRORS = ERROR_CATEGORIES - {"MODEL"}

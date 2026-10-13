@@ -139,6 +139,19 @@ class StructureMetricsTests(unittest.TestCase):
         accompanied = structure_metrics(module(patterns, channels=2))
         self.assertLessEqual(accompanied["arrangement_score"], alone["arrangement_score"])
 
+    def test_one_held_note_per_passage_is_not_development(self):
+        # A pad or bass whole note moving with the chord root has no shape of its
+        # own; before craft-v10 every single note "related" to every other one.
+        held = structure_metrics(module([phrase([root]) for root in (45, 41, 48, 43) * 2]))
+        # Each 4-beat passage holds one note; 8-beat passages hold a real two-note interval.
+        self.assertEqual(held["development_scales"][0]["development"], 0)
+        patterns = [phrase([n + shift for n in (49, 52, 56)]) for shift in (0, 5) * 4]
+        melody = structure_metrics(module(deepcopy(patterns)))
+        for pattern, root in zip(patterns, (45, 41, 48, 43) * 2):
+            pattern["cells"].extend(phrase([root], channel=1)["cells"])
+        padded = structure_metrics(module(patterns, channels=2))
+        self.assertLessEqual(padded["arrangement_score"], melody["arrangement_score"])
+
     def test_accompaniment_note_density_does_not_set_voice_weight(self):
         results = []
         for hits in (4, 16):

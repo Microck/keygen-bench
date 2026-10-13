@@ -58,7 +58,7 @@ export const SCORING = [
     plain: "Do related ideas change across short and long passages?",
     good: "Recognizable note and rhythm shapes with contrasting passages, including sparse ideas and ideas handed between channels.",
     bad: "An unchanged short cycle provides no longer-scale development. Channel numbers, instrument slots and nonzero volume changes do not earn credit.",
-    details: "The scorer compares complete 4-, 8- and 16-beat passages. Each voice earns credit for its relationship to a changed idea and its contrast with the rest of the tune. Its contribution is squared similarity times contrast, averaged equally across voices, passages and the three passage lengths. Exact copies supply no transformation evidence. A steady accompaniment cannot establish development in an unrelated melody. Incomplete passages supply no evidence. Changes in timbre and music without recurring ideas can be missed.",
+    details: "The scorer compares complete 4-, 8- and 16-beat passages. Each voice earns credit for its relationship to a changed idea and its contrast with the rest of the tune. Its contribution is squared similarity times contrast, averaged equally across voices, passages and the three passage lengths. Exact copies supply no transformation evidence, and a single held note in a passage has no shape to relate. A steady accompaniment cannot establish development in an unrelated melody. Incomplete passages supply no evidence. Changes in timbre and music without recurring ideas can be missed.",
   },
   {
     id: "dynamics", kind: "points", max: 10, title: "Dynamics",

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Recompute spectral and structural evidence without mutating historical runs.
 
-    python benchmark/rescore.py runs --root runs --output /tmp/craft-v9-runs.json
-    python benchmark/rescore.py references --modules /tmp/reference-xms --output /tmp/craft-v9-reference.json
+    python benchmark/rescore.py runs --root runs --output /tmp/craft-v10-runs.json
+    python benchmark/rescore.py references --modules /tmp/reference-xms --output /tmp/craft-v10-reference.json
 
 Reference files are named <git_blob_sha>.xm from the pinned duration manifest.
 Reference PCM is rendered locally; ranked-run PCM is verified and reused.

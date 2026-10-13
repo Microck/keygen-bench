@@ -4,7 +4,7 @@ The score measures pitched clarity, development and dynamics, with signal and lo
 
 ## Decision and scope
 
-- Development compares related changed voices across 4, 8 and 16 beats. Exact copies cannot establish transformation; the same voice must supply relationship and contrast. Voices have equal weight rather than note-density weighting.
+- Development compares related changed voices across 4, 8 and 16 beats. Exact copies cannot establish transformation, and since craft-v10 a voice with one onset in a passage cannot establish a relationship; the same voice must supply relationship and contrast. Voices have equal weight rather than note-density weighting.
 - Pitched clarity contributes up to 50 points. Captured harmonic power receives full credit at 0.50, the reference bound. Whole-recording key concentration, tuning and pitch variety are diagnostics, not point multipliers.
 - Signal integrity and bounded loop continuity multiply content points. Artifact caps limit the result. Duration and sustained noise are diagnostics. Noise-like music can earn fewer pitched-clarity points; the score is not stylistically neutral.
 - Mel self-similarity is not used as development credit. It adds timbral sensitivity but does not by itself distinguish an evolving composition from a repeated cycle. The current method uses the XM's symbolic note information.

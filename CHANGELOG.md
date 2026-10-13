@@ -24,6 +24,7 @@
 
 ### Changed
 
+- craft-v10: a voice with one onset in a passage no longer counts as related to other single notes. After transposition every single note had the same shape, so pads and bass whole notes that followed the chord root earned 4-beat development credit.
 - Score pitched clarity, development across 4-, 8- and 16-beat passages, and dynamics. Signal integrity and loop continuity multiply the content total; artifact caps limit the result. Duration, noise texture, key concentration and pitch variety are diagnostics.
 - Add a read-only, hash-verified rescorer for ranked attempts and the pinned reference corpus, with separate evaluation evidence and native reference return/stop boundaries.
 - Derive the contributor contract's scorer identity from the evaluator and reject mismatched campaign evaluations at publication export.
