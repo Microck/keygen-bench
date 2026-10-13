@@ -443,6 +443,20 @@ class NativeProtocolTests(unittest.TestCase):
                     if expected is Exception:
                         self.assertEqual(run.failure_category(outcome), "QUOTA")
 
+    def test_gemini_4_sends_thinking_level_like_gemini_3(self):
+        spec = model_spec("chat", "google", native.GOOGLE_BASE)
+        spec["model"] = spec["response_model"] = "gemini-4-argon"
+        spec["generation"] = {"max_tokens": 65536, "reasoning_effort": "high"}
+        spec["tier"] = {"level": "high", "reasoning": {"reasoning_effort": "high"}, "spec_sha256": "0" * 64}
+        llm = native._litellm()
+        # Production loads the pinned local model map, which predates Argon. A test elsewhere in the suite
+        # imports LiteLLM before LITELLM_LOCAL_MODEL_COST_MAP is set, so its remote map may list Argon already.
+        with patch.dict(llm.model_cost):
+            llm.model_cost.pop("gemini-4-argon", None)
+            mapped = native._map_generation(spec, spec["generation"])
+        self.assertEqual(mapped["thinkingConfig"], {"thinkingLevel": "high", "includeThoughts": True})
+        self.assertEqual(mapped["max_output_tokens"], 65536)
+
     def test_content_filter_block_is_resent_up_to_three_sends(self):
         blocked = (400, "Output blocked by content filtering policy")
         for form, kwargs, events in (
