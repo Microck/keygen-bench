@@ -50,7 +50,7 @@ export const LISTENER_MODEL = {
   lines: [
     "Audiobox Aesthetics is a model Meta released in 2025. People rated about 97,000 clips of speech, sound effects and music (around 500 hours) on four scales from 1 to 10. 158 raters took part, and each followed written guidelines so that their scores meant the same thing. The model learned to predict those ratings.",
     "It hears audio at 16 kHz in mono, 10 seconds at a time. A WavLM encoder, a 12-layer transformer first trained on large amounts of unlabeled speech, turns each window into features. Each of the four ratings blends the encoder's layers in its own learned mix, averages that over time, and maps it onto the 1 to 10 scale with a small prediction head.",
-    "Here it rates the first two minutes of each tune. The window ratings are averaged, weighted by length. The model's revision and weights are pinned and it runs on the CPU, so the same tune always gets the same rating.",
+    "Here it rates the first two minutes of each tune. The window ratings are averaged, weighted by length. Later material cannot change the listener rating, but can change an artifact cap through whole-render measurements. The model's revision and weights are pinned and it runs on the CPU; small numerical differences between execution environments are possible.",
   ],
   links: [
     ["Model weights (Hugging Face)", "https://huggingface.co/facebook/audiobox-aesthetics"],
@@ -100,7 +100,7 @@ export const SCORING = [
 ];
 
 export const SCORING_NOTES = [
-  { id: "listener", title: "About the AI listener", text: "Meta Audiobox Aesthetics (2025, CC-BY-4.0) was trained on human ratings of speech, sound and music clips from public datasets, not specifically tracker or keygen music. On these tunes it leans toward longer and slightly quieter ones. Scores within a few points of each other are effectively tied. The model, its revision and its weights are pinned, and it runs on the CPU, so the same tune always gets the same score." },
+  { id: "listener", title: "About the AI listener", text: "Meta Audiobox Aesthetics (2025, CC-BY-4.0) was trained on human ratings of speech, sound and music clips from public datasets, not specifically tracker or keygen music. On these tunes it leans toward longer and slightly quieter ones. Scores within a few points of each other are effectively tied. The model, its revision and its weights are pinned, and it runs on the CPU. Small numerical differences between execution environments are possible. Only the first two minutes affect the listener rating; artifact caps use whole-render measurements." },
   { id: "judges", title: "One AI judge, no people", text: "No person rates the tunes. The same model scores every tune, with no special cases." },
   { id: "flags", title: "Flags are notes, not penalties", text: "Flags point out something worth listening for, like a masked melody. Only the caps above can lower the listener's score." },
   { id: "cost", title: "How cost is estimated", text: "Estimated from the tokens each run used, at the maker prices supplied with the publication. It's what the run would cost at those prices, not what was billed. Models without a published API price show n/a." },

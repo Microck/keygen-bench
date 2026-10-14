@@ -128,6 +128,10 @@ The listener-v1 score is 10 x the content-enjoyment rating that [Meta Audiobox A
 
 Two artifact caps still apply, because the listener cannot tell how the audio was made: an effectively silent render scores 0, and a long used sample with sparse sequencing, which looks like a pre-rendered song, is capped at 40. The serialized score keeps its historical key, `craft.craft_score`.
 
+The listener rates only the first 120 seconds. Artifact caps use whole-render silence and sequencing measurements, so material after 120 seconds can still change the final score.
+
+Listener provenance records the operating system, CPU architecture and Python version alongside the pinned model, weights and inference package versions. Small numerical differences between execution environments are possible.
+
 The listener replaced the fixed craft formula after the formula's top 20 attempts turned out to be uncorrelated with the listener (Spearman +0.02), and the maintainer preferred the listener's ranking after listening to it. It has limits: it was not trained specifically on tracker music, it leans toward longer and slightly quieter tunes on this corpus, and differences of a few points are within its noise. See the [scoring review](../docs/scoring-review.md).
 
 ### Craft diagnostics

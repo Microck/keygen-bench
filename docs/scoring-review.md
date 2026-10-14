@@ -18,6 +18,8 @@ The model was trained on about 97,000 speech, sound and music clips, each rated 
 
 It runs in its own environment (`benchmark/requirements-listener.txt`) on the CPU, with model revision `9b1dd8e5df9af7216e836a98974fe3b82c56ded6` and weights SHA-256 `a5a3c241…d014e` verified before every rating. The ranked-run evidence was computed on an Apple M5; an earlier Linux aarch64 CPU pass of all 241 attempts gave the same enjoyment ratings to within 1e-4.
 
+Listener provenance also records the operating system, CPU architecture and Python version. These describe the execution environment, not a guarantee of bit-identical predictions across hosts.
+
 ## Provenance and coverage
 
 [Ranked-attempt evidence](../data/listener-v1-runs.json): every `runs/<model>/attempt-N` slot on main f8ecfbf, 90 models and 270 slots, 241 scored and 29 unscored. No attempt was moved, replaced, deleted or rerun, and `other/` is excluded. Every XM and canonical WAV matched its source profile's SHA-256, and the scorer hashes in the file match this branch. It is review evidence, not a replacement profile generation.
@@ -47,12 +49,12 @@ Attempts by the same model agree more than attempts by different models: across 
 - It was not trained specifically on tracker or keygen music.
 - On this corpus it leans toward longer tunes (Spearman +0.51 with duration) and slightly toward quieter ones (-0.31 with integrated loudness). The benchmark does not correct for either.
 - Scores within a few points are effectively tied.
-- Only the first 120 seconds are rated. Material after that cannot change the score.
+- The listener rates only the first 120 seconds. Later material cannot change its rating, but can change the final score through artifact caps, which use whole-render silence and sequencing measurements.
 - The craft measurements remain as diagnostics in `craft.craft_diagnostics`. They explain construction; they do not move the score.
 
 ## Verification
 
-- Score, mix, report and repository tests pass (101 tests and 51 subtests, offline, with a fake listener that exercises the real subprocess contract). Regression coverage includes serialized ratings at a rounding boundary and read-only rescores from craft-v7, craft-v9 and listener-v1 profiles.
+- Score, mix, report and repository tests pass (102 tests and 54 subtests, offline, with a fake listener that exercises the real subprocess contract). Regression coverage includes serialized ratings at a rounding boundary, read-only rescores from craft-v7, craft-v9 and listener-v1 profiles, and rejection of pre-listener public snapshots before publication.
 - An end-to-end native profile produces an eligible listener-v1 score, and the same attempt is marked unscored, not zero, when no listener environment is configured.
 - Focused Ruff checks pass on changed Python. Frontend tests pass.
 

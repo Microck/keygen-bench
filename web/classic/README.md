@@ -71,6 +71,8 @@ The campaign exporter rejects evaluations from a different scorer version.
 Run `benchmark/score.py profile --force --out /absolute/campaign` before exporting
 to create a matching evaluation generation without changing submitted music.
 
+Public snapshots use `keygen-public-snapshot-2`, which includes listener ratings. The builder rejects earlier snapshot schemas; re-export their source campaigns with the current exporter before building.
+
 `core/intro.js` is the preloader. It is a classic script, so it paints before
 the module graph loads, and it draws with its own 5x7 font rather than waiting
 for the FT2 fonts. `app.js` reports the results and font loads through

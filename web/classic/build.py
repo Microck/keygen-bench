@@ -375,8 +375,8 @@ def build_snapshots(sources: list[Path], publish_root: Path, excluded: list[tupl
     if publish_root.exists() and any(publish_root.iterdir()):
         raise ValueError("Use a new empty publication directory for each immutable snapshot")
     snapshots = [json.loads((source / "snapshot.json").read_text()) for source in sources]
-    if any(snapshot.get("schema") != "keygen-public-snapshot-1" for snapshot in snapshots):
-        raise ValueError("Unsupported public snapshot")
+    if any(snapshot.get("schema") != "keygen-public-snapshot-2" for snapshot in snapshots):
+        raise ValueError("Unsupported public snapshot; require keygen-public-snapshot-2 with listener ratings. Re-export with collect_public.py")
     for snapshot in snapshots:
         if "cohort" not in snapshot:
             raise ValueError("Snapshot has no cohort label; re-export it with collect_public.py")

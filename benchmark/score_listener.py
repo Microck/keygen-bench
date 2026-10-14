@@ -19,6 +19,7 @@ from __future__ import annotations
 import hashlib
 import importlib.metadata
 import json
+import platform
 import sys
 
 REPO = "facebook/audiobox-aesthetics"
@@ -44,6 +45,7 @@ def identity() -> dict:
     import torch
     return {"model": REPO, "revision": REVISION, "weights_sha256": weights, "device": "cpu",
             "max_seconds": MAX_SECONDS, "torch": torch.__version__,
+            "platform": platform.system(), "machine": platform.machine(), "python": platform.python_version(),
             "torchaudio": importlib.metadata.version("torchaudio"),
             "audiobox_aesthetics": importlib.metadata.version("audiobox_aesthetics")}
 

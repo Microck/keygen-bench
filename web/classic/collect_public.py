@@ -332,7 +332,7 @@ def main() -> None:
                 runs.append(public_run(row, group, source / row["run_dir"], output, report, args.scope, prices))
                 print(f"Verified {len(runs)}: {runs[-1]['name']}", flush=True)
         extra = {}
-    write_json(output / "snapshot.json", {"schema": "keygen-public-snapshot-1",
+    write_json(output / "snapshot.json", {"schema": "keygen-public-snapshot-2",
                "generated": datetime.now(timezone.utc).isoformat(), "scope": args.scope,
                "metadata_captured": metadata_captured,
                "campaign_id": report["campaign_id"], "campaign_sha256": report["campaign_sha256"],
