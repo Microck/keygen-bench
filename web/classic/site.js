@@ -7,7 +7,7 @@ import { drawPatternFit, drawScopes } from "./core/pattern.js";
 import { Player } from "./core/player.js";
 import { loadXM, loadTrace, prefetchXM, mediaUrl, money, usd, tokens, mmss, rankingRows } from "./core/data.js";
 import { h, badge, dropdown, makerItems, modelItems, scoreColor } from "./core/ui.js";
-import { SCORING, SCORING_NOTES, DISCLAIMER, KEYGEN, OVERVIEW, SETUP, PROMPTS, SUPPORT, SITE, PAGES } from "./core/content.js";
+import { SCORING, SCORING_NOTES, DISCLAIMER, KEYGEN, OVERVIEW, LISTENER_MODEL, SETUP, PROMPTS, SUPPORT, SITE, PAGES } from "./core/content.js";
 import { fmt } from "./core/xm.js";
 import { slide, TRANSITION_CSS } from "./core/transitions.js";
 import { MARKERS, MARKER_CSS, CONSISTENCY_HELP, consistencyTitle } from "./core/consistency.js";
@@ -90,6 +90,7 @@ const CSS = `
 .vb .toc .btn { justify-content: flex-start; height: 24px; width: 100%; padding-left: 5px; }
 .vb .toc { gap: 2px; }
 .vb pre.formula { margin: 0 0 7px; color: var(--pattext); font: inherit; }
+.vb .well a { color: var(--pattext); }
 .vb table.plain { border-collapse: collapse; margin-bottom: 7px; }
 .vb table.plain td { padding: 0 10px 0 0; color: var(--pattext); }
 .vb table.plain tr:first-child td { color: #fff; }
@@ -237,16 +238,18 @@ export async function mount(root, ctx) {
   const meter = (v, max, color) => h("div", { class: "meter sunken" }, h("i", { style: { width: `calc(${Math.max(0, Math.min(1, v / max)) * 100}% - 1px)`, background: color ?? "var(--pattext)" } }));
 
   function scoreCard(r, { compact = false } = {}) {
-    // Enjoyment sets the score; the other three ratings are shown for context only.
+    // Enjoyment sets the score; the other three ratings are unscored context.
     const L = r.listener;
-    const ratings = [["Enjoy", L.content_enjoyment, "#55FF55"], ["Quality", L.production_quality], ["Useful", L.content_usefulness], ["Complex", L.production_complexity]];
+    const row = ([kk, v, color]) => [h("span", { class: "muted" }, kk), meter(v, 10, color), h("span", { style: { textAlign: "right" } }, `${v.toFixed(2)}/10`)];
+    const unscored = [["Quality", L.production_quality], ["Useful", L.content_usefulness], ["Complex", L.production_complexity]];
     return [
       h("div", { class: "row", style: { gap: "4px", padding: "1px 1px 0" } },
         badge(r.maker), h("span", { class: "grow" }), h("span", { class: "big", title: attemptScoreTitle(r), "aria-label": attemptScoreTitle(r) }, r.score.toFixed(1))),
       h("div", { class: "shadow-text card-name", style: { padding: "0 1px" } }, nameOf(r)),
       h("div", { class: "sunken", style: { padding: "3px 4px", display: "grid", gridTemplateColumns: "auto 1fr auto", gap: "2px 6px", alignItems: "center" } },
-        ...ratings.flatMap(([kk, v, color]) => [h("span", { class: "muted" }, kk), meter(v, 10, color), h("span", { style: { textAlign: "right" } }, `${v.toFixed(2)}/10`)]),
-        h("span", { class: "muted", title: "Pre-listener craft total; a diagnostic, not the score" }, "Craft"), h("span", {}), h("span", { style: { textAlign: "right" } }, r.craft.total.toFixed(1))),
+        ...row(["Enjoy", L.content_enjoyment, "#55FF55"]),
+        h("span", { class: "muted", style: { gridColumn: "1 / -1" }, title: "The AI listener's other ratings. They do not change the score." }, "Unscored"),
+        ...unscored.flatMap(row)),
       compact ? null : h("dl", { class: "kv sunken" },
         h("dt", { title: bestRankHelp }, "Best rank"), h("dd", { title: bestRankHelp }, rankText(r)),
         h("dt", {}, "Est. cost"), h("dd", { title: r.cost_range_usd?.reason }, costText(r)),
@@ -645,7 +648,7 @@ export async function mount(root, ctx) {
     const title = h("h2", {}, "");
     const head = (text) => h("h2", { class: "big", style: { fontSize: "20px", margin: "8px 0 6px", fontWeight: "normal" } }, text);
     const para = (t) => h("p", {}, t);
-    const measure = (m) => [head({ points: `${m.title} (${m.max} points)`, rating: `${m.title} (shown, not scored)`, diagnostic: `${m.title} (diagnostic, ${m.max})`, "diagnostic-factor": `${m.title} (diagnostic)` }[m.kind] ?? m.title), para(m.plain),
+    const measure = (m) => [head({ points: `${m.title} (${m.max} points)`, rating: `${m.title} (unscored)` }[m.kind] ?? m.title), para(m.plain),
       h("table", { class: "plain" },
         h("tr", {}, h("td", { style: { color: "#55FF55", whiteSpace: "nowrap", verticalAlign: "top" } }, m.kind === "points" || m.kind === "cap" ? "Scores well" : "Higher"), h("td", { style: { color: "#fff" } }, m.good)),
         h("tr", {}, h("td", { style: { color: "#FFAA00", whiteSpace: "nowrap", verticalAlign: "top" } }, m.kind === "points" || m.kind === "cap" ? "Loses points" : "Lower"), h("td", { style: { color: "#fff" } }, m.bad))),
@@ -655,8 +658,6 @@ export async function mount(root, ctx) {
     const MEASURE = {
       enjoyment: (r) => 10 * r.listener.content_enjoyment, quality: (r) => r.listener.production_quality,
       usefulness: (r) => r.listener.content_usefulness, complexity: (r) => r.listener.production_complexity,
-      tonal: (r) => r.craft.parts.tonal_organization, development: (r) => r.craft.parts.development, dynamics: (r) => r.craft.parts.dynamics,
-      integrity: (r) => r.craft.factors.signal_integrity, loop: (r) => r.craft.factors.loop_continuity,
     };
     function embed(m) {
       const pool = data.runs.filter((r) => r.rank);
@@ -667,9 +668,8 @@ export async function mount(root, ctx) {
       }
       const get = MEASURE[m.id];
       if (!get || !pool.length) return null;
-      const factor = m.kind === "diagnostic-factor";
-      const max = factor ? 1 : m.max;
-      const fmtV = (v) => (factor ? "x" + v.toFixed(2) : m.kind === "rating" ? `${v.toFixed(2)}/${m.max}` : `${v.toFixed(1)}/${m.max}`);
+      const max = m.max;
+      const fmtV = (v) => (m.kind === "rating" ? `${v.toFixed(2)}/${m.max}` : `${v.toFixed(1)}/${m.max}`);
       const sorted = pool.slice().sort((a, b) => get(b) - get(a));
       const hi = sorted[0], lo = sorted.at(-1);
       const full = pool.filter((r) => get(r) >= max - 1e-9).length;
@@ -685,7 +685,7 @@ export async function mount(root, ctx) {
           ...pool.map((r) => h("button", { type: "button", style: { left: pct(get(r)), background: scoreColor((get(r) / max) * 100) }, "aria-label": `${r.label}, ${m.title}: ${fmtV(get(r))}. Open in the tracker.`,
             onmouseenter: () => show(r), onfocus: () => { focused = r; show(r); }, onblur: () => { focused = null; show(null); },
             onclick: () => ctx.go({ page: "viewer", run: r.slug }) }))),
-        h("div", { class: "row muted", style: { justifyContent: "space-between" } }, h("span", {}, factor ? "x0" : "0"), readout, h("span", {}, factor ? "x1" : String(m.max))),
+        h("div", { class: "row muted", style: { justifyContent: "space-between" } }, h("span", {}, "0"), readout, h("span", {}, String(m.max))),
         ...(get(hi) === get(lo) ? [h("div", { class: "muted" }, `Every ranked model gets ${fmtV(get(hi))} here.`)] : [["Highest", hi], ["Lowest", lo]].map(([k, r]) => h("div", { class: "row" }, h("span", { class: "muted", style: { width: "44px" } }, k), badge(r.maker), h("span", { class: "grow" }, r.label), h("span", {}, fmtV(get(r))), listen(r)))));
     }
     const listen = (r) => h("button", { class: "btn", style: { height: "14px" }, title: "Open in the tracker", onclick: () => ctx.go({ page: "viewer", run: r.slug }) }, "Listen");
@@ -697,11 +697,11 @@ export async function mount(root, ctx) {
       { id: "prompts", label: "Prompts", render: () => [head("Prompts"), para("Every model gets exactly these two prompts, word for word, with this campaign's limits filled in."),
         ...PROMPTS.flatMap((p) => [head(p.title), h("pre", { class: "prompt sunken" }, p.text)])] },
       { id: "overview", label: "How it works", render: () => [head("How it works"), ...OVERVIEW.map(para),
-        h("pre", { class: "formula" }, ["score = 10 x content enjoyment (AI listener, 1 to 10)", "        then caps, rounded to 0.1"].join("\n"))] },
+        h("pre", { class: "formula" }, ["score = 10 x content enjoyment (AI listener, 1 to 10)", "        then caps, rounded to 0.1"].join("\n")),
+        head(LISTENER_MODEL.title), ...LISTENER_MODEL.lines.map(para),
+        h("p", {}, ...LISTENER_MODEL.links.flatMap(([label, href], i) => [i ? " | " : "", h("a", { href, target: "_blank", rel: "noopener" }, label)]))] },
       { id: "points", label: "The AI listener", render: () => SCORING.filter((m) => m.kind === "points" || m.kind === "rating").flatMap(measure) },
       { id: "checks", label: "Caps", render: () => SCORING.filter((m) => m.kind === "cap").flatMap(measure) },
-      { id: "diagnostics", label: "Diagnostics", render: () => [para("These measurements ranked the tunes before the AI listener. They are kept because they explain how a tune is built, but they no longer change the score."),
-        ...SCORING.filter((m) => m.kind.startsWith("diagnostic")).flatMap(measure)] },
       { id: "example", label: "Example run", render: () => [head("Example run"), para("Every run's score, step by step. Pick any run."), worked(exampleRun())] },
       { id: "notes", label: "Caveats", render: () => SCORING_NOTES.flatMap((n) => [head(n.title), para(n.text),
         n.id === "flags" ? h("table", { class: "plain" }, ...Object.entries(data.flag_rules).filter(([kk]) => kk !== "RAW_XM").map(([kk, v]) => h("tr", {}, h("td", { style: { color: "#FFAA00", whiteSpace: "nowrap", verticalAlign: "top" } }, SHORT[kk] ?? kk), h("td", { style: { color: "#fff" } }, v)))) : null]) },
@@ -728,10 +728,9 @@ export async function mount(root, ctx) {
         ["x 10", (10 * L.content_enjoyment).toFixed(2)],
         ...(run.caps.length && run.uncapped != null ? [["Before caps", run.uncapped.toFixed(1)]] : []),
         ["= score", run.score.toFixed(1) + (run.caps.length ? " (capped)" : "")],
-        ["Production quality", `${L.production_quality.toFixed(2)} / 10, not scored`],
-        ["Content usefulness", `${L.content_usefulness.toFixed(2)} / 10, not scored`],
-        ["Production complexity", `${L.production_complexity.toFixed(2)} / 10, not scored`],
-        ["Craft diagnostic total", `${run.craft.total.toFixed(1)} / 100, not scored`],
+        ["Production quality", `${L.production_quality.toFixed(2)} / 10 (unscored)`],
+        ["Content usefulness", `${L.content_usefulness.toFixed(2)} / 10 (unscored)`],
+        ["Production complexity", `${L.production_complexity.toFixed(2)} / 10 (unscored)`],
       ];
       holder.replaceChildren(
         h("div", { class: "row", style: { gap: "4px", margin: "2px 0 6px" } }, h("span", {}, "Pick a run:"),

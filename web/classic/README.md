@@ -65,9 +65,7 @@ The frontend groups playable attempts by model, opens the best attempt by defaul
 
 The score display shows the AI listener's four ratings. Content enjoyment
 times 10 is the score; production quality, content usefulness and production
-complexity are shown for context. Each run's `craft` object carries the older
-craft measurements (pitched clarity, development, dynamics, signal integrity and
-loop continuity) as diagnostics. Publication scores and
+complexity are shown as unscored context. Publication scores and
 their evaluator provenance must match the supplied evaluation evidence.
 The campaign exporter rejects evaluations from a different scorer version.
 Run `benchmark/score.py profile --force --out /absolute/campaign` before exporting

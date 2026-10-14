@@ -117,7 +117,6 @@ def public_run(row: dict, group: dict, directory: Path, output: Path, campaign: 
     audio = profile.get("audio") or {}
     structure = profile.get("structure") or {}
     craft = profile["craft"]
-    diagnostics = craft["craft_diagnostics"]
     loop = profile.get("loop") or {}
     trace = compact_trace(stage / "trace.jsonl.gz", int(audio["duration_seconds"] * 44100)) if (stage / "trace.jsonl.gz").is_file() else []
     price = prices.get(name, {})
@@ -133,14 +132,9 @@ def public_run(row: dict, group: dict, directory: Path, output: Path, campaign: 
         "listener": {key: craft["listener"][key] for key in
                      ("content_enjoyment", "production_quality", "content_usefulness", "production_complexity")},
         "uncapped": craft["uncapped"], "caps": craft.get("caps") or [],
-        "craft": {"total": diagnostics["total"],
-                  "parts": {key: diagnostics["parts"][key] for key in ("tonal_organization", "development", "dynamics")},
-                  "factors": {key: diagnostics["factors"][key] for key in ("signal_integrity", "loop_continuity")}},
         "flags": [{"id": flag, "rule": FLAG_RULES.get(flag, "")} for flag in profile.get("flags") or []],
         "loop": {"quality": loop.get("quality_score"), "worst": worst_transition(loop),
                  "first_pass_audible_seconds": loop.get("first_pass_audible_seconds")},
-        "tonal": {key: (audio.get("spectral") or {}).get(key) for key in ("tonal_evidence_fraction", "diatonic_concentration", "effective_pitch_classes", "sustained_noise_fraction")},
-        "development": {key: structure.get(key) for key in ("arrangement_score", "sequence_coverage", "development_method", "development_scales")},
         "audio": {"duration": audio.get("duration_seconds"), "lufs": audio.get("lufs_integrated"), "peak": (status.get("audio") or {}).get("peak")},
         "module": {key: (status.get("module") or {}).get(key) for key in ("name", "channels", "bpm", "speed", "song_length", "loop_start")},
         "usage": {**{key: totals.get(key) for key in ("requests", "prompt_tokens", "cached_tokens", "completion_tokens", "reasoning_tokens", "commands")},

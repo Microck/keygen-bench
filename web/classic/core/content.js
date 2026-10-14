@@ -41,75 +41,54 @@ export const DISCLAIMER = {
 export const OVERVIEW = [
   "Each tune is rendered by FastTracker II, then played to an AI listener: Meta's Audiobox Aesthetics model. It predicts how a person would rate the audio from 1 to 10.",
   "The score is its content enjoyment rating times 10. Two caps can lower it: silence scores 0, and a tune that is really one long pre-recorded sample is capped at 40.",
-  "The older measurements of pitch, development, loudness, clean sound and clean loop are still shown as diagnostics. They no longer change the score.",
 ];
 
+// How the listener model works, for the "How it works" page. Checked against the
+// audiobox_aesthetics 0.0.4 source and Tjandra et al. 2025.
+export const LISTENER_MODEL = {
+  title: "Inside the AI listener",
+  lines: [
+    "Audiobox Aesthetics is a model Meta released in 2025. People rated about 97,000 clips of speech, sound effects and music (around 500 hours) on four scales from 1 to 10. 158 raters took part, and each followed written guidelines so that their scores meant the same thing. The model learned to predict those ratings.",
+    "It hears audio at 16 kHz in mono, 10 seconds at a time. A WavLM encoder, a 12-layer transformer first trained on large amounts of unlabeled speech, turns each window into features. Each of the four ratings blends the encoder's layers in its own learned mix, averages that over time, and maps it onto the 1 to 10 scale with a small prediction head.",
+    "Here it rates the first two minutes of each tune. The window ratings are averaged, weighted by length. The model's revision and weights are pinned and it runs on the CPU, so the same tune always gets the same rating.",
+  ],
+  links: [
+    ["Model weights (Hugging Face)", "https://huggingface.co/facebook/audiobox-aesthetics"],
+    ["Code (GitHub)", "https://github.com/facebookresearch/audiobox-aesthetics"],
+    ["Paper (arXiv 2502.05139)", "https://arxiv.org/abs/2502.05139"],
+  ],
+};
+
 // id, title, kind, max, plain summary, what scores higher, what scores lower, details.
-// kind: "points" sets the score, "rating" is a listener rating that is shown but not scored,
-// "diagnostic" and "diagnostic-factor" are the older craft measurements, "cap" limits the score.
+// kind: "points" sets the score, "rating" is a listener rating that is unscored, "cap" limits the score.
 export const SCORING = [
   {
     id: "enjoyment", kind: "points", max: 100, title: "Content enjoyment",
     plain: "How much would a listener enjoy this? This is the score.",
     good: "Music the model expects people to enjoy: emotional impact, artistic skill and expression.",
     bad: "Music the model expects to bore or grate on people.",
-    details: "The model listens in 10-second windows to the first two minutes of the canonical render, as 16 kHz mono audio, and averages its ratings weighted by window length. It was trained on about 97,000 speech, sound and music clips rated by 158 people. In its paper its enjoyment predictions correlate about 0.66 to 0.75 with human ratings of music. The rating, from 1 to 10, is multiplied by 10.",
+    details: "This is the model's content enjoyment rating. In its paper, its enjoyment predictions correlate about 0.66 to 0.75 with human ratings of music. The rating, from 1 to 10, is multiplied by 10.",
   },
   {
     id: "quality", kind: "rating", max: 10, title: "Production quality",
-    plain: "How technically clean is the audio? Shown, not scored.",
+    plain: "How technically clean is the audio? Unscored: it does not change the score.",
     good: "Clear, undistorted sound with balanced frequencies and dynamics.",
     bad: "Noise, distortion, muffled or harsh sound.",
-    details: "A second rating from the same model. It describes production, not composition, so it does not enter the score.",
+    details: "A second rating from the same model. It judges how the sound is produced, not the music, and every tune is rendered by the same engine, so it is shown for context only.",
   },
   {
     id: "usefulness", kind: "rating", max: 10, title: "Content usefulness",
-    plain: "Would someone reuse this audio in their own work? Shown, not scored.",
+    plain: "Would someone reuse this audio in their own work? Unscored: it does not change the score.",
     good: "Audio that would make good source material.",
     bad: "Audio few people would reuse.",
-    details: "A third rating from the same model. It overlaps with enjoyment and quality, so it does not enter the score.",
+    details: "A third rating from the same model. Being good raw material for other creators is a different question from being enjoyable, so it is shown for context only.",
   },
   {
     id: "complexity", kind: "rating", max: 10, title: "Production complexity",
-    plain: "How many layers of sound are going on? Shown, not scored.",
+    plain: "How many layers of sound are going on? Unscored: it does not change the score.",
     good: "Many instruments and parts at once.",
     bad: "A single sparse voice.",
-    details: "A fourth rating from the same model. More layers are not better music, so it does not enter the score.",
-  },
-  {
-    id: "tonal", kind: "diagnostic", max: 50, title: "Pitched clarity",
-    plain: "How much of the sound has a clear pitch?",
-    good: "Clearly pitched sound, including slow notes, chromatic melodies and sustained tones.",
-    bad: "Little detectable pitched sound. Noise-based music measures lower without being defective.",
-    details: "The detector measures captured harmonic power in short audio windows and averages it over active time. Half the power gives the full 50. A stationary tone reaches 50 too, which is one reason this no longer sets the score.",
-  },
-  {
-    id: "development", kind: "diagnostic", max: 40, title: "Development",
-    plain: "Do related ideas change across short and long passages?",
-    good: "Recognizable note and rhythm shapes with contrasting passages, including sparse ideas and ideas handed between channels.",
-    bad: "An unchanged short cycle. Channel numbers, instrument slots and nonzero volume changes do not count.",
-    details: "Compares complete 4-, 8- and 16-beat passages. Each voice counts for its relationship to a changed idea and its contrast with the rest of the tune: squared similarity times contrast, averaged across voices, passages and the three passage lengths. Exact copies and single held notes have no shape to relate.",
-  },
-  {
-    id: "dynamics", kind: "diagnostic", max: 10, title: "Dynamics",
-    plain: "Does the loudness move?",
-    good: "Some contrast between quieter and louder moments.",
-    bad: "The same level from start to end (flagged FLAT), or wild jumps.",
-    details: "Two ranges, weighted 25% and 75%: a 3 to 18 dB range between short moments, and a 1 to 10 dB range across 3-second stretches. Under 2 dB between short moments is flagged FLAT.",
-  },
-  {
-    id: "integrity", kind: "diagnostic-factor", title: "Clean sound",
-    plain: "Does it play without technical faults?",
-    good: "No clipping, no long silences, a sensible loudness.",
-    bad: "Distortion from clipping, dead air, or a tune so quiet it is barely there.",
-    details: "Weighs clipping (35%), the share of silence (25%), DC offset (15%), the longest silent gap (15%) and peak level (10%). Loudness counts fully from -30 LUFS up and falls to nothing at -60 LUFS.",
-  },
-  {
-    id: "loop", kind: "diagnostic-factor", title: "Clean loop",
-    plain: "Keygen tunes repeat forever. Does the restart sound seamless?",
-    good: "The end flows back into the start without a click, gap, volume jump or broken rhythm.",
-    bad: "A click, silence or stumble every time it restarts.",
-    details: "FT2 plays each tune continuously and every restart is measured for clicks, gaps, level jumps, broken rhythm and tone change. The worst one counts. A tune that never restarts gets the lowest loop quality.",
+    details: "A fourth rating from the same model. More layers are not better music, so it is shown for context only.",
   },
   {
     id: "caps", kind: "cap", title: "Caps",
@@ -122,7 +101,7 @@ export const SCORING = [
 
 export const SCORING_NOTES = [
   { id: "listener", title: "About the AI listener", text: "Meta Audiobox Aesthetics (2025, CC-BY-4.0) was trained on human ratings of speech, sound and music clips from public datasets, not specifically tracker or keygen music. On these tunes it leans toward longer and slightly quieter ones. Scores within a few points of each other are effectively tied. The model, its revision and its weights are pinned, and it runs on the CPU, so the same tune always gets the same score." },
-  { id: "judges", title: "One AI judge, no people", text: "No person rates the tunes. The same model scores every tune, with no special cases. Before this listener, fixed rules ranked the tunes, and at the top of the table they did not track how good a tune sounded." },
+  { id: "judges", title: "One AI judge, no people", text: "No person rates the tunes. The same model scores every tune, with no special cases." },
   { id: "flags", title: "Flags are notes, not penalties", text: "Flags point out something worth listening for, like a masked melody. Only the caps above can lower the listener's score." },
   { id: "cost", title: "How cost is estimated", text: "Estimated from the tokens each run used, at the maker prices supplied with the publication. It's what the run would cost at those prices, not what was billed. Models without a published API price show n/a." },
 ];
