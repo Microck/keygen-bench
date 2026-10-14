@@ -76,43 +76,58 @@ def verified_media(directory: Path, profile: dict, output: Path) -> dict:
     output.mkdir(parents=True, exist_ok=True)
     for name, target in wanted.items():
         original = directory / name
-        if (not original.is_file() or original.is_symlink()
-                or not original.resolve().is_relative_to(directory.resolve())
-                or sha256(original) != expected[name]):
+        compressed = original.with_suffix(original.suffix + ".flac")
+        source = compressed if name == "canonical/canonical.wav" and not original.exists() else original
+        if (not source.is_file() or source.is_symlink()
+                or not source.resolve().is_relative_to(directory.resolve())):
             raise ValueError(f"Selected result has missing or changed local media: {name}")
-        shutil.copyfile(original, target)
+        if source == compressed:
+            subprocess.run(["flac", "-d", "--silent", "--keep-foreign-metadata",
+                            "-o", str(target), str(source)], check=True)
+        else:
+            shutil.copyfile(source, target)
         if sha256(target) != expected[name]:
-            raise ValueError("Presentation input checksum mismatch")
+            raise ValueError(f"Presentation input checksum mismatch: {name}")
     return {"input_sha256": expected}
 
 
 def public_run(row: dict, group: dict, directory: Path, output: Path, campaign: dict,
-               scope: str, prices: dict, roster_addition: bool = False) -> dict:
+               scope: str, prices: dict, roster_addition: bool = False, *,
+               run_slug: str | None = None, no_media: bool = False,
+               verification: dict | None = None, lossless: str = "wav") -> dict:
     profile = row["profile"]
     if profile.get("score_version") != SCORE_VERSION or row.get("score_version") != SCORE_VERSION:
         raise ValueError(f"Publication requires {SCORE_VERSION} evaluations; run score.py profile --force before exporting")
+    if lossless not in {"wav", "flac"}:
+        raise ValueError("Unsupported lossless presentation format")
     name = price_id(row["model"])
     repetition = scope == "repetitions"
     queue = campaign.get("attempt_selection") == QUEUE_SELECTION
     ordinal = row["repetition"]
     # A model added to the roster in the rerun queue is ranked by its attempt 1, named like every other ranked row.
     ranked_addition = roster_addition and ordinal == 1
-    run_slug = slug(name) + (("" if ranked_addition else f"-a{ordinal}") if repetition else {"pilot": "-pilot", "continuation": "-continued"}.get(scope, ""))
+    run_slug = run_slug or (slug(name) + (("" if ranked_addition else f"-a{ordinal}") if repetition else {"pilot": "-pilot", "continuation": "-continued"}.get(scope, "")))
     stage = output / ".verified" / run_slug
-    verification = verified_media(directory, profile, stage)
+    verification = verification or verified_media(directory, profile, stage)
     media = output / "media"
     media.mkdir(exist_ok=True)
-    for filename, source in ((f"{run_slug}.xm", stage / "tune.xm"),
-                             (f"{run_slug}.wav", stage / "canonical.wav")):
-        shutil.copyfile(source, media / filename)
-    mp3 = media / f"{run_slug}.mp3"
-    receipt_path = stage / "mp3-receipt.json"
-    receipt = json.loads(receipt_path.read_text()) if receipt_path.is_file() else {}
-    wav_hash = verification["input_sha256"]["canonical/canonical.wav"]
-    if not mp3.is_file() or receipt.get("source_sha256") != wav_hash or receipt.get("mp3_sha256") != sha256(mp3):
-        subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", str(stage / "canonical.wav"),
-                        "-codec:a", "libmp3lame", "-b:a", "160k", str(mp3)], check=True)
-        write_json(receipt_path, {"source_sha256": wav_hash, "mp3_sha256": sha256(mp3)})
+    if not no_media:
+        shutil.copyfile(stage / "tune.xm", media / f"{run_slug}.xm")
+        lossless_path = media / f"{run_slug}.{lossless}"
+        if lossless == "wav":
+            shutil.copyfile(stage / "canonical.wav", lossless_path)
+        else:
+            subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", str(stage / "canonical.wav"),
+                            "-c:a", "flac", str(lossless_path)], check=True)
+            subprocess.run(["flac", "--test", "--silent", str(lossless_path)], check=True)
+        mp3 = media / f"{run_slug}.mp3"
+        receipt_path = stage / "mp3-receipt.json"
+        receipt = json.loads(receipt_path.read_text()) if receipt_path.is_file() else {}
+        wav_hash = verification["input_sha256"]["canonical/canonical.wav"]
+        if not mp3.is_file() or receipt.get("source_sha256") != wav_hash or receipt.get("mp3_sha256") != sha256(mp3):
+            subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", str(stage / "canonical.wav"),
+                            "-codec:a", "libmp3lame", "-b:a", "160k", str(mp3)], check=True)
+            write_json(receipt_path, {"source_sha256": wav_hash, "mp3_sha256": sha256(mp3)})
     status = json.loads((directory / "status.json").read_text())
     audio = profile.get("audio") or {}
     structure = profile.get("structure") or {}
@@ -141,7 +156,7 @@ def public_run(row: dict, group: dict, directory: Path, output: Path, campaign: 
                   "wall_minutes": round(row["wall_s"] / 60, 1) if row["wall_s"] is not None else None,
                   "attempts": group["attempted_count"], "turns": None},
         "price": pub_price, "cost_usd": estimate_cost(totals, pub_price) if not row["usage_unknown"] else None,
-        "media": {"xm": f"media/{run_slug}.xm", "audio": f"media/{run_slug}.mp3", "wav": f"media/{run_slug}.wav",
+        "media": {"xm": f"media/{run_slug}.xm", "audio": f"media/{run_slug}.mp3", "wav": f"media/{run_slug}.{lossless}",
                   "evaluation": f"evaluations/{run_slug}.json"},
         "trace": trace, "rank": None, "failed": False,
         "provenance": {"scope": scope, "campaign_id": f"{scope}-{campaign['campaign_sha256'][:12]}",
@@ -154,7 +169,7 @@ def public_run(row: dict, group: dict, directory: Path, output: Path, campaign: 
                                        "first eligible success among up to three sequential predetermined attempts"),
                        "score_version": row["score_version"], "evaluation_fingerprint": row["evaluation_fingerprint"],
                        "profile_sha256": sha256(directory / "profile.json"), **verification,
-                       "public_media_sha256": {key: sha256(media / f"{run_slug}.{ext}") for key, ext in (("xm", "xm"), ("wav", "wav"), ("mp3", "mp3"))}},
+                       "public_media_sha256": {} if no_media else {key: sha256(media / f"{run_slug}.{ext}") for key, ext in (("xm", "xm"), (lossless, lossless), ("mp3", "mp3"))}},
     }
     if run["cost_usd"] is None and not row["usage_unknown"]:
         interval = estimate_cost_range(totals, pub_price)

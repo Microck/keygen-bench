@@ -21,6 +21,7 @@
 - Static export for GitHub Pages (`--host github-pages`) with media served from public GitHub Pages repositories.
 - Crypto donation page (`/crypto`) with per-network addresses, QR codes and copy buttons, linked from Support.
 - Cracktro-style preloader replacing the "Loading..." text: starfield and a chrome keygen-style logo, with load progress shown as a decoding serial and a dithered raster reveal of the mounted page.
+- Repository-ranked site builder with verified listener evidence, byte-exact FLAC decoding, stable published slugs, reviewed site metadata and an offline parity checker.
 
 ### Changed
 
