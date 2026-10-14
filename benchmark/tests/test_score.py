@@ -120,6 +120,14 @@ class ScoreTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             score.benchmark_score(st, au, loop, listener(float("nan")))
 
+    def test_serialized_listener_rating_reproduces_score_at_rounding_boundary(self):
+        st, au, _, loop = self.craft_inputs()
+        result = score.benchmark_score(st, au, loop, listener(4.5550001))
+        stored = json.loads(json.dumps(result))
+        self.assertEqual(stored["listener"]["content_enjoyment"], 4.5550001)
+        self.assertEqual(stored["craft_score"], 45.6)
+        self.assertEqual(stored["craft_score"], round(10 * stored["listener"]["content_enjoyment"], 1))
+
     def test_duration_and_noise_diagnostics_do_not_discount_content(self):
         st, au, _, loop = self.craft_inputs()
         baseline = score.craft_diagnostics(st, au, loop)
@@ -402,6 +410,20 @@ class ScoreTests(unittest.TestCase):
             self.assertEqual(new_diagnostics["parts"]["dynamics"], diagnostics["parts"]["dynamics"])
             for p, contents in original.items():
                 self.assertEqual(p.read_bytes(), contents)
+            for version, craft in (
+                ("craft-v9", profile["craft"]),
+                (score.SCORE_VERSION, compared["craft"]),
+            ):
+                with self.subTest(source_version=version):
+                    profile.update(score_version=version, craft=craft)
+                    path.write_text(json.dumps(profile))
+                    source = path.read_bytes()
+                    repeated = rescore.rescore_attempt(root)
+                    self.assertEqual(repeated["old_score"], craft["craft_score"])
+                    self.assertEqual(repeated["old_parts"],
+                                     craft.get("craft_diagnostics", craft)["parts"])
+                    self.assertEqual(repeated["new_score"], 65.4)
+                    self.assertEqual(path.read_bytes(), source)
             wav_path.write_bytes(original[wav_path] + b"changed")
             with self.assertRaisesRegex(ValueError, "canonical WAV"):
                 rescore.rescore_attempt(root)

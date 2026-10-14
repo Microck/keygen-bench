@@ -134,13 +134,15 @@ The listener replaced the fixed craft formula after the formula's top 20 attempt
 
 `craft.craft_diagnostics` keeps the previous formula as a diagnostic: pitched clarity (50), development (40) and dynamics (10), multiplied by signal integrity and loop continuity. These measurements explain how a tune is built. They do not change the score.
 
+Listener ratings retain the full prediction precision so `round(10 * craft.listener.content_enjoyment, 1)` reproduces the uncapped score.
+
 Pitched clarity is the active-duration mean captured harmonic-power fraction, with full credit at 0.50. A stationary tone can reach the full 50; the serialized component is `tonal_organization`.
 
 At 4, 8 and 16 beats, each passage contains its distinct sequenced voices. A voice is a set of onset-tick/pitch pairs, independent of channel and instrument indices. Exact duplicate voices count once. One beat is 24 FT2 ticks. Each voice is compared with other passages: transposition-normalized Jaccard overlap measures its strongest relationship to a changed voice; absolute-pitch overlap measures its mean contrast. An exact copy supplies no transformation evidence, and a voice with one onset in a passage has no shape, so it cannot relate to another voice. Its contribution is `recurrence² * contrast`, averaged across voices, passages and the three timescales.
 
 Calibration metadata is in `data/keygen-scoring-reference.json` and `data/keygen-duration-reference.json`. The reference music itself is not distributed. Changes to scoring source, the listener identity, numerical dependencies or renderer identity change evaluation provenance.
 
-For a read-only review rescore without changing historical profiles:
+For a read-only review rescore without changing source profiles, including historical craft-v7/craft-v9 and listener-v1 profiles:
 
 ```sh
 export KEYGEN_LISTENER_PYTHON="$PWD/.venv-listener/bin/python"

@@ -444,7 +444,7 @@ def benchmark_score(st: dict, au: dict, loop: dict, listener: dict) -> dict:
     value = min([listened] + [c["ceiling"] for c in caps])
     return {"version": SCORE_VERSION, "craft_score": value, "uncapped": listened,
             "capped": value < listened, "caps": caps,
-            "listener": {key: round(v, 4) for key, v in listener["ratings"].items()},
+            "listener": dict(listener["ratings"]),
             "listener_seconds": listener["analyzed_seconds"],
             "craft_diagnostics": craft_diagnostics(st, au, loop),
             "formula": "10 x listener content enjoyment, then artifact caps; round once to 0.1",

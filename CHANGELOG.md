@@ -38,6 +38,7 @@
 
 ### Fixed
 
+- Preserve full listener-rating precision so serialized evidence reproduces its score; allow read-only rescores of listener-v1 profiles as well as the historical craft profiles, and describe the listener score in campaign reports.
 - Match model release metadata across dot/dash keys and the public names without `-contributor`, so the model dropdown sorts by release date; keep dropdown logos inside their border.
 - Restore the original page slide transition and the original spend tooltip wording.
 - Show `$0` for models that are free on their maker's API instead of `<$0.01`.

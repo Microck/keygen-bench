@@ -38,7 +38,8 @@ audio{width:100%;display:block;margin:0 0 8px}
 @media (max-width:900px){.det{grid-template-columns:1fr}}
 </style></head><body>
 <h1>Keygen bench, adaptive campaign attempts</h1>
-<p class="kv">Cached artifact diagnostics only. Craft is an auxiliary tonal-development heuristic, not a musical-quality ranking.
+<p class="kv">Cached evaluation evidence. The AI listener score is 10 x Meta Audiobox Aesthetics' content-enjoyment rating, rounded to 0.1.
+Effectively silent renders score 0. Long used samples with sparse sequencing are capped at 40.
 Each model gets up to three sequential attempts, stopping after its first eligible success. All attempted outcomes and unused slots remain visible.
 Skipped slots have null scores and usage, not failure scores. This adaptive experiment has no independent-trial median, range or ranking claim.
 Exact routes, effective settings, evaluator identities and cohort fingerprints remain separate. Exhibitions are not comparative native runs.

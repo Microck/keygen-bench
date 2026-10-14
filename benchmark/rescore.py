@@ -95,6 +95,7 @@ def rescore_attempt(directory):
         spectral = spectral_wav(measured_path)
         listener = score.listen(measured_path)
     old = profile["craft"]
+    old_diagnostics = old["craft_diagnostics"] if "craft_diagnostics" in old else old
     xm = score.parse_xm(xm_path.read_bytes())
     structure = structure_metrics(xm, set(profile["mix"]["audible_channels"]))
     if not structure["sequence_complete"]:
@@ -105,7 +106,7 @@ def rescore_attempt(directory):
             "canonical_wav_sha256": inputs["artifacts"]["canonical/canonical.wav"],
             "retained_measurement_sha256": {name: inputs["scorer"][name] for name in UNCHANGED_MEASUREMENTS},
             "old_score": old["craft_score"], "new_score": new["craft_score"],
-            "old_parts": old["parts"], "listener": new["listener"],
+            "old_parts": old_diagnostics["parts"], "listener": new["listener"],
             "caps": new["caps"], "craft": new, "spectral": spectral,
             "arrangement_score": structure["arrangement_score"],
             "development_scales": structure["development_scales"]}
