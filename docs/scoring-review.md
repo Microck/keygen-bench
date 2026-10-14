@@ -24,6 +24,8 @@ It runs in its own environment (`benchmark/requirements-listener.txt`) on the CP
 
 [Reference evidence](../data/listener-v1-reference.json): all 256 pinned human keygen XMs. `render-references` rendered each native first pass on Linux aarch64; `references` verified those hashes and rated them. Caps are not applied to references.
 
+Both evidence files were regenerated after preserving full listener-rating precision and fixing rescores of listener-v1 source profiles. All 241 attempt scores, model ranks and reference scores are unchanged. The stored enjoyment rating now reproduces each uncapped attempt score exactly with `round(10 * rating, 1)`.
+
 ## Results
 
 | | Ranked attempts (241) | Human references (256) |
@@ -50,7 +52,7 @@ Attempts by the same model agree more than attempts by different models: across 
 
 ## Verification
 
-- Score, structure, mix, report and repository tests pass (offline, with a fake listener that exercises the real subprocess contract).
+- Score, mix, report and repository tests pass (101 tests and 51 subtests, offline, with a fake listener that exercises the real subprocess contract). Regression coverage includes serialized ratings at a rounding boundary and read-only rescores from craft-v7, craft-v9 and listener-v1 profiles.
 - An end-to-end native profile produces an eligible listener-v1 score, and the same attempt is marked unscored, not zero, when no listener environment is configured.
 - Focused Ruff checks pass on changed Python. Frontend tests pass.
 
