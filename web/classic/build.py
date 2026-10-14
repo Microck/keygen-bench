@@ -494,7 +494,7 @@ def build_snapshots(sources: list[Path], publish_root: Path, excluded: list[tupl
         "cohorts": cohorts,
         "limitations": [
             "This is an immutable snapshot, not a live campaign monitor.",
-            "Scores measure pitched clarity, development and dynamics, with signal integrity and loop continuity checks. They do not measure listener preference.",
+            "Scores are 10 x an AI listener's content-enjoyment rating (Meta Audiobox Aesthetics), capped for silent or baked-sample tunes. The model predicts human ratings; it is not a person.",
             ATTEMPT_NOTE if groups else SAMPLE_NOTE,
             TIER_NOTE,
             *(["The musical pilot is labeled separately and is excluded from the main-campaign counts."] if pilot_count else []),

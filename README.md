@@ -19,7 +19,7 @@ this repository has the runner, the pinned container build, the evaluator, the r
 
 ## scoring
 
-the evaluator renders the submitted XM at 44.1 kHz / 16-bit in a fresh FT2 process. the score measures pitched clarity, development and dynamics, with adjustments for signal integrity and loop continuity. development compares related voices across 4-, 8- and 16-beat passages. duration, noise texture, key concentration and pitch variety are diagnostics, not separate penalties. this is a diagnostic, not a validated measure of musical quality. listen to the music before reading a score as a preference.
+the evaluator renders the submitted XM at 44.1 kHz / 16-bit in a fresh FT2 process, then an AI listener rates it: [Meta Audiobox Aesthetics](https://github.com/facebookresearch/audiobox-aesthetics), a model trained on human ratings of audio. the score is its content enjoyment rating (1 to 10) times 10. silent tunes score 0 and tunes that are really one long pre-rendered sample are capped at 40. pitched clarity, development, dynamics, signal integrity and loop continuity are still measured as diagnostics. the listener is a model, not a person, and it wasn't trained specifically on tracker music, so listen before reading a score as a preference.
 
 ## run a model
 

@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
-"""Recompute spectral and structural evidence without mutating historical runs.
+"""Recompute the listener score and structural evidence without mutating historical runs.
 
-    python benchmark/rescore.py runs --root runs --output /tmp/craft-v10-runs.json
-    python benchmark/rescore.py references --modules /tmp/reference-xms --output /tmp/craft-v10-reference.json
+    python benchmark/rescore.py runs --root runs --output /tmp/listener-v1-runs.json
+    python benchmark/rescore.py render-references --modules /tmp/reference-xms --out /tmp/reference-first-passes
+    python benchmark/rescore.py references --modules /tmp/reference-xms --first-passes /tmp/reference-first-passes \
+        --output /tmp/listener-v1-reference.json
 
 Reference files are named <git_blob_sha>.xm from the pinned duration manifest.
-Reference PCM is rendered locally; ranked-run PCM is verified and reused.
+render-references needs the Linux FT2 analysis build; the listening steps run on
+any host with the listener environment. Ranked-run PCM is verified and reused.
 """
 from __future__ import annotations
 
@@ -17,6 +20,7 @@ import platform
 import sys
 import subprocess
 import tempfile
+import wave
 
 import numpy as np
 
@@ -36,10 +40,10 @@ def digest(path):
 def provenance():
     return {"score_version": score.SCORE_VERSION, "development_method": DEVELOPMENT_METHOD,
             "scorer_sha256": {name: digest(ROOT / "benchmark" / name)
-                              for name in ("score.py", "score_audio.py", "score_structure.py", "rescore.py")},
+                              for name in ("score.py", "score_audio.py", "score_structure.py", "score_listener.py", "rescore.py")},
+            "listener": score.listener_identity(),
             "python": platform.python_version(), "numpy": np.__version__,
-            "scope": "Recomputed spectral/structural evidence and total; retained signal, dynamics, mix and loop measurements with source hashes.",
-            "listener_validated": False}
+            "scope": "Recomputed listener ratings, spectral and structural evidence and the score; retained signal, dynamics, mix and loop measurements with source hashes."}
 
 
 def spectral_wav(path, end_frame=None):
@@ -89,18 +93,19 @@ def rescore_attempt(directory):
         if digest(measured_path) != inputs["artifacts"]["canonical/canonical.wav"]:
             raise ValueError(f"{directory.parent.name}/{directory.name}: canonical WAV does not match the source profile")
         spectral = spectral_wav(measured_path)
+        listener = score.listen(measured_path)
     old = profile["craft"]
     xm = score.parse_xm(xm_path.read_bytes())
     structure = structure_metrics(xm, set(profile["mix"]["audible_channels"]))
     if not structure["sequence_complete"]:
         raise ValueError(f"{directory.parent.name}/{directory.name}: incomplete sequence")
     audio = dict(profile["audio"], spectral=spectral)
-    new = score.craft_score(structure, audio, profile["loop"])
+    new = score.benchmark_score(structure, audio, profile["loop"], listener)
     return {**record, "xm_sha256": xm_hash,
             "canonical_wav_sha256": inputs["artifacts"]["canonical/canonical.wav"],
             "retained_measurement_sha256": {name: inputs["scorer"][name] for name in UNCHANGED_MEASUREMENTS},
             "old_score": old["craft_score"], "new_score": new["craft_score"],
-            "old_parts": old["parts"], "new_parts": new["parts"], "factors": new["factors"],
+            "old_parts": old["parts"], "listener": new["listener"],
             "caps": new["caps"], "craft": new, "spectral": spectral,
             "arrangement_score": structure["arrangement_score"],
             "development_scales": structure["development_scales"]}
@@ -132,12 +137,9 @@ def ranked_runs(root):
             "models": models, "attempts": records}
 
 
-def reference_scores(modules):
-    duration_path = ROOT / "data/keygen-duration-reference.json"
-    baseline_path = ROOT / "data/keygen-scoring-reference.json"
-    manifest = json.loads(duration_path.read_text())
-    baseline = {r["git_blob_sha"]: r for r in json.loads(baseline_path.read_text())["records"]}
-    records = []
+def _reference_entries(modules):
+    """Yield verified reference modules with their parsed structure."""
+    manifest = json.loads((ROOT / "data/keygen-duration-reference.json").read_text())
     for entry in manifest["records"]:
         path = modules / (entry["git_blob_sha"] + ".xm")
         if digest(path) != entry["sha256"]:
@@ -145,9 +147,20 @@ def reference_scores(modules):
         structure = structure_metrics(score.parse_xm(path.read_bytes()))
         if not structure["sequence_complete"]:
             raise ValueError(f"Reference traversal incomplete: {entry['git_blob_sha']}")
-        previous = baseline[entry["git_blob_sha"]]
-        from score_playback import capture, renderer_identity
-        from score_loop import runtime_returns
+        yield entry, path, structure
+
+
+def render_references(modules, out):
+    """Write each reference's native first pass to OUT/<sha>.wav, plus a manifest.
+
+    Rendering needs the Linux-only FT2 analysis build. Listening is the slow
+    step, so it runs separately (`references --first-passes OUT`) on any host.
+    """
+    from score_playback import capture, renderer_identity
+    from score_loop import runtime_returns
+    out.mkdir(parents=True)
+    records = []
+    for entry, path, structure in _reference_entries(modules):
         # Use the native first return or F00 stop, not the static duration,
         # as the boundary. Both looping and finite compositions are valid.
         seconds = max(entry["first_subsong_seconds"], structure["sequence_seconds"]) + 10
@@ -159,14 +172,44 @@ def reference_scores(modules):
             if not boundaries:
                 raise ValueError(f"Reference has no captured return or stop: {entry['git_blob_sha']}")
             end_frame = min(boundaries)
-            spectral = spectral_wav(Path(captured["wav_path"]), end_frame)
+            first_pass = out / f"{entry['git_blob_sha']}.wav"
+            with wave.open(captured["wav_path"]) as source, wave.open(str(first_pass), "wb") as target:
+                target.setparams(source.getparams())
+                target.writeframes(source.readframes(end_frame))
         records.append({"git_blob_sha": entry["git_blob_sha"], "xm_sha256": entry["sha256"],
-                        "first_pass_frames": end_frame,
-                        "first_pass_end": "return" if returns and returns[0]["frame"] == end_frame else "stop",
+                        "first_pass_frames": end_frame, "wav_sha256": digest(first_pass),
+                        "first_pass_end": "return" if returns and returns[0]["frame"] == end_frame else "stop"})
+    identity = renderer_identity()
+    manifest = {"renderer": {key: identity[key] for key in ("binary_sha256", "source_commit", "patch_sha256", "architecture")},
+                "records": records}
+    (out / "first-passes.json").write_text(json.dumps(manifest, indent=2) + "\n")
+    return manifest
+
+
+def reference_scores(modules, first_passes):
+    duration_path = ROOT / "data/keygen-duration-reference.json"
+    baseline_path = ROOT / "data/keygen-scoring-reference.json"
+    baseline = {r["git_blob_sha"]: r for r in json.loads(baseline_path.read_text())["records"]}
+    rendered = json.loads((first_passes / "first-passes.json").read_text())
+    passes = {r["git_blob_sha"]: r for r in rendered["records"]}
+    records = []
+    for entry, _, structure in _reference_entries(modules):
+        first = passes[entry["git_blob_sha"]]
+        wav_path = first_passes / f"{entry['git_blob_sha']}.wav"
+        if first["xm_sha256"] != entry["sha256"] or digest(wav_path) != first["wav_sha256"]:
+            raise ValueError(f"Rendered first pass does not match its manifest: {entry['git_blob_sha']}")
+        spectral = spectral_wav(wav_path)
+        # The listener hears the same first pass the spectral evidence uses.
+        listener = score.listen(wav_path)
+        previous = baseline[entry["git_blob_sha"]]
+        records.append({"git_blob_sha": entry["git_blob_sha"], "xm_sha256": entry["sha256"],
+                        "first_pass_frames": first["first_pass_frames"], "first_pass_end": first["first_pass_end"],
                         "split": previous["split"], "old_development": previous["v7_parts"]["development"],
                         "new_development": round(40 * structure["arrangement_score"], 2),
                         "old_tonal": previous["v7_parts"]["tonal_organization"],
                         "new_tonal": round(50 * spectral["tonal_organization"], 2),
+                        "listener": listener["ratings"], "listener_seconds": listener["analyzed_seconds"],
+                        "listener_score": round(10 * listener["ratings"]["content_enjoyment"], 1),
                         "spectral": spectral, "development_scales": structure["development_scales"]})
     summaries = {}
     for split in ("all", "calibration", "held_out", "unscored_in_v6"):
@@ -178,12 +221,15 @@ def reference_scores(modules):
                 values = np.array([r[f"{version}_{component}"] for r in selected])
                 summaries[split][component][version] = {key: round(float(v), 3) for key, v in zip(
                     ("min", "median", "p75", "p90", "max"), np.quantile(values, (0, .5, .75, .9, 1)))}
-    identity = renderer_identity()
+        values = np.array([r["listener_score"] for r in selected])
+        summaries[split]["listener_score"] = {key: round(float(v), 3) for key, v in zip(
+            ("min", "p10", "median", "p90", "max"), np.quantile(values, (0, .1, .5, .9, 1)))}
     return {"schema": "keygen-fairness-reference-1", **provenance(),
             "source_manifest_sha256": digest(duration_path), "baseline_sha256": digest(baseline_path),
-            "renderer": {key: identity[key] for key in ("binary_sha256", "source_commit", "patch_sha256", "architecture")},
-            "scope": "Tonal/development components only; pinned XM bytes and native first-pass PCM, all sequenced channels. No invented reference totals or aesthetic evaluation.",
-            "limitations": ["Convenience corpus, not listener judgments.",
+            "renderer": rendered["renderer"], "first_passes_sha256": digest(first_passes / "first-passes.json"),
+            "scope": "Listener ratings, tonal and development components; pinned XM bytes and native first-pass PCM, all sequenced channels. Artifact caps are not applied to references.",
+            "limitations": ["Convenience corpus, not human listener judgments.",
+                            "The AI listener was not trained specifically on tracker music.",
                             "Archived v7 values used rendered audibility filtering; reference structure includes all sequenced channels.",
                             "No constants were fitted to the reference distribution or model rankings."],
             "summary": summaries, "records": records}
@@ -192,17 +238,26 @@ def reference_scores(modules):
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="kind", required=True)
-    runs = sub.add_parser("runs", help="Recompute spectrum and development for every ranked attempt")
+    runs = sub.add_parser("runs", help="Rate and recompute every ranked attempt")
     runs.add_argument("--root", type=Path, required=True)
-    references = sub.add_parser("references", help="Render and compare tonal/development evidence on the pinned XM corpus")
+    render = sub.add_parser("render-references", help="Render reference first passes with the Linux FT2 analysis build")
+    render.add_argument("--modules", type=Path, required=True)
+    render.add_argument("--out", type=Path, required=True, help="New directory for first-pass WAVs and their manifest")
+    references = sub.add_parser("references", help="Rate and compare rendered reference first passes")
     references.add_argument("--modules", type=Path, required=True)
+    references.add_argument("--first-passes", type=Path, required=True, help="Directory written by render-references")
     for command in (runs, references):
         command.add_argument("--output", type=Path, required=True, help="New JSON file; existing paths are never overwritten")
     args = parser.parse_args()
-    if args.output.exists():
-        parser.error("Output already exists; choose a new path to preserve review evidence")
+    target = args.out if args.kind == "render-references" else args.output
+    if target.exists():
+        parser.error(f"{target} already exists; choose a new path to preserve review evidence")
     try:
-        payload = ranked_runs(args.root) if args.kind == "runs" else reference_scores(args.modules)
+        if args.kind == "render-references":
+            manifest = render_references(args.modules, args.out)
+            print(json.dumps({"out": str(args.out), "first_passes": len(manifest["records"])}))
+            return 0
+        payload = ranked_runs(args.root) if args.kind == "runs" else reference_scores(args.modules, args.first_passes)
         with args.output.open("x") as stream:
             json.dump(payload, stream, indent=2, allow_nan=False)
             stream.write("\n")

@@ -24,8 +24,7 @@
 
 ### Changed
 
-- craft-v10: a voice with one onset in a passage no longer counts as related to other single notes. After transposition every single note had the same shape, so pads and bass whole notes that followed the chord root earned 4-beat development credit.
-- Score pitched clarity, development across 4-, 8- and 16-beat passages, and dynamics. Signal integrity and loop continuity multiply the content total; artifact caps limit the result. Duration, noise texture, key concentration and pitch variety are diagnostics.
+- Score tunes with an AI listener (listener-v1): 10 x the content-enjoyment rating of Meta Audiobox Aesthetics on the canonical render, with the silent and baked-sample caps. The listener runs in its own pinned environment (`benchmark/requirements-listener.txt`, `KEYGEN_LISTENER_PYTHON`) on the CPU with verified weights; contributor setup installs it and doctor checks it. Pitched clarity, development, dynamics, signal integrity and loop continuity remain as craft diagnostics; a voice with one onset in a passage no longer counts as development there. The site shows the four listener ratings, explains the listener on the Scoring page and moves the craft measures to Diagnostics.
 - Add a read-only, hash-verified rescorer for ranked attempts and the pinned reference corpus, with separate evaluation evidence and native reference return/stop boundaries.
 - Derive the contributor contract's scorer identity from the evaluator and reject mismatched campaign evaluations at publication export.
 - Include the donation page and its QR images in fresh website publications, and preserve existing external playback traces during static export.

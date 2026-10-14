@@ -49,9 +49,9 @@ STATIC_HEADERS = """
 
 SITE_NAME = "Keygen Bench"
 SITE_SUMMARY = ("Keygen Bench asks AI models to compose a keygen-style chiptune in FastTracker II, with no network and a "
-                "Bash tool, three independent attempts each at its highest declared reasoning tier. The score measures pitched "
-                "clarity, development and dynamics from the XM module and a trusted FT2 render, with signal integrity and "
-                "loop continuity checks. Models are ranked by their best of three attempts.")
+                "Bash tool, three independent attempts each at its highest declared reasoning tier. An AI listener (Meta "
+                "Audiobox Aesthetics) rates how enjoyable a trusted FT2 render of each tune is, and models are ranked by "
+                "their best of three attempts.")
 
 
 def model_name(name: str) -> str:

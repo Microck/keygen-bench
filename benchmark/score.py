@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
-"""Auxiliary artifact-only tonal-development diagnostics with reference-player previews.
+"""Benchmark score: an AI listener's content-enjoyment rating of the canonical render.
 
     python -I benchmark/score.py profile --out benchmark/runs/official
     python -I benchmark/score.py aggregate --out /absolute/artifact-root
 
-Canonical FT2 audio supplies signal-integrity, sustained-noise and tonal evidence.
-Continuous playback and mixer-output stems supply loop and diagnostic mix evidence.
-Every score uses fixed, versioned rules, never human or LLM ratings.
+The score is 10 x the content-enjoyment rating of Meta Audiobox Aesthetics, a
+model trained on human ratings (score_listener.py), capped only for silent or
+baked-sample artifacts. Canonical FT2 audio, continuous playback and mixer
+stems still supply signal, loop, mix and craft diagnostics; they do not set
+the score.
 """
 from __future__ import annotations
 
@@ -36,7 +38,7 @@ sys.path.insert(0, str(HERE))
 # --- XM structure ---------------------------------------------------------------------------
 
 NOTE_ON = range(1, 97)  # 97 is key-off
-SCORE_VERSION = "craft-v10"
+SCORE_VERSION = "listener-v1"
 EVALUATION_SCHEMA = 2
 ERROR_CATEGORIES = {"INFRA", "AUTH", "TRANSPORT", "PROTOCOL", "EVAL", "MODEL"}
 NON_MODEL_ERRORS = ERROR_CATEGORIES - {"MODEL"}
@@ -384,10 +386,17 @@ CRAFT_WEIGHTS = {"tonal_organization": 50, "development": 40, "dynamics": 10}
 # commonly carry DC bias: the former 0.002 bound penalized 89% of references.
 # Silence bands are unchanged; typical references are gapless.
 DC_OFFSET_FULL, DC_OFFSET_ZERO = 0.03, 0.15
+LISTENER_ENV = "KEYGEN_LISTENER_PYTHON"
+LISTENER_SECONDS = 900
 
 
-def craft_score(st: dict, au: dict, loop: dict) -> dict:
-    """Content evidence scaled only by signal integrity and authored loop quality."""
+def craft_diagnostics(st: dict, au: dict, loop: dict) -> dict:
+    """The pre-listener heuristic total, kept as a diagnostic. It does not set the score.
+
+    Before listener-v1 this total ranked the leaderboard. Among the top 20 it
+    was uncorrelated with the listener (Spearman +0.02), so it now only explains
+    pitched clarity, development, dynamics, signal integrity and loop quality.
+    """
     integrity = (0.35 * band(au["clip_fraction"], 0, 0, 0, 0.001)
                  + 0.15 * band(abs(au["dc_offset"]), 0, 0, DC_OFFSET_FULL, DC_OFFSET_ZERO)
                  + 0.10 * band(au["true_peak_dbtp"], -120, -120, 0, 3)
@@ -402,24 +411,78 @@ def craft_score(st: dict, au: dict, loop: dict) -> dict:
                "loop_continuity": 0.75 + 0.25 * loop["quality_score"]}
     if any(not math.isfinite(v) or not 0 <= v <= 1 for v in (*normalized.values(), *factors.values())):
         raise ValueError("score components and factors must be finite and bounded in [0, 1]")
-    parts = {key: round(CRAFT_WEIGHTS[key] * value, 2) for key, value in normalized.items()}
     content = sum(CRAFT_WEIGHTS[key] * value for key, value in normalized.items())
-    total = round(content * math.prod(factors.values()), 1)
+    return {"total": round(content * math.prod(factors.values()), 1),
+            "parts": {key: round(CRAFT_WEIGHTS[key] * value, 2) for key, value in normalized.items()},
+            "content_score": round(content, 2), "factors": factors, "weights": CRAFT_WEIGHTS,
+            "formula": "sum(content parts) * signal_integrity * loop_continuity; round to 0.1",
+            "reference_calibration": "data/keygen-scoring-reference.json"}
+
+
+def artifact_caps(st: dict, au: dict) -> list[dict]:
+    """Integrity ceilings that a listener rating cannot lift: silence and baked songs."""
     caps = []
     if au["silent_fraction"] >= 0.99:
         caps.append({"reason": "effectively silent artifact", "ceiling": 0.0})
-    # A long pad is not a baked song. Require sparse sequencing as corroboration.
+    # The task forbids one long pre-rendered sample. A long pad is not a baked
+    # song, so sparse sequencing must corroborate the long sample.
     if st["used_longest_sample_seconds"] > 8 and st["sequence_coverage"] < 0.25:
         caps.append({"reason": "long used sample with sparse sequencing", "ceiling": CAP_SUSPECTED_BAKED})
-    value = min([total] + [c["ceiling"] for c in caps])
-    return {"version": SCORE_VERSION, "auxiliary": True, "task_compliance": None,
-            "craft_score": value, "uncapped": total, "parts": parts,
-            "content_score": round(content, 2), "factors": factors,
-            "weights": CRAFT_WEIGHTS, "capped": value < total, "caps": caps,
-            "formula": "sum(unrounded content parts) * signal_integrity * loop_continuity, then artifact caps; round once to 0.1",
-            "reference_calibration": "data/keygen-scoring-reference.json",
-            "diagnostic_only": ["selected-lead clarity and masking", "audible duration", "sustained spectral noisiness", "key concentration and pitch variety", "recurrence or contrast alone"],
-            "note": "provisional pitched-clarity and development evidence, not a validated musical-quality rating; harmonic-power detection and sequence heuristics can disagree with listeners"}
+    return caps
+
+
+def benchmark_score(st: dict, au: dict, loop: dict, listener: dict) -> dict:
+    """10 x listener content enjoyment, then artifact caps; round once to 0.1.
+
+    `craft_score` keeps its historical key so reports and exports read one field.
+    """
+    enjoyment = listener["ratings"]["content_enjoyment"]
+    if not math.isfinite(enjoyment):
+        raise ValueError("listener content enjoyment must be finite")
+    listened = round(10 * enjoyment, 1)
+    caps = artifact_caps(st, au)
+    value = min([listened] + [c["ceiling"] for c in caps])
+    return {"version": SCORE_VERSION, "craft_score": value, "uncapped": listened,
+            "capped": value < listened, "caps": caps,
+            "listener": {key: round(v, 4) for key, v in listener["ratings"].items()},
+            "listener_seconds": listener["analyzed_seconds"],
+            "craft_diagnostics": craft_diagnostics(st, au, loop),
+            "formula": "10 x listener content enjoyment, then artifact caps; round once to 0.1",
+            "note": "Meta Audiobox Aesthetics predicts human ratings; it was not trained specifically on tracker music. "
+                    "Production quality, usefulness and complexity are reported but not scored."}
+
+
+def _listener(*args: str, timeout: float) -> dict:
+    """Run score_listener.py in its own environment; PyTorch never loads here."""
+    import subprocess
+    executable = os.environ.get(LISTENER_ENV)
+    if not executable:
+        raise RuntimeError(f"set {LISTENER_ENV} to the Python of the benchmark/requirements-listener.txt environment")
+    process = subprocess.run([executable, str(HERE / "score_listener.py"), *args], capture_output=True,
+                             text=True, timeout=timeout, env=dict(os.environ, CUDA_VISIBLE_DEVICES=""))
+    if process.returncode:
+        raise RuntimeError(f"listener failed ({process.returncode}): {process.stderr.strip()[-2000:]}")
+    return json.loads(process.stdout)
+
+
+_LISTENER_IDENTITY: dict | None = None
+
+
+def listener_identity() -> dict:
+    # Identity loads the model environment and hashes the weights; once per process.
+    global _LISTENER_IDENTITY
+    if _LISTENER_IDENTITY is None:
+        _LISTENER_IDENTITY = _listener("identity", timeout=300)
+    return _LISTENER_IDENTITY
+
+
+def listen(wav_path: Path) -> dict:
+    from score_playback import bounded_timeout
+    result = _listener("predict", str(wav_path), timeout=bounded_timeout(LISTENER_SECONDS, "listener"))
+    if result["identity"] != listener_identity():
+        raise RuntimeError("listener identity changed during evaluation; recompute required")
+    return result
+
 
 def _sha256(path: Path) -> str | None:
     if not path.is_file():
@@ -500,12 +563,13 @@ def _profile_inputs(run_dir: Path) -> dict:
     return {"artifacts": {name: _sha256(run_dir / name) for name in
                           ("status.json", "submission/tune.xm", "canonical/canonical.wav", "trajectory.json")},
             "scorer": {name: _sha256(HERE / name) for name in
-                       ("score.py", "score_audio.py", "score_structure.py", "score_mix.py", "score_loop.py", "score_playback.py", "ft2_capture.patch")},
+                       ("score.py", "score_audio.py", "score_structure.py", "score_mix.py", "score_loop.py", "score_playback.py",
+                        "score_listener.py", "ft2_capture.patch")},
             "references": {name: _sha256(HERE.parent / name) for name in
                            ("data/keygen-scoring-reference.json", "data/keygen-duration-reference.json",
                             "scripts/build-ft2-analysis.py")},
             "analysis_renderer": renderer, "preview_encoder": encoder_identity,
-            "numerical": numerical_identity()}
+            "listener": listener_identity(), "numerical": numerical_identity()}
 
 
 def profile_is_current(run_dir: Path, profile: dict) -> bool:
@@ -598,8 +662,7 @@ def _run_outcome(status: dict) -> tuple[str | None, bool | None]:
 def _ineligible(out: dict, category: str, reason: str) -> None:
     out.update(eligible=False, evaluation_status="ineligible",
                evaluation_error={"category": category, "reason": reason})
-    out["craft"] = {"version": SCORE_VERSION, "auxiliary": True, "craft_score": None,
-                    "parts": {}, "weights": CRAFT_WEIGHTS, "task_compliance": None}
+    out["craft"] = {"version": SCORE_VERSION, "craft_score": None, "caps": [], "listener": None}
 
 
 def profile_attempt(run_dir: Path, *, force: bool = False) -> dict | None:
@@ -635,7 +698,7 @@ def _profile_attempt(run_dir: Path, *, force: bool) -> dict | None:
            "score_version": SCORE_VERSION, "evaluation_schema": EVALUATION_SCHEMA,
            "run_failure_category": category, "model_failure": model_failure,
            "eligible": False, "evaluation_status": "ineligible",
-           "score_role": "auxiliary tonal-development heuristic, not musical-quality ranking"}
+           "score_role": "AI listener content enjoyment of the canonical render, with artifact caps"}
     provenance_error = None
     try:
         inputs = profile_inputs(run_dir)
@@ -701,8 +764,9 @@ def _profile_attempt(run_dir: Path, *, force: bool) -> dict | None:
                         if not out["structure"]["sequence_complete"]:
                             raise ValueError(f"incomplete XM sequence analysis: {out['structure']['sequence_stop_reason']}")
                         out["flags"] = flags(out["structure"], out["audio"], out.get("process") or {}, out["mix"], out["loop"])
-                        out["craft"] = craft_score(out["structure"], out["audio"], out["loop"])
                         check_deadline("craft analysis")
+                        out["craft"] = benchmark_score(out["structure"], out["audio"], out["loop"], listen(wav_path))
+                        check_deadline("listener analysis")
                         out.update(eligible=True, evaluation_status="evaluated")
                         if out["model_failure"] is None:
                             out["model_failure"] = False
@@ -761,12 +825,12 @@ def summarize_profiles(profiles: list[dict]) -> dict:
             categories[category] = categories.get(category, 0) + 1
     return {"attempts": len(profiles), "eligible_evaluated": len(scores),
             "ineligible": sum(not p.get("eligible", False) for p in profiles),
-            "auxiliary_craft_mean": sum(scores) / len(scores) if scores else None,
+            "score_mean": sum(scores) / len(scores) if scores else None,
             "model_failures": failures, "model_outcome_denominator": len(known),
             "model_failure_rate": failures / len(known) if known else None,
             "unknown_model_outcomes": sum(p.get("model_failure") is None for p in profiles),
             "evaluation_error_categories": categories,
-            "note": "Auxiliary heuristic diagnostics, not a musical-quality leaderboard. Infrastructure failures are excluded from the model-failure denominator."}
+            "note": "Scores are AI listener ratings with artifact caps. Infrastructure failures are excluded from the model-failure denominator."}
 
 
 def _attempt_dirs(out: Path) -> list[Path]:
@@ -787,17 +851,16 @@ def _report(out: Path, profiles: list[dict]) -> list[dict]:
     def cell(value):
         return "null" if value is None else str(value).replace("|", "\\|").replace("\n", " ")
     lines = ["# Artifact diagnostics", "",
-             "Rows with evaluated eligible artifacts are ordered by auxiliary craft only. This is not a musical-quality ranking.",
+             "Rows with evaluated eligible artifacts are ordered by score.",
              "Null scores indicate ineligible or unevaluated artifacts, not musical zeros.", "",
              "```json", json.dumps(summary, indent=2, allow_nan=False), "```", "",
              "| " + " | ".join(COLUMNS) + " |", "|" + "---|" * len(COLUMNS)]
     lines += ["| " + " | ".join(cell(r[c]) for c in COLUMNS) + " |" for r in rows]
-    lines += ["", f"`craft` is the auxiliary {SCORE_VERSION} tonal-development heuristic (weights: "
-              + ", ".join(f"{k} {v}" for k, v in CRAFT_WEIGHTS.items()) + ").",
-              "No human, LLM, provider or process inputs enter the numeric heuristic. Pinned FT2 supplies continuous loop captures and masking stems; submitted XM and canonical audio are unchanged.",
-              "Content points are multiplied by signal integrity and bounded loop continuity only.",
-              "Duration, noise texture, key concentration and pitch variety are diagnostics, not score multipliers.",
-              "Selected-lead masking earns no craft points. These tonal-development heuristics require independent listener validation before any musical-quality ranking claim.", "",
+    lines += ["", f"`craft` is the {SCORE_VERSION} score: 10 x Meta Audiobox Aesthetics content enjoyment of the canonical render, "
+              "capped at 0 for silent artifacts and at 40 for a long used sample with sparse sequencing.",
+              "The listener model predicts human ratings; it was not trained specifically on tracker music.",
+              "Pinned FT2 supplies continuous loop captures and masking stems; submitted XM and canonical audio are unchanged.",
+              "Pitched clarity, development, dynamics, signal integrity and loop continuity remain diagnostics under craft_diagnostics.", "",
               "Flags:"] + [f"- `{k}`: {v}" for k, v in FLAG_RULES.items()]
     reports = out / "evaluation-reports"
     reports.mkdir(exist_ok=True)

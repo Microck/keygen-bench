@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import struct
 import tempfile
@@ -12,6 +13,8 @@ import numpy as np
 
 from benchmark import score
 from benchmark import score_mix as mix
+
+os.environ[score.LISTENER_ENV] = str(Path(__file__).with_name("fake_listener.py"))
 
 
 def miniature_xm(accompaniment_volume=24, echo_delay_rows=None, channel_order=(0, 1, 2),

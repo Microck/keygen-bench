@@ -14,18 +14,23 @@ python3 benchmark/contrib/cli.py setup --home "$HOME/.local/share/keygen-bench"
 ```
 
 Setup installs the pinned controller packages in a private virtual environment,
-builds both Docker targets, and builds the trusted analysis renderer. It makes
-no model requests. Missing compiler or system packages produce installation
-instructions; setup does not run `sudo` for you.
+installs the AI listener (Meta Audiobox Aesthetics, about 415 MB of weights) in
+a second one, builds both Docker targets, and builds the trusted analysis
+renderer. It makes no model requests. Missing compiler or system packages
+produce installation instructions; setup does not run `sudo` for you.
 
-Use the installed environment for the remaining commands:
+Use the installed environments for the remaining commands:
 
 ```sh
 PYTHON="$HOME/.local/share/keygen-bench/venv/bin/python"
+export KEYGEN_LISTENER_PYTHON="$HOME/.local/share/keygen-bench/listener-venv/bin/python"
 CONFIG="$HOME/.config/keygen-bench/model.json"
 "$PYTHON" benchmark/contrib/cli.py configure --config "$CONFIG"
 "$PYTHON" benchmark/contrib/cli.py doctor --config "$CONFIG"
 ```
+
+Doctor fails if the listener is not configured. Rating a tune takes seconds on
+a fast machine and several minutes on a small 2-core one.
 
 The configuration wizard asks for the provider, exact model, native protocol,
 documented reasoning tier, generation settings and public GitHub handle.
@@ -93,12 +98,16 @@ runner and submission contract as the explicit invocation.
    Docker Engine, and a funded provider account. Allow at least 8 GiB RAM,
    20 GiB free disk, and six hours plus rendering time. Your controller needs
    network access. Model commands run in an offline Docker container.
-2. From the repository root, install the pinned controller packages:
+2. From the repository root, install the pinned controller packages and the
+   AI listener in its own environment:
 
    ```sh
    python3 -m venv .venv-contrib
    . .venv-contrib/bin/activate
    python -m pip install -r benchmark/requirements.txt
+   python3 -m venv .venv-listener
+   .venv-listener/bin/pip install -r benchmark/requirements-listener.txt
+   export KEYGEN_LISTENER_PYTHON="$PWD/.venv-listener/bin/python"
    ```
 
 3. Pull the pinned base and build both targets. The Dockerfile pins Debian;

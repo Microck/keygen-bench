@@ -155,14 +155,15 @@ def model_card(m, total, path):
     text(d, (64 * K, 66 * K), f"{m['maker']}  |  rank {m['rank']} of {total}", SMALL, PAL["dim"])
     text(d, (W - 8 * K, 38 * K), f"{r['score']:.1f}", HUGE, PAL["white"], PAL["looppin"], anchor="ra")
     sunken(d, [5 * K, 92 * K, W - 5 * K - 1, H - 6 * K - 1])
-    parts = [("Pitch", r["parts"]["tonal_organization"], 50), ("Development", r["parts"]["development"], 40), ("Dynamics", r["parts"]["dynamics"], 10)]
+    L = r["listener"]  # enjoyment sets the score; quality and complexity add context
+    parts = [("Enjoyment", L["content_enjoyment"], 10), ("Quality", L["production_quality"], 10), ("Complexity", L["production_complexity"], 10)]
     for i, (k, v, mx) in enumerate(parts):
         y = 100 * K + i * 18 * K
         text(d, (12 * K, y), k, SMALL, PAL["pattext"])
         x0, x1 = 100 * K, 330 * K
         d.rectangle([x0, y + 2 * K, x1, y + 8 * K], outline=PAL["dsktop2"], width=K)
         d.rectangle([x0 + K, y + 3 * K, x0 + K + round((x1 - x0 - 2 * K) * min(1, v / mx)), y + 7 * K], fill=PAL["pattext"])
-        text(d, (W - 12 * K, y), f"{v:.1f}/{mx}", SMALL, PAL["white"], anchor="ra")
+        text(d, (W - 12 * K, y), f"{v:.2f}/{mx}", SMALL, PAL["white"], anchor="ra")
     y = 158 * K
     sc = m["scores"]
     att = "  ".join(f"{s:.1f}" for s in sc)

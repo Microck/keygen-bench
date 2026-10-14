@@ -16,13 +16,24 @@ docker build -f benchmark/Dockerfile --target visualizer -t keygen-ft2-visualize
 
 The Dockerfile pins the Debian base digest and the build script pins FT2 source. Build acceptance exercises native editing, saving, reloading and rendering. Record the final image IDs with `docker image inspect`; mutable tags are not experiment identities. Architecture and distribution package state can affect the final image.
 
-Craft scoring additionally needs the analysis renderer. Install a C compiler, Git, pkg-config, SDL2 and libmicrohttpd development packages, then run:
+Scoring additionally needs the analysis renderer and the AI listener. For the renderer, install a C compiler, Git, pkg-config, SDL2 and libmicrohttpd development packages, then run:
 
 ```sh
 python scripts/build-ft2-analysis.py
 ```
 
 The script checks the source commit and capture patch and writes a binary with provenance metadata to the user's cache directory. `KEYGEN_FT2_ANALYSIS` selects a different verified build.
+
+The listener runs in its own environment, because PyTorch must not load inside the evaluator and the controller pins a different `huggingface_hub`:
+
+```sh
+python3 -m venv .venv-listener
+.venv-listener/bin/pip install -r benchmark/requirements-listener.txt
+export KEYGEN_LISTENER_PYTHON="$PWD/.venv-listener/bin/python"
+.venv-listener/bin/python benchmark/score_listener.py identity
+```
+
+The identity command downloads the pinned model revision once (about 415 MB) and verifies the weights' SHA-256. Without `KEYGEN_LISTENER_PYTHON`, evaluation marks attempts unscored, never zero.
 
 ## Execution contract
 
@@ -111,33 +122,39 @@ python benchmark/report.py \
 
 `score.py profile --force` creates a new immutable evaluation generation. `score.py aggregate` rebuilds the score aggregate from existing profiles. Reports read cached evaluation evidence; they do not silently rescore attempts.
 
-Craft-v9 is a pitched-clarity/development diagnostic, not a validated musical-quality rating. Its content weights are 50 points for pitched clarity, 40 for development and 10 for dynamics. Only signal integrity and loop continuity multiply the content total. No elapsed-duration or noise-texture multiplier applies.
+### The score
 
-Pitched clarity is the active-duration mean captured harmonic-power fraction, with full credit at 0.50, the reference-corpus bound. Scale membership and pitch-class variety are whole-recording diagnostics only: a slow melody, a chromatic melody or a stationary tone can be clearly pitched. This component does not assess melodic merit, tuning to a prescribed key, or rhythmic activity. The pitch detector can miss weak fundamentals, confuse harmonically related simultaneous notes, and mistake periodic corruption for an instrument. Noise-like music can earn less pitched-clarity credit without being defective; the score does not claim stylistic neutrality.
+The listener-v1 score is 10 x the content-enjoyment rating that [Meta Audiobox Aesthetics](https://github.com/facebookresearch/audiobox-aesthetics) gives the canonical render, rounded to 0.1. The model predicts how people would rate a clip from 1 to 10. It was trained on about 97,000 speech, sound and music clips rated by 158 people ([Tjandra et al. 2025](https://arxiv.org/abs/2502.05139)); its weights are CC-BY-4.0. `benchmark/score_listener.py` resamples the first 120 seconds to 16 kHz mono, rates 10-second windows and averages them by length. Inference runs on the CPU with a pinned model revision and verified weights, so a given render always gets the same rating. Profiles record the four ratings (content enjoyment, production quality, content usefulness and production complexity); only enjoyment is scored.
 
-The serialized component `tonal_organization` measures pitched clarity.
-Evaluation provenance records `score_version` alongside the measurements.
+Two artifact caps still apply, because the listener cannot tell how the audio was made: an effectively silent render scores 0, and a long used sample with sparse sequencing, which looks like a pre-rendered song, is capped at 40. The serialized score keeps its historical key, `craft.craft_score`.
 
-At 4, 8 and 16 beats, each passage contains its distinct sequenced voices. A voice is a set of onset-tick/pitch pairs, independent of channel and instrument indices. Exact duplicate voices count once. One beat is 24 FT2 ticks; speed changes and pattern delays advance this clock, while BPM changes affect seconds, not beats. Note delays, pitch effects between triggers, envelopes and sample endings are not a full voice simulation.
+The listener replaced the fixed craft formula after the formula's top 20 attempts turned out to be uncorrelated with the listener (Spearman +0.02), and the maintainer preferred the listener's ranking after listening to it. It has limits: it was not trained specifically on tracker music, it leans toward longer and slightly quieter tunes on this corpus, and differences of a few points are within its noise. See the [scoring review](../docs/scoring-review.md).
 
-Each voice has two comparisons against other passages: transposition-normalized Jaccard overlap measures its strongest relationship to a changed voice; absolute-pitch overlap measures its mean contrast with the rest of the piece. An exact copy supplies no transformation evidence, even inside a different passage. A voice with one onset in a passage has no shape and cannot relate to another voice; otherwise every single note would match every other single note after transposition. The same voice must supply relationship and contrast. Its contribution is `recurrence² * contrast`; squaring recurrence suppresses incidental matches without a four-note or 50% cutoff. Average voices equally within passages, then average passages and the three timescales. Empty passages supply no contrast or development. Incomplete final passages and scales with fewer than two complete passages supply no evidence. All constants are declared policy, not fitted listener preferences.
+### Craft diagnostics
 
-This distinguishes changes inside a short loop from changes across longer passages, accepts sparse motifs and channel handoffs between passages, and prevents a steady accompaniment from certifying an unrelated melody. It does not grade melody, musical intent, timbral development or through-composed music reliably. Handoffs inside a passage still split voices. Equal voice weighting is not perceptual loudness weighting. Exact onset matching can miss expressive timing. Fixed beat windows assume the conventional tracker beat and are not inferred musical phrase boundaries.
+`craft.craft_diagnostics` keeps the previous formula as a diagnostic: pitched clarity (50), development (40) and dynamics (10), multiplied by signal integrity and loop continuity. These measurements explain how a tune is built. They do not change the score.
 
-Duration and sustained spectral noisiness are descriptive measurements. Order-list unrolling cannot earn a duration bonus, and deliberate noise percussion does not reduce unrelated content points through a separate multiplier. These rules do not establish that every short or noisy composition is good. Evaluation generations are immutable; rescoring writes separate evidence with its own provenance.
+Pitched clarity is the active-duration mean captured harmonic-power fraction, with full credit at 0.50. A stationary tone can reach the full 50; the serialized component is `tonal_organization`.
 
-Calibration metadata is in `data/keygen-scoring-reference.json` and `data/keygen-duration-reference.json`. The reference music itself is not distributed. Changes to scoring, source, numerical dependencies or renderer identity change evaluation provenance.
+At 4, 8 and 16 beats, each passage contains its distinct sequenced voices. A voice is a set of onset-tick/pitch pairs, independent of channel and instrument indices. Exact duplicate voices count once. One beat is 24 FT2 ticks. Each voice is compared with other passages: transposition-normalized Jaccard overlap measures its strongest relationship to a changed voice; absolute-pitch overlap measures its mean contrast. An exact copy supplies no transformation evidence, and a voice with one onset in a passage has no shape, so it cannot relate to another voice. Its contribution is `recurrence² * contrast`, averaged across voices, passages and the three timescales.
+
+Calibration metadata is in `data/keygen-scoring-reference.json` and `data/keygen-duration-reference.json`. The reference music itself is not distributed. Changes to scoring source, the listener identity, numerical dependencies or renderer identity change evaluation provenance.
 
 For a read-only review rescore without changing historical profiles:
 
 ```sh
-python benchmark/rescore.py runs --root runs --output /tmp/craft-v10-runs.json
-python benchmark/rescore.py references --modules /absolute/reference-xms --output /tmp/craft-v10-reference.json
+export KEYGEN_LISTENER_PYTHON="$PWD/.venv-listener/bin/python"
+python benchmark/rescore.py runs --root runs --output /tmp/listener-v1-runs.json
+python benchmark/rescore.py render-references --modules /absolute/reference-xms --out /tmp/reference-first-passes
+python benchmark/rescore.py references --modules /absolute/reference-xms \
+  --first-passes /tmp/reference-first-passes --output /tmp/listener-v1-reference.json
 ```
 
-The first command covers every `runs/<model>/attempt-N` directory, preserves unscored outcomes, checks XM and canonical WAV hashes, recomputes spectral and structural evidence, and retains the unchanged signal, dynamics and loop measurements with their source provenance. Install `flac` to restore archived WAV bytes into temporary storage with foreign metadata. The output includes the complete new craft breakdown but is not a replacement profile generation. `other/` remains historical and unranked. Reference modules must be named `<git_blob_sha>.xm` and match `data/keygen-duration-reference.json`; the reference pass uses the pinned native renderer to analyze first-pass PCM and reports tonal/development components, not invented totals from rounded historical factors. Both commands require a new output path and stop on changed or missing evidence. No inference or network fetch occurs.
+The listener is slow on small machines (minutes per tune on 2 cores). `render-references` needs the Linux FT2 analysis build; copy its output directory to a faster host for the two listening commands, and check that the scorer file hashes match there.
 
-The [scoring review](../docs/scoring-review.md) contains the model table, reference distributions, verification results and limitations. It records pitched-clarity saturation and the tradeoff between clear repetitive music and developed noisier music.
+The first command covers every `runs/<model>/attempt-N` directory, preserves unscored outcomes, checks XM and canonical WAV hashes, rates the verified canonical WAV with the listener, recomputes craft diagnostics, and retains the unchanged signal, dynamics and loop measurements with their source provenance. Install `flac` to restore archived WAV bytes with foreign metadata. The output is review evidence, not a replacement profile generation. `other/` remains historical and unranked. Reference modules must be named `<git_blob_sha>.xm` and match `data/keygen-duration-reference.json`; `render-references` renders each first pass with the pinned native renderer and records its hash; `references` verifies those hashes and rates each first pass with the listener, without caps.
+
+The [scoring review](../docs/scoring-review.md) contains the model table, reference distributions, verification results and limitations.
 
 For a reviewed public snapshot, follow [the website guide](../web/classic/README.md). Do not serve a run directory or the repository root as a public file server.
 
