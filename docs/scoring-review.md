@@ -50,7 +50,7 @@ Attempts by the same model agree more than attempts by different models: across 
 
 ## Verification
 
-- Score, structure, mix, report and repository tests pass (offline, with a fake listener that exercises the real subprocess contract). The full benchmark suite has the same pre-existing contrib and native-environment failures as main and no new ones.
+- Score, structure, mix, report and repository tests pass (offline, with a fake listener that exercises the real subprocess contract).
 - An end-to-end native profile produces an eligible listener-v1 score, and the same attempt is marked unscored, not zero, when no listener environment is configured.
 - Focused Ruff checks pass on changed Python. Frontend tests pass.
 
