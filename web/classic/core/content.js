@@ -46,7 +46,7 @@ export const OVERVIEW = [
 // How the listener model works, for the "How it works" page. Checked against the
 // audiobox_aesthetics 0.0.4 source and Tjandra et al. 2025.
 export const LISTENER_MODEL = {
-  title: "Inside the AI listener",
+  title: "What is the AI listener?",
   lines: [
     "Audiobox Aesthetics is a model Meta released in 2025. People rated about 97,000 clips of speech, sound effects and music (around 500 hours) on four scales from 1 to 10. 158 raters took part, and each followed written guidelines so that their scores meant the same thing. The model learned to predict those ratings.",
     "It hears audio at 16 kHz in mono, 10 seconds at a time. A WavLM encoder, a 12-layer transformer first trained on large amounts of unlabeled speech, turns each window into features. Each of the four ratings blends the encoder's layers in its own learned mix, averages that over time, and maps it onto the 1 to 10 scale with a small prediction head.",
