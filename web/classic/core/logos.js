@@ -423,6 +423,27 @@ export const LOGOS = {
       "................",
     ],
   },
+  "Meituan": {
+    tile: null, pal: { y: "#FFD100", k: "#000000" },
+    px: [
+      "..yyyyyyyyyyyy..",
+      ".yyyyyyyyyyyyyy.",
+      "yyyyyyyyyyyyyyyy",
+      "yyyyyyyyyyyyyyyy",
+      "yyykyykyykkkkkky",
+      "yykkkkkkykyykyky",
+      "yyyykkyyykkkkkky",
+      "yykkkkkkykykkyky",
+      "yyyykkyyykkykyky",
+      "yyykyykyykyykyky",
+      "yykyyyykykkkkkky",
+      "yyyyyyyyyyyyyyyy",
+      "yyyyyyyyyyyyyyyy",
+      "yyyyyyyyyyyyyyyy",
+      ".yyyyyyyyyyyyyy.",
+      "..yyyyyyyyyyyy..",
+    ],
+  },
 };
 
 // Pre-rendered data URLs (one per size) for DOM <img>/background use.
