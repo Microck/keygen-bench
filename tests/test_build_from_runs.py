@@ -1,4 +1,5 @@
 """Offline publication tests with small synthetic ranked attempts."""
+import errno
 import json
 import os
 from pathlib import Path
@@ -117,6 +118,14 @@ class RunsBuilderTests(unittest.TestCase):
         self.assertNotIn("results", data["runs"][0]["cohort"])
         self.assertNotEqual(data["runs"][0]["provenance"]["evaluation_fingerprint"],
                             data["runs"][0]["provenance"]["source_evaluation"]["evaluation_fingerprint"])
+
+    def test_verified_stage_moves_across_filesystems(self):
+        with patch("os.rename", side_effect=OSError(errno.EXDEV, "Invalid cross-device link")) as rename:
+            data = self.build(no_media=True)
+        self.assertEqual(rename.call_count, 2)
+        self.assertEqual(data["eligible_attempts"], 2)
+        self.assertTrue((self.root / "publication/dist/data.json").is_file())
+        self.assertFalse((self.root / "publication/dist/.verified").exists())
 
     def test_display_names_drop_route_free_and_contributor_tags(self):
         self.assertEqual(builder.display_name("meta/muse-spark-1.13-contributor:free"), "muse-spark-1.13")

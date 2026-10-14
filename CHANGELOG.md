@@ -39,6 +39,7 @@
 
 ### Fixed
 
+- Move verified site inputs across filesystems when the temporary directory and publication output use different mounts.
 - Record listener operating system, CPU architecture and Python version; distinguish its 120-second rating window from whole-render artifact caps, and reject pre-listener public snapshots with the version-2 schema.
 - Preserve full listener-rating precision so serialized evidence reproduces its score; allow read-only rescores of listener-v1 profiles as well as the historical craft profiles, and describe the listener score in campaign reports.
 - Match model release metadata across dot/dash keys and the public names without `-contributor`, so the model dropdown sorts by release date; keep dropdown logos inside their border.

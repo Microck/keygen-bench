@@ -238,7 +238,7 @@ def build_from_runs(runs_root: Path, output: Path, listener_scores: Path,
             # The collector verifies the same inputs. Move its verified stage rather than decode twice.
             collector_stage = dist / ".verified" / run_slug
             collector_stage.parent.mkdir(exist_ok=True)
-            stage.rename(collector_stage)
+            shutil.move(stage, collector_stage)
             run = public_run(row, {"attempted_count": sum(r["attempted"] for m, _, r, _, _ in loaded if m == model)},
                              directory, dist, {"campaign_sha256": campaign_hash,
                              "attempt_selection": selection},
