@@ -24,7 +24,7 @@
 
 ### Changed
 
-- Score pitched clarity, development across 4-, 8- and 16-beat passages, and dynamics. Signal integrity and loop continuity multiply the content total; artifact caps limit the result. Duration, noise texture, key concentration and pitch variety are diagnostics.
+- Score tunes with an AI listener (listener-v1): 10 x the content-enjoyment rating of Meta Audiobox Aesthetics on the canonical render, with the silent and baked-sample caps. The listener runs in its own pinned environment (`benchmark/requirements-listener.txt`, `KEYGEN_LISTENER_PYTHON`) on the CPU with verified weights; contributor setup installs it and doctor checks it. Pitched clarity, development, dynamics, signal integrity and loop continuity remain as craft diagnostics; a voice with one onset in a passage no longer counts as development there. The site shows the four listener ratings (enjoyment scored, the other three marked unscored), explains how the listener model works on the Scoring page, and no longer shows or exports the old craft measurements.
 - Add a read-only, hash-verified rescorer for ranked attempts and the pinned reference corpus, with separate evaluation evidence and native reference return/stop boundaries.
 - Derive the contributor contract's scorer identity from the evaluator and reject mismatched campaign evaluations at publication export.
 - Include the donation page and its QR images in fresh website publications, and preserve existing external playback traces during static export.
@@ -38,6 +38,8 @@
 
 ### Fixed
 
+- Record listener operating system, CPU architecture and Python version; distinguish its 120-second rating window from whole-render artifact caps, and reject pre-listener public snapshots with the version-2 schema.
+- Preserve full listener-rating precision so serialized evidence reproduces its score; allow read-only rescores of listener-v1 profiles as well as the historical craft profiles, and describe the listener score in campaign reports.
 - Match model release metadata across dot/dash keys and the public names without `-contributor`, so the model dropdown sorts by release date; keep dropdown logos inside their border.
 - Restore the original page slide transition and the original spend tooltip wording.
 - Show `$0` for models that are free on their maker's API instead of `<$0.01`.

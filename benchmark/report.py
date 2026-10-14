@@ -27,7 +27,7 @@ QUEUE_SELECTION = "independent_repetitions_infrastructure_reruns"
 # so is a request the provider content filter blocked on every allowed send (CONTENT_FILTER).
 NON_MODEL_FAILURES = {"INFRA", "AUTH", "QUOTA", "CONTENT_FILTER", "TRANSPORT", "PROTOCOL", "EVAL"}
 PENDING_STATUSES = {"MISSING", "RESERVED", "RUNNING"}
-SCORE_ROLE = "Auxiliary tonal-development diagnostic, not a musical-quality ranking."
+SCORE_ROLE = "AI listener content enjoyment (Meta Audiobox Aesthetics) of the canonical render, with artifact caps."
 ROUTE_KEYS = ("provider", "api", "base_url", "response_model")
 DEFAULT_PROMPT_VERSION = "prompt-v1"  # frozen campaigns compiled before prompts carried a version
 MAX_TIER_PREFIX = "next-max-tier-"
@@ -914,11 +914,13 @@ def page_rows(report: dict, output: Path) -> list[dict]:
                           if not (directory / name).is_file()) if archive.get("verified") is True else []
         structure, audio = profile.get("structure") or {}, profile.get("audio") or {}
         craft = (profile.get("craft") or {}) if row["eligible"] else {}
+        diagnostics = craft.get("craft_diagnostics") or {}
         process = profile.get("process") or {}
         rows.append({**row, "id": row["attempt_id"], "budget": "frozen cohort",
-                     "parts": craft.get("parts") or {}, "capped": craft.get("capped", False),
+                     "listener": craft.get("listener") or {}, "capped": craft.get("capped", False),
                      "caps": craft.get("caps") or [], "uncapped": craft.get("uncapped"), "score_note": craft.get("note") or "",
-                     "content_score": craft.get("content_score"), "factors": craft.get("factors") or {},
+                     "parts": diagnostics.get("parts") or {}, "craft_total": diagnostics.get("total"),
+                     "factors": diagnostics.get("factors") or {},
                      "spectral": audio.get("spectral") or {}, "mix": profile.get("mix") or {}, "mix_error": profile.get("mix_error") or "",
                      "loop": loop, "loop_error": profile.get("loop_error") or "", "flags": profile.get("flags") or [],
                      "dur": audio.get("duration_seconds"), "lufs": audio.get("lufs_integrated"),

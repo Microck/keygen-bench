@@ -37,6 +37,30 @@ for profile_version, row_version in [('craft-v7', 'craft-v7'),
             self.assertEqual(process.returncode, 0, process.stderr)
             self.assertFalse(output.exists())
 
+    def test_builder_rejects_pre_listener_snapshot_before_publication(self):
+        root = Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary) / "snapshot"
+            source.mkdir()
+            output = Path(temporary) / "publication"
+            script = """
+import sys
+from pathlib import Path
+sys.path.insert(0, 'web/classic')
+from build import build_snapshots
+build_snapshots([Path(sys.argv[1])], Path(sys.argv[2]))
+"""
+            for schema in ("keygen-public-snapshot-1", None, "unknown"):
+                with self.subTest(schema=schema):
+                    (source / "snapshot.json").write_text(json.dumps({
+                        "schema": schema, "runs": [{"parts": {}}]}))
+                    process = subprocess.run([sys.executable, "-c", script, str(source), str(output)],
+                                             cwd=root, capture_output=True, text=True, timeout=30)
+                    self.assertNotEqual(process.returncode, 0)
+                    self.assertIn("require keygen-public-snapshot-2 with listener ratings", process.stderr)
+                    self.assertIn("Re-export with collect_public.py", process.stderr)
+                    self.assertFalse(output.exists())
+
     def test_static_export_preserves_external_playback_trace(self):
         root = Path(__file__).resolve().parents[1]
         with tempfile.TemporaryDirectory() as temporary:

@@ -33,67 +33,76 @@ export const DISCLAIMER = {
   title: "Treat it as a guide",
   lines: [
     "Music can't be judged objectively. One person's favourite tune can grate on someone else, and both are right.",
-    "The score measures pitched clarity, development, loudness variation and technical properties of the audio and module. It does not measure listener preference.",
-    "The rules favor some kinds of music. Comparing them with reference tracks does not prove that the ranking is fair. Use the score as a guide, and listen for yourself.",
+    "The score is an AI listener's prediction of how much people would enjoy the tune. The model learned from human ratings of ordinary speech, sound and music, not specifically tracker music, and it is not a person.",
+    "Use the score as a guide, and listen for yourself.",
   ],
 };
 
 export const OVERVIEW = [
-  "A score has two parts. First the tune earns up to 100 content points. Then signal integrity and loop continuity can reduce the total.",
-  "The total is multiplied by a signal factor between 0 and 1 and a loop factor between 0.75 and 1. Two artifact caps can limit the result further.",
-  "These fixed rules measure properties of the audio and module, not how good the music sounds to a listener.",
+  "Each tune is rendered by FastTracker II, then played to an AI listener: Meta's Audiobox Aesthetics model. It predicts how a person would rate the audio from 1 to 10.",
+  "The score is its content enjoyment rating times 10. Two caps can lower it: silence scores 0, and a tune that is really one long pre-recorded sample is capped at 40.",
 ];
 
-// id, title, max (points or "x1.0" multiplier), plain summary, what earns credit, what loses it, details.
+// How the listener model works, for the "How it works" page. Checked against the
+// audiobox_aesthetics 0.0.4 source and Tjandra et al. 2025.
+export const LISTENER_MODEL = {
+  title: "What is the AI listener?",
+  lines: [
+    "Audiobox Aesthetics is a model Meta released in 2025. People rated about 97,000 clips of speech, sound effects and music (around 500 hours) on four scales from 1 to 10. 158 raters took part, and each followed written guidelines so that their scores meant the same thing. The model learned to predict those ratings.",
+    "It hears audio at 16 kHz in mono, 10 seconds at a time. A WavLM encoder, a 12-layer transformer first trained on large amounts of unlabeled speech, turns each window into features. Each of the four ratings blends the encoder's layers in its own learned mix, averages that over time, and maps it onto the 1 to 10 scale with a small prediction head.",
+    "Here it rates the first two minutes of each tune. The window ratings are averaged, weighted by length. Later material cannot change the listener rating, but can change an artifact cap through whole-render measurements. The model's revision and weights are pinned and it runs on the CPU; small numerical differences between execution environments are possible.",
+  ],
+  links: [
+    ["Model weights (Hugging Face)", "https://huggingface.co/facebook/audiobox-aesthetics"],
+    ["Code (GitHub)", "https://github.com/facebookresearch/audiobox-aesthetics"],
+    ["Paper (arXiv 2502.05139)", "https://arxiv.org/abs/2502.05139"],
+  ],
+};
+
+// id, title, kind, max, plain summary, what scores higher, what scores lower, details.
+// kind: "points" sets the score, "rating" is a listener rating that is unscored, "cap" limits the score.
 export const SCORING = [
   {
-    id: "tonal", kind: "points", max: 50, title: "Pitched clarity",
-    plain: "How much of the sound has a clear pitch?",
-    good: "Clearly pitched sound, including slow notes, chromatic melodies and sustained tones.",
-    bad: "Little detectable pitched sound. Noise-based music can score lower without being defective.",
-    details: "The detector measures captured harmonic power in short audio windows and averages it over active time. Half the power earns full credit. Key concentration and pitch variety are diagnostics, not penalties. A stationary tone can earn full clarity credit, but this says nothing about its development or musical merit.",
+    id: "enjoyment", kind: "points", max: 100, title: "Content enjoyment",
+    plain: "How much would a listener enjoy this? This is the score.",
+    good: "Music the model expects people to enjoy: emotional impact, artistic skill and expression.",
+    bad: "Music the model expects to bore or grate on people.",
+    details: "This is the model's content enjoyment rating. In its paper, its enjoyment predictions correlate about 0.66 to 0.75 with human ratings of music. The rating, from 1 to 10, is multiplied by 10.",
   },
   {
-    id: "development", kind: "points", max: 40, title: "Development",
-    plain: "Do related ideas change across short and long passages?",
-    good: "Recognizable note and rhythm shapes with contrasting passages, including sparse ideas and ideas handed between channels.",
-    bad: "An unchanged short cycle provides no longer-scale development. Channel numbers, instrument slots and nonzero volume changes do not earn credit.",
-    details: "The scorer compares complete 4-, 8- and 16-beat passages. Each voice earns credit for its relationship to a changed idea and its contrast with the rest of the tune. Its contribution is squared similarity times contrast, averaged equally across voices, passages and the three passage lengths. Exact copies supply no transformation evidence. A steady accompaniment cannot establish development in an unrelated melody. Incomplete passages supply no evidence. Changes in timbre and music without recurring ideas can be missed.",
+    id: "quality", kind: "rating", max: 10, title: "Production quality",
+    plain: "How technically clean is the audio? Unscored: it does not change the score.",
+    good: "Clear, undistorted sound with balanced frequencies and dynamics.",
+    bad: "Noise, distortion, muffled or harsh sound.",
+    details: "A second rating from the same model. It judges how the sound is produced, not the music, and every tune is rendered by the same engine, so it is shown for context only.",
   },
   {
-    id: "dynamics", kind: "points", max: 10, title: "Dynamics",
-    plain: "Does the loudness move?",
-    good: "Some contrast between quieter and louder moments.",
-    bad: "The same level from start to end (flagged FLAT), or wild jumps.",
-    details: "Two ranges, weighted 25% and 75%: full credit for a 3 to 18 dB range between short moments, and for a 1 to 10 dB range across 3-second stretches. Under 2 dB between short moments is flagged FLAT.",
+    id: "usefulness", kind: "rating", max: 10, title: "Content usefulness",
+    plain: "Would someone reuse this audio in their own work? Unscored: it does not change the score.",
+    good: "Audio that would make good source material.",
+    bad: "Audio few people would reuse.",
+    details: "A third rating from the same model. Being good raw material for other creators is a different question from being enjoyable, so it is shown for context only.",
   },
   {
-    id: "integrity", kind: "multiplier", title: "Clean sound",
-    plain: "Does it play without technical faults?",
-    good: "No clipping, no long silences, a sensible loudness.",
-    bad: "Distortion from clipping, dead air, or a tune so quiet it is barely there.",
-    details: "Weighs clipping (35%), the share of silence (25%), DC offset (15%), the longest silent gap (15%) and peak level (10%). Loudness gets full credit from -30 LUFS up and falls to nothing at -60 LUFS; louder earns nothing extra.",
-  },
-  {
-    id: "loop", kind: "multiplier", title: "Clean loop",
-    plain: "Keygen tunes repeat forever. Does the restart sound seamless?",
-    good: "The end flows back into the start without a click, gap, volume jump or broken rhythm.",
-    bad: "A click, silence or stumble every time it restarts.",
-    details: "FT2 plays each tune continuously and every restart is measured for clicks, gaps, level jumps, broken rhythm and tone change. The worst one counts. A tune that never restarts gets the lowest loop quality. This check can take away at most a quarter of the score.",
+    id: "complexity", kind: "rating", max: 10, title: "Production complexity",
+    plain: "How many layers of sound are going on? Unscored: it does not change the score.",
+    good: "Many instruments and parts at once.",
+    bad: "A single sparse voice.",
+    details: "A fourth rating from the same model. More layers are not better music, so it is shown for context only.",
   },
   {
     id: "caps", kind: "cap", title: "Caps",
-    plain: "Two faults set a ceiling on the score instead of a multiplier.",
+    plain: "Two faults set a ceiling that the listener's rating cannot lift.",
     good: "A tune that is mostly not silent, built from instruments playing patterns.",
     bad: "A tune that is 99% silence scores 0. A tune that looks like one long pre-recorded sample playing back (a sample over 8 seconds while the patterns cover under a quarter of the song) is capped at 40.",
-    details: "Run details show the uncapped score next to the final one. The score is rounded once, to 0.1, at the end.",
+    details: "The task forbids a pre-rendered song, and the listener cannot tell how the audio was made, so this rule stays. Run details show the uncapped score next to the final one. The score is rounded once, to 0.1, at the end.",
   },
 ];
 
 export const SCORING_NOTES = [
-  { id: "calibration", title: "Reference measurements", text: "The pitched-power, DC-offset and loop level and tone bounds come from archived keygen tunes, not listener ratings. A clear sustained tone can earn all 50 pitched-clarity points without development credit. Duration, sustained noisiness, key concentration and pitch variety are diagnostics, with no separate score multiplier." },
-  { id: "judges", title: "No judges", text: "No people and no AI rate the tunes. The same fixed rules score every model, with no special cases." },
-  { id: "flags", title: "Flags are notes, not penalties", text: "Flags point out something worth listening for, like a masked melody. Only the checks and caps above change the score." },
+  { id: "listener", title: "About the AI listener", text: "Meta Audiobox Aesthetics (2025, CC-BY-4.0) was trained on human ratings of speech, sound and music clips from public datasets, not specifically tracker or keygen music. On these tunes it leans toward longer and slightly quieter ones. Scores within a few points of each other are effectively tied. The model, its revision and its weights are pinned, and it runs on the CPU. Small numerical differences between execution environments are possible. Only the first two minutes affect the listener rating; artifact caps use whole-render measurements." },
+  { id: "judges", title: "One AI judge, no people", text: "No person rates the tunes. The same model scores every tune, with no special cases." },
+  { id: "flags", title: "Flags are notes, not penalties", text: "Flags point out something worth listening for, like a masked melody. Only the caps above can lower the listener's score." },
   { id: "cost", title: "How cost is estimated", text: "Estimated from the tokens each run used, at the maker prices supplied with the publication. It's what the run would cost at those prices, not what was billed. Models without a published API price show n/a." },
 ];
 

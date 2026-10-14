@@ -375,8 +375,8 @@ def build_snapshots(sources: list[Path], publish_root: Path, excluded: list[tupl
     if publish_root.exists() and any(publish_root.iterdir()):
         raise ValueError("Use a new empty publication directory for each immutable snapshot")
     snapshots = [json.loads((source / "snapshot.json").read_text()) for source in sources]
-    if any(snapshot.get("schema") != "keygen-public-snapshot-1" for snapshot in snapshots):
-        raise ValueError("Unsupported public snapshot")
+    if any(snapshot.get("schema") != "keygen-public-snapshot-2" for snapshot in snapshots):
+        raise ValueError("Unsupported public snapshot; require keygen-public-snapshot-2 with listener ratings. Re-export with collect_public.py")
     for snapshot in snapshots:
         if "cohort" not in snapshot:
             raise ValueError("Snapshot has no cohort label; re-export it with collect_public.py")
@@ -494,7 +494,7 @@ def build_snapshots(sources: list[Path], publish_root: Path, excluded: list[tupl
         "cohorts": cohorts,
         "limitations": [
             "This is an immutable snapshot, not a live campaign monitor.",
-            "Scores measure pitched clarity, development and dynamics, with signal integrity and loop continuity checks. They do not measure listener preference.",
+            "Scores are 10 x an AI listener's content-enjoyment rating (Meta Audiobox Aesthetics), capped for silent or baked-sample tunes. The model predicts human ratings; it is not a person.",
             ATTEMPT_NOTE if groups else SAMPLE_NOTE,
             TIER_NOTE,
             *(["The musical pilot is labeled separately and is excluded from the main-campaign counts."] if pilot_count else []),

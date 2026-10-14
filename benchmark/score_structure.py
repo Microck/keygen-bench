@@ -12,7 +12,7 @@ DEVELOPMENT_BEATS = (4, 8, 16)
 # Bound pairwise work by coalescing identical passages and rejecting excessive
 # unique content rather than silently scoring only a prefix of the composition.
 MAX_PASSAGE_COMPARISONS = 8_000_000
-DEVELOPMENT_METHOD = "voice-self-similarity-4-8-16-beats-v1"
+DEVELOPMENT_METHOD = "voice-self-similarity-4-8-16-beats-v2"
 
 
 def _sample(xm, instrument, note):
@@ -236,7 +236,10 @@ def _development(rows, row_ticks, ticks):
         entries = []
         for content, repeats in passages.items():
             if repeats:
-                voices = [(frozenset(voice), frozenset((t, p - voice[0][1]) for t, p in voice))
+                # One onset has no internal interval or rhythm, so every single
+                # note normalizes to the same shape. It cannot relate to anything.
+                voices = [(frozenset(voice),
+                           frozenset((t, p - voice[0][1]) for t, p in voice) if len(voice) > 1 else None)
                           for voice in content]
                 entries.append((voices, repeats))
         voice_count = sum(len(voices) for voices, _ in entries)
@@ -257,7 +260,7 @@ def _development(rows, row_ticks, ticks):
                             # Exact copies establish repetition, not a relationship
                             # between changed ideas. Exclude them even when another
                             # voice makes the containing passage different.
-                            if absolute != other_absolute:
+                            if absolute != other_absolute and shape and other_shape:
                                 related = max(related, _overlap(shape, other_shape))
                         strongest = max(strongest, related)
                         difference += (1 - closest) * other_repeats
@@ -307,6 +310,7 @@ def structure_metrics(xm: dict, audible_channels: set[int] | None = None) -> dic
         "E6x loop markers reset on order transitions; unusual FT2 loop/break combinations may differ.",
         "Development compares complete 4-, 8- and 16-beat passages on a 24-tick beat grid; incomplete tails supply no evidence.",
         "Each voice combines its own transposition-normalized recurrence and absolute-pitch contrast; these are not listener ratings.",
+        "A voice with one onset in a passage has no melodic or rhythmic shape and cannot establish recurrence.",
         "Channel/instrument identities and exact duplicate voices are ignored; distinct voices receive equal, not loudness-based, weight.",
         "Exact onset matching can miss expressive timing, and first-note normalization can miss ornamented motif starts.",
         "Through-composed, timbral and envelope-only development can be underestimated; pitches including percussion are treated alike.",

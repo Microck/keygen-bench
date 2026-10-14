@@ -324,9 +324,15 @@ def setup(args):
             if not python.resolve().is_file():
                 raise CLIError("The existing virtual environment has a broken interpreter; choose a new --home")
     renderer_output = outside_path(Path(os.environ.get("KEYGEN_FT2_ANALYSIS", str(DEFAULT_BINARY))).expanduser())
+    # The AI listener needs PyTorch, which must not load in the evaluator, so it
+    # gets its own private environment; score.py calls it as a subprocess.
+    listener = home / "listener-venv/bin/python"
     commands = [
         ("Creating the private virtual environment", [sys.executable, "-m", "venv", str(home / "venv")]),
         ("Installing pinned controller packages", [str(python), "-m", "pip", "install", "-r", str(ROOT / "benchmark/requirements.txt")]),
+        ("Creating the private listener environment", [sys.executable, "-m", "venv", str(home / "listener-venv")]),
+        ("Installing pinned listener packages", [str(listener), "-m", "pip", "install", "-r", str(ROOT / "benchmark/requirements-listener.txt")]),
+        ("Downloading and verifying the pinned listener weights", [str(listener), str(ROOT / "benchmark/score_listener.py"), "identity"]),
         ("Pulling the pinned Debian base", docker + ["pull", runner.contract()["base_image"]]),
         ("Building the pinned agent target", docker + ["build", "-f", str(ROOT / "benchmark/Dockerfile"), "--target", "agent", "-t", AGENT_IMAGE, str(ROOT)]),
         ("Building the pinned visualizer target", docker + ["build", "-f", str(ROOT / "benchmark/Dockerfile"), "--target", "visualizer", "-t", VISUALIZER_IMAGE, str(ROOT)]),
@@ -338,10 +344,11 @@ def setup(args):
         if process.returncode:
             raise CLIError(description + " failed. Check network access and the stated prerequisites; rerun setup after correcting them. Provider credentials were not passed to the build.")
         if description.startswith("Creating"):
-            os.chmod(home / "venv", 0o700)
+            os.chmod(Path(command[-1]), 0o700)
     runner.inspect_images(docker, AGENT_IMAGE, VISUALIZER_IMAGE)
     renderer_identity()
-    print(f"Setup complete. Next: {shlex.quote(str(python))} benchmark/contrib/cli.py configure")
+    print(f"Setup complete. Set KEYGEN_LISTENER_PYTHON={shlex.quote(str(listener))} in your environment, "
+          f"then run: {shlex.quote(str(python))} benchmark/contrib/cli.py configure")
 
 
 def bridge_check(config):
@@ -417,6 +424,11 @@ def doctor(args):
         errors.append(f"Evaluation memory/module admission failed: {str(exc)}. Available RAM: {available_memory()} bytes")
     except Exception as exc:
         errors.append("Evaluation memory/module admission failed: " + safe_error(exc))
+    try:
+        from score import listener_identity
+        listener_identity()
+    except (RuntimeError, OSError, subprocess.SubprocessError):
+        errors.append("AI listener unavailable. Run setup, then set KEYGEN_LISTENER_PYTHON to the listener-venv Python it printed")
     try:
         ancestor = args.work if args.work else args.config.parent
         while not ancestor.exists():

@@ -15,6 +15,16 @@ import numpy as np
 
 from benchmark import score
 
+# Every profile in these tests talks to the offline fake listener, never PyTorch.
+FAKE_LISTENER = str(Path(__file__).with_name("fake_listener.py"))
+os.environ[score.LISTENER_ENV] = FAKE_LISTENER
+
+
+def listener(enjoyment, seconds=90.0):
+    return {"ratings": {"content_enjoyment": enjoyment, "content_usefulness": 5.0,
+                        "production_complexity": 5.0, "production_quality": 5.0},
+            "analyzed_seconds": seconds}
+
 
 def build_xm(rows=16, channels=2, order=(0, 0, 1), restart=1, sample_frames=1000, cells=None) -> bytes:
     """A minimal valid XM: patterns 0 and 1, one instrument with one 8-bit sample, packed cells."""
@@ -85,29 +95,49 @@ class ScoreTests(unittest.TestCase):
         loop = {"quality_score": 1.0, "analysis_duration_seconds": 90.0, "first_pass_audible_seconds": 90.0}
         return st, au, mix, loop
 
-    def test_integrity_can_only_reduce_content_points(self):
+    def test_integrity_can_only_reduce_craft_diagnostic_points(self):
         st, au, _, loop = self.craft_inputs()
-        baseline = score.craft_score(st, au, loop)["craft_score"]
-        broken = score.craft_score(st, au, dict(loop, quality_score=0))
-        clipping = score.craft_score(st, dict(au, clip_fraction=0.01), loop)
-        self.assertLess(broken["craft_score"], baseline)
-        self.assertGreaterEqual(broken["craft_score"], baseline * 0.75)
-        self.assertLess(clipping["craft_score"], baseline)
-        empty = score.craft_score(dict(st, arrangement_score=0), dict(
+        baseline = score.craft_diagnostics(st, au, loop)["total"]
+        broken = score.craft_diagnostics(st, au, dict(loop, quality_score=0))["total"]
+        clipping = score.craft_diagnostics(st, dict(au, clip_fraction=0.01), loop)["total"]
+        self.assertLess(broken, baseline)
+        self.assertGreaterEqual(broken, baseline * 0.75)
+        self.assertLess(clipping, baseline)
+        empty = score.craft_diagnostics(dict(st, arrangement_score=0), dict(
             au, block_rms_range_db=0, phrase_rms_range_db=0,
             spectral={"tonal_organization": 0.0, "sustained_noise_fraction": 0.0}), loop)
-        self.assertEqual(empty["craft_score"], 0)
+        self.assertEqual(empty["total"], 0)
+
+    def test_score_is_ten_times_listener_enjoyment_regardless_of_craft(self):
+        st, au, _, loop = self.craft_inputs()
+        good = score.benchmark_score(st, au, loop, listener(6.54))
+        self.assertEqual(good["craft_score"], 65.4)
+        self.assertFalse(good["capped"])
+        # Craft diagnostics are reported but cannot move the score.
+        broken = score.benchmark_score(dict(st, arrangement_score=0), au, dict(loop, quality_score=0), listener(6.54))
+        self.assertEqual(broken["craft_score"], 65.4)
+        self.assertLess(broken["craft_diagnostics"]["total"], good["craft_diagnostics"]["total"])
+        with self.assertRaises(ValueError):
+            score.benchmark_score(st, au, loop, listener(float("nan")))
+
+    def test_serialized_listener_rating_reproduces_score_at_rounding_boundary(self):
+        st, au, _, loop = self.craft_inputs()
+        result = score.benchmark_score(st, au, loop, listener(4.5550001))
+        stored = json.loads(json.dumps(result))
+        self.assertEqual(stored["listener"]["content_enjoyment"], 4.5550001)
+        self.assertEqual(stored["craft_score"], 45.6)
+        self.assertEqual(stored["craft_score"], round(10 * stored["listener"]["content_enjoyment"], 1))
 
     def test_duration_and_noise_diagnostics_do_not_discount_content(self):
         st, au, _, loop = self.craft_inputs()
-        baseline = score.craft_score(st, au, loop)
+        baseline = score.craft_diagnostics(st, au, loop)
         for seconds in (1.92, 15, 30, 60):
             for noisiness in (0, .4, 1):
                 with self.subTest(seconds=seconds, noisiness=noisiness):
                     measured = dict(loop, analysis_duration_seconds=seconds, first_pass_audible_seconds=seconds)
                     audio = dict(au, duration_seconds=seconds,
                                  spectral=dict(au["spectral"], sustained_noise_fraction=noisiness))
-                    self.assertEqual(score.craft_score(st, audio, measured), baseline)
+                    self.assertEqual(score.craft_diagnostics(st, audio, measured), baseline)
 
     def test_repeated_noise_cannot_buy_credit_with_clean_delivery(self):
         from benchmark.score_loop import transition_metrics
@@ -123,23 +153,25 @@ class ScoreTests(unittest.TestCase):
         au = score.audio_metrics(repeated, fs)
         transition = transition_metrics(repeated, fs, fs * 4, 0.5)
         self.assertGreater(transition["quality_score"], 0.9)
-        result = score.craft_score(st, au, dict(loop, quality_score=transition["quality_score"]))
-        self.assertLess(result["craft_score"], 5)
+        result = score.craft_diagnostics(st, au, dict(loop, quality_score=transition["quality_score"]))
+        self.assertLess(result["total"], 5)
 
     def test_counts_and_unused_sample_metadata_do_not_buy_craft(self):
         st, au, mix, loop = self.craft_inputs()
         padded = dict(st, channels_used=32, instruments_used=128, distinct_patterns_in_order=256,
                       longest_sample_seconds=300, sample_seconds_total=500, effects_used=list("0123456789ABCD"))
-        self.assertEqual(score.craft_score(st, au, loop)["craft_score"],
-                         score.craft_score(padded, au, loop)["craft_score"])
+        self.assertEqual(score.craft_diagnostics(st, au, loop)["total"],
+                         score.craft_diagnostics(padded, au, loop)["total"])
 
     def test_long_pad_is_not_treated_as_sparse_baked_playback(self):
         st, au, mix, loop = self.craft_inputs()
         long_pad = dict(st, used_longest_sample_seconds=90.0, used_sample_seconds_total=95.0)
-        sequenced = score.craft_score(long_pad, au, loop)
-        sparse = score.craft_score(dict(long_pad, sequence_coverage=0.05), au, loop)
+        sequenced = score.benchmark_score(long_pad, au, loop, listener(9.0))
+        sparse = score.benchmark_score(dict(long_pad, sequence_coverage=0.05), au, loop, listener(9.0))
         self.assertFalse(sequenced["capped"])
-        self.assertLessEqual(sparse["craft_score"], 40.0)
+        # A baked song stays capped however much the listener enjoys it.
+        self.assertEqual(sparse["craft_score"], 40.0)
+        self.assertEqual(sparse["uncapped"], 90.0)
         self.assertTrue(sparse["capped"])
 
     def test_antiphase_stereo_is_not_silence(self):
@@ -167,7 +199,7 @@ class ScoreTests(unittest.TestCase):
         au = score.audio_metrics(np.zeros((8000, 2)), 8000)
         self.assertIsNone(au["lufs_integrated"])
         self.assertEqual(au["silent_fraction"], 1.0)
-        result = score.craft_score(st, au, loop)
+        result = score.benchmark_score(st, au, loop, listener(8.0))
         self.assertEqual(result["craft_score"], 0.0)
         json.dumps({"audio": au, "craft": result}, allow_nan=False)
 
@@ -202,10 +234,10 @@ class ScoreTests(unittest.TestCase):
         ]
         summary = score.summarize_profiles(profiles)
         self.assertEqual(summary["eligible_evaluated"], 2)
-        self.assertEqual(summary["auxiliary_craft_mean"], 30)
+        self.assertEqual(summary["score_mean"], 30)
         self.assertEqual(summary["model_outcome_denominator"], 3)
         self.assertAlmostEqual(summary["model_failure_rate"], 1 / 3)
-        self.assertIsNone(score.summarize_profiles(profiles[1:3])["auxiliary_craft_mean"])
+        self.assertIsNone(score.summarize_profiles(profiles[1:3])["score_mean"])
         json.dumps(summary, allow_nan=False)
 
     def test_execution_failures_and_missing_renderers_never_become_zero(self):
@@ -356,9 +388,12 @@ class ScoreTests(unittest.TestCase):
                 audio.setparams((2, 2, 8000, 0, "NONE", "not compressed"))
                 audio.writeframes(bytes(32))
             structure, audio, _, loop = self.craft_inputs()
+            # Historical craft-v7 profiles kept parts at the top of the craft object.
+            diagnostics = score.craft_diagnostics(structure, audio, loop)
             profile = {"status": "RENDERED_UNSCORED", "eligible": True, "score_version": "craft-v7",
                        "structure": structure, "audio": audio, "loop": loop,
-                       "mix": {"audible_channels": [0, 1]}, "craft": score.craft_score(structure, audio, loop),
+                       "mix": {"audible_channels": [0, 1]},
+                       "craft": {"craft_score": diagnostics["total"], "parts": diagnostics["parts"]},
                        "inputs": {"scorer": {name: rescore.digest(rescore.ROOT / "benchmark" / name)
                                              for name in rescore.UNCHANGED_MEASUREMENTS},
                                   "artifacts": {"submission/tune.xm": rescore.digest(xm_path),
@@ -367,11 +402,28 @@ class ScoreTests(unittest.TestCase):
             path.write_text(json.dumps(profile))
             original = {p: p.read_bytes() for p in (path, xm_path, wav_path)}
             compared = rescore.rescore_attempt(root)
-            self.assertEqual(compared["factors"], profile["craft"]["factors"])
-            self.assertEqual(compared["new_parts"]["tonal_organization"], 0)
-            self.assertEqual(compared["new_parts"]["dynamics"], profile["craft"]["parts"]["dynamics"])
+            # fake_listener.py rates content enjoyment 6.54; diagnostics are recomputed beside it.
+            self.assertEqual(compared["new_score"], 65.4)
+            self.assertEqual(compared["listener"]["content_enjoyment"], 6.54)
+            new_diagnostics = compared["craft"]["craft_diagnostics"]
+            self.assertEqual(new_diagnostics["parts"]["tonal_organization"], 0)
+            self.assertEqual(new_diagnostics["parts"]["dynamics"], diagnostics["parts"]["dynamics"])
             for p, contents in original.items():
                 self.assertEqual(p.read_bytes(), contents)
+            for version, craft in (
+                ("craft-v9", profile["craft"]),
+                (score.SCORE_VERSION, compared["craft"]),
+            ):
+                with self.subTest(source_version=version):
+                    profile.update(score_version=version, craft=craft)
+                    path.write_text(json.dumps(profile))
+                    source = path.read_bytes()
+                    repeated = rescore.rescore_attempt(root)
+                    self.assertEqual(repeated["old_score"], craft["craft_score"])
+                    self.assertEqual(repeated["old_parts"],
+                                     craft.get("craft_diagnostics", craft)["parts"])
+                    self.assertEqual(repeated["new_score"], 65.4)
+                    self.assertEqual(path.read_bytes(), source)
             wav_path.write_bytes(original[wav_path] + b"changed")
             with self.assertRaisesRegex(ValueError, "canonical WAV"):
                 rescore.rescore_attempt(root)
@@ -435,6 +487,37 @@ class NativeProfileTests(unittest.TestCase):
                 self.assertEqual(path.read_bytes(), original)
             preview.write_bytes(b"changed preview")
             self.assertFalse(score.profile_is_current(root, first))
+
+
+    def test_profile_scores_listener_enjoyment_and_requires_a_listener(self):
+        from benchmark import score_playback
+        from benchmark.tests.test_score_playback import fixture_xm
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "submission").mkdir()
+            (root / "canonical").mkdir()
+            source = root / "submission/tune.xm"
+            source.write_bytes(fixture_xm([[(note, 1, 0x30, 0, 0) for note in (49, 53, 56, 60)]]))
+            capture = score_playback.capture(source, root / "native-canonical", .08)
+            Path(capture["wav_path"]).replace(root / "canonical/canonical.wav")
+            (root / "status.json").write_text(json.dumps({
+                "model": {"model": "native-fixture"}, "status": "RENDERED_UNSCORED", "model_failure": False}))
+            profile = score.profile_attempt(root)
+            self.assertTrue(profile["eligible"], profile.get("evaluation_error"))
+            # fake_listener.py rates content enjoyment 6.54.
+            self.assertEqual(profile["craft"]["craft_score"], 65.4)
+            self.assertEqual(profile["craft"]["listener"]["content_enjoyment"], 6.54)
+            self.assertEqual(profile["inputs"]["listener"]["model"], "fake")
+            self.assertIn("total", profile["craft"]["craft_diagnostics"])
+            # Without a listener environment the attempt is unscored, never zero.
+            saved = os.environ.pop(score.LISTENER_ENV)
+            try:
+                missing = score.profile_attempt(root, force=True)
+            finally:
+                os.environ[score.LISTENER_ENV] = saved
+            self.assertFalse(missing["eligible"])
+            self.assertIsNone(missing["craft"]["craft_score"])
+            self.assertEqual(missing["evaluation_error"]["category"], "EVAL")
 
 
 if __name__ == "__main__":

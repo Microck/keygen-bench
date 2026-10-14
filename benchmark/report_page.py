@@ -38,7 +38,8 @@ audio{width:100%;display:block;margin:0 0 8px}
 @media (max-width:900px){.det{grid-template-columns:1fr}}
 </style></head><body>
 <h1>Keygen bench, adaptive campaign attempts</h1>
-<p class="kv">Cached artifact diagnostics only. Craft is an auxiliary tonal-development heuristic, not a musical-quality ranking.
+<p class="kv">Cached evaluation evidence. The AI listener score is 10 x Meta Audiobox Aesthetics' content-enjoyment rating, rounded to 0.1.
+Effectively silent renders score 0. Long used samples with sparse sequencing are capped at 40.
 Each model gets up to three sequential attempts, stopping after its first eligible success. All attempted outcomes and unused slots remain visible.
 Skipped slots have null scores and usage, not failure scores. This adaptive experiment has no independent-trial median, range or ranking claim.
 Exact routes, effective settings, evaluator identities and cohort fingerprints remain separate. Exhibitions are not comparative native runs.
@@ -52,7 +53,7 @@ Artifact links exist only when a local file is present.</p>
 const DATA=__DATA__;
 const COHORTS=__COHORTS__;
 const NUM=new Set(["craft","dur","lufs","chans","patterns","instr","steps","min"]);
-const COLS=[["model","model"],["attempt_id","attempt / cohort"],["tier","tier / output cap"],["status","status"],["selection_state","selection / attempted"],["craft","craft diagnostic"],["dur","len s"],["lufs","LUFS"],["chans","ch"],["patterns","pat"],["instr","ins"],["steps","steps"],["min","min"],[null,"flags"]];
+const COLS=[["model","model"],["attempt_id","attempt / cohort"],["tier","tier / output cap"],["status","status"],["selection_state","selection / attempted"],["craft","score"],["dur","len s"],["lufs","LUFS"],["chans","ch"],["patterns","pat"],["instr","ins"],["steps","steps"],["min","min"],[null,"flags"]];
 let sortK="attempt_id",sortAsc=true,open=new Set();
 const esc=s=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const cls=d=>d.selected?"ok":d.status==="SKIPPED_AFTER_SUCCESS"||["MISSING","RESERVED","RUNNING"].includes(d.status)?"blk":d.eligible?"ok":"fail";
@@ -75,6 +76,7 @@ function detail(d){
   for(const [k,v] of Object.entries(f)) links.push(`<a href="${esc(v)}" ${["xm","original WAV","video","loop excerpt (lossless)"].includes(k)?"download":'target="_blank" rel="noopener"'}>${esc(k)}</a>`);
   const scripts=d.scripts.map(p=>`<a href="${esc(p)}" target="_blank" rel="noopener">${esc(decodeURIComponent(p.split("/").pop()))}</a>`).join("");
   const parts=Object.entries(d.parts).map(([k,v])=>`<span>${esc(k)} ${esc(fmt(v))}</span>`).join("");
+  const listener=Object.entries(d.listener).map(([k,v])=>`<span>${esc(k.replaceAll("_"," "))} ${esc(fmt(v,2))}/10</span>`).join("");
   const factors=Object.entries(d.factors).map(([k,v])=>`<span>${esc(k)} ${esc(fmt(v,6))}</span>`).join("");
   const caps=d.caps.map(c=>`<span class="cap">ceiling ${esc(c.ceiling??"?")}: ${esc(c.reason)}</span>`).join("; ");
   const mix=d.mix,lead=(mix.lead_channels??[]).filter(Number.isInteger).map(c=>c+1).join(", ");
@@ -85,10 +87,10 @@ function detail(d){
   return `<div class="det"><div>${media}${f.video?`<p class="kv"><b>Original video</b></p><video controls preload="none" src="${esc(f.video)}"></video>`:""}</div><div>
   <p class="kv"><b>files</b> ${links.join("")}</p>
   ${scripts?`<p class="kv"><b>submission</b> ${scripts}</p>`:""}
-  <p class="kv"><b>score</b> ${esc(d.score_version)}, ${esc(d.craft??"unavailable")}${d.craft!=null?"/100":""}${d.uncapped!=null?`, uncapped ${esc(d.uncapped)}`:""}</p>
-  <p class="kv"><b>content points</b> ${esc(fmt(d.content_score,2))}/100; <span class="parts">${parts||"none"}</span></p>
-  
-  <p class="kv"><b>multiplicative factors</b> <span class="parts">${factors||"none"}</span></p>
+  <p class="kv"><b>score</b> ${esc(d.score_version)}, ${esc(d.craft??"unavailable")}${d.craft!=null?"/100":""}${d.uncapped!=null?`, uncapped ${esc(d.uncapped)}`:""}; 10 x AI listener content enjoyment</p>
+  <p class="kv"><b>AI listener</b> <span class="parts">${listener||"none"}</span></p>
+  <p class="kv"><b>craft diagnostics</b> total ${esc(fmt(d.craft_total,1))}/100, not scored; <span class="parts">${parts||"none"}</span></p>
+  <p class="kv"><b>diagnostic factors</b> <span class="parts">${factors||"none"}</span></p>
   <p class="kv"><b>duration diagnostic evidence</b> ${esc(fmt(loop.first_pass_audible_seconds,3))} audible seconds in the ${esc(fmt(loop.analysis_duration_seconds,3))} s first pass. Duration is not a task-compliance or musical-quality judgment.</p>
   <p class="kv"><b>caps</b> ${caps||"none"}</p>
   ${d.score_note?`<p class="kv"><b>score note</b> ${esc(d.score_note)}</p>`:""}

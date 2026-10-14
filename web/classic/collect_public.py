@@ -129,15 +129,12 @@ def public_run(row: dict, group: dict, directory: Path, output: Path, campaign: 
                         {"pilot": " (musical pilot)", "continuation": " (native continuation)"}.get(scope, "")),
         "maker": maker, "exhibition": scope == "pilot", "tier": row["tier"], "cohort": row["cohort"],
         "status": row["status"], "error": "", "score": row["craft"],
-        "parts": {key: craft["parts"][key] for key in ("tonal_organization", "development", "dynamics")},
-        "weights": {key: craft["weights"][key] for key in ("tonal_organization", "development", "dynamics")},
-        "factors": {key: craft["factors"][key] for key in ("signal_integrity", "loop_continuity")},
-        "uncapped": craft["uncapped"], "content": craft["content_score"], "caps": craft.get("caps") or [],
+        "listener": {key: craft["listener"][key] for key in
+                     ("content_enjoyment", "production_quality", "content_usefulness", "production_complexity")},
+        "uncapped": craft["uncapped"], "caps": craft.get("caps") or [],
         "flags": [{"id": flag, "rule": FLAG_RULES.get(flag, "")} for flag in profile.get("flags") or []],
         "loop": {"quality": loop.get("quality_score"), "worst": worst_transition(loop),
                  "first_pass_audible_seconds": loop.get("first_pass_audible_seconds")},
-        "tonal": {key: (audio.get("spectral") or {}).get(key) for key in ("tonal_evidence_fraction", "diatonic_concentration", "effective_pitch_classes", "sustained_noise_fraction")},
-        "development": {key: structure.get(key) for key in ("arrangement_score", "sequence_coverage", "development_method", "development_scales")},
         "audio": {"duration": audio.get("duration_seconds"), "lufs": audio.get("lufs_integrated"), "peak": (status.get("audio") or {}).get("peak")},
         "module": {key: (status.get("module") or {}).get(key) for key in ("name", "channels", "bpm", "speed", "song_length", "loop_start")},
         "usage": {**{key: totals.get(key) for key in ("requests", "prompt_tokens", "cached_tokens", "completion_tokens", "reasoning_tokens", "commands")},
@@ -335,7 +332,7 @@ def main() -> None:
                 runs.append(public_run(row, group, source / row["run_dir"], output, report, args.scope, prices))
                 print(f"Verified {len(runs)}: {runs[-1]['name']}", flush=True)
         extra = {}
-    write_json(output / "snapshot.json", {"schema": "keygen-public-snapshot-1",
+    write_json(output / "snapshot.json", {"schema": "keygen-public-snapshot-2",
                "generated": datetime.now(timezone.utc).isoformat(), "scope": args.scope,
                "metadata_captured": metadata_captured,
                "campaign_id": report["campaign_id"], "campaign_sha256": report["campaign_sha256"],
