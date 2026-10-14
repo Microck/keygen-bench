@@ -26,7 +26,7 @@ Listener provenance also records the operating system, CPU architecture and Pyth
 
 [Reference evidence](../data/listener-v1-reference.json): all 256 pinned human keygen XMs. `render-references` rendered each native first pass on Linux aarch64; `references` verified those hashes and rated them. Caps are not applied to references.
 
-Both evidence files were regenerated after preserving full listener-rating precision and fixing rescores of listener-v1 source profiles. All 241 attempt scores, model ranks and reference scores are unchanged. The stored enjoyment rating now reproduces each uncapped attempt score exactly with `round(10 * rating, 1)`.
+Both evidence files were regenerated after preserving full listener-rating precision, fixing rescores of listener-v1 source profiles and adding listener host provenance. The latest run records Darwin arm64 with Python 3.14.6. All 241 attempt scores, model ranks and reference scores are unchanged. The stored enjoyment rating reproduces each uncapped attempt score exactly with `round(10 * rating, 1)`.
 
 ## Results
 
