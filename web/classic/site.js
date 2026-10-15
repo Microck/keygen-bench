@@ -238,18 +238,20 @@ export async function mount(root, ctx) {
   const meter = (v, max, color) => h("div", { class: "meter sunken" }, h("i", { style: { width: `calc(${Math.max(0, Math.min(1, v / max)) * 100}% - 1px)`, background: color ?? "var(--pattext)" } }));
 
   function scoreCard(r, { compact = false } = {}) {
-    // Enjoyment sets the score; the other three ratings are unscored context.
+    // Enjoyment sets the score. The other three ratings sit below a divider, dimmed, as context only.
     const L = r.listener;
-    const row = ([kk, v, color]) => [h("span", { class: "muted" }, kk), meter(v, 10, color), h("span", { style: { textAlign: "right" } }, `${v.toFixed(2)}/10`)];
+    const row = ([kk, v, color, title, dim]) => [h("span", { class: "muted", title }, kk), h("div", { title, style: dim ? { opacity: "0.55" } : null }, meter(v, 10, color)),
+      h("span", { title, style: { textAlign: "right", color: dim ? "var(--pattext)" : null } }, `${v.toFixed(2)}/10`)];
+    const note = "Not scored: shown for context, does not change the score.";
     const unscored = [["Quality", L.production_quality], ["Useful", L.content_usefulness], ["Complex", L.production_complexity]];
     return [
       h("div", { class: "row", style: { gap: "4px", padding: "1px 1px 0" } },
         badge(r.maker), h("span", { class: "grow" }), h("span", { class: "big", title: attemptScoreTitle(r), "aria-label": attemptScoreTitle(r) }, r.score.toFixed(1))),
       h("div", { class: "shadow-text card-name", style: { padding: "0 1px" } }, nameOf(r)),
       h("div", { class: "sunken", style: { padding: "3px 4px", display: "grid", gridTemplateColumns: "auto 1fr auto", gap: "2px 6px", alignItems: "center" } },
-        ...row(["Enjoy", L.content_enjoyment, "#55FF55"]),
-        h("span", { class: "muted", style: { gridColumn: "1 / -1" }, title: "The AI listener's other ratings. They do not change the score." }, "Unscored"),
-        ...unscored.flatMap(row)),
+        ...row(["Enjoy", L.content_enjoyment, "#55FF55", "The score: content enjoyment x 10."]),
+        h("div", { style: { gridColumn: "1 / -1", borderTop: "1px solid var(--pattext)", opacity: "0.4", margin: "1px 0" } }),
+        ...unscored.flatMap(([kk, v]) => row([kk, v, undefined, note, true]))),
       compact ? null : h("dl", { class: "kv sunken" },
         h("dt", { title: bestRankHelp }, "Best rank"), h("dd", { title: bestRankHelp }, rankText(r)),
         h("dt", {}, "Est. cost"), h("dd", { title: r.cost_range_usd?.reason }, costText(r)),
