@@ -1,0 +1,155 @@
+name: Deploy public site
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'runs/**'
+      - 'data/**'
+      - 'web/classic/**'
+      - 'benchmark/score*.py'
+      - 'benchmark/requirements-listener.txt'
+      - 'scripts/deploy_site.py'
+      - 'scripts/site-media-map.json'
+      - '.github/workflows/deploy-site.yml'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Build and upload the static export without pushing Pages repositories
+        type: boolean
+        default: true
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: keygen-public-site
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      # A dispatch on any branch other than main is always a dry run.
+      DRY_RUN: ${{ (github.event_name == 'workflow_dispatch' && inputs.dry_run) || github.ref != 'refs/heads/main' }}
+      HF_HOME: ${{ github.workspace }}/.cache/huggingface
+      KEYGEN_LISTENER_PYTHON: ${{ github.workspace }}/.listener/bin/python
+      OMP_NUM_THREADS: '2'
+      MKL_NUM_THREADS: '2'
+    steps:
+      - name: Clone source and ranked attempt inputs only
+        env:
+          SOURCE_REPOSITORY: ${{ github.repository }}
+          SOURCE_REF: ${{ github.ref_name }}
+          SOURCE_SHA: ${{ github.sha }}
+        run: |
+          git clone --filter=blob:none --depth=1 --no-checkout --branch "$SOURCE_REF" \
+            "https://github.com/$SOURCE_REPOSITORY.git" repository
+          cd repository
+          git sparse-checkout set --no-cone --stdin <<'PATTERNS'
+          /*
+          !/*/
+          /benchmark/**
+          /data/**
+          /web/classic/**
+          /scripts/deploy_site.py
+          /scripts/site-media-map.json
+          /runs/*/attempt-*/ATTEMPT.json
+          /runs/*/attempt-*/status.json
+          /runs/*/attempt-*/spec.json
+          /runs/*/attempt-*/campaign.json
+          /runs/*/attempt-*/profile.json
+          /runs/*/attempt-*/transport.jsonl
+          /runs/*/attempt-*/trajectory.json
+          /runs/*/attempt-*/submission/tune.xm
+          /runs/*/attempt-*/canonical/canonical.wav.flac
+          /runs/*/attempt-*/evaluations/*/profile.json
+          /runs/*/attempt-*/evaluations/*/playback/trace.jsonl.gz
+          /runs/*/attempt-*/evaluations/*/playback/loop-preview.flac
+          PATTERNS
+          git fetch --depth=1 --filter=blob:none origin "$SOURCE_SHA"
+          git checkout --detach "$SOURCE_SHA"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Restore pinned listener model cache
+        uses: actions/cache@v4
+        with:
+          path: .cache/huggingface
+          key: listener-hf-${{ runner.os }}-${{ hashFiles('repository/benchmark/score_listener.py', 'repository/benchmark/requirements-listener.txt') }}
+
+      - name: Install audio and OG card tooling
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ffmpeg flac
+          python -m pip install 'Pillow>=10' 'fonttools[woff]>=4.47' 'numpy>=1.26' 'scipy>=1.11'
+
+      - name: Install isolated listener environment
+        run: |
+          python -m venv .listener
+          .listener/bin/python -m pip install --extra-index-url https://download.pytorch.org/whl/cpu \
+            -r repository/benchmark/requirements-listener.txt
+
+      - name: Build publication from committed runs and scoring evidence
+        working-directory: repository
+        run: |
+          python web/classic/build_from_runs.py --runs runs --out "$GITHUB_WORKSPACE/publication" \
+            --listener-scores data/listener-v1-runs.json
+
+      - name: Export dry-run site and media plan
+        if: env.DRY_RUN == 'true'
+        working-directory: repository
+        run: |
+          python scripts/deploy_site.py --publication "$GITHUB_WORKSPACE/publication" \
+            --out "$GITHUB_WORKSPACE/deployment" --dry-run
+
+      - name: Export and deploy changed Pages repositories
+        if: env.DRY_RUN != 'true'
+        working-directory: repository
+        env:
+          SITE_KEY: ${{ secrets.KEYGEN_SITE_DEPLOY_KEY }}
+          MEDIA_KEY: ${{ secrets.KEYGEN_MEDIA_DEPLOY_KEY }}
+          MEDIA2_KEY: ${{ secrets.KEYGEN_MEDIA2_DEPLOY_KEY }}
+          KEYGEN_SITE_DEPLOY_KEY_FILE: ${{ runner.temp }}/keygen-ssh/site
+          KEYGEN_MEDIA_DEPLOY_KEY_FILE: ${{ runner.temp }}/keygen-ssh/media
+          KEYGEN_MEDIA2_DEPLOY_KEY_FILE: ${{ runner.temp }}/keygen-ssh/media2
+          KEYGEN_KNOWN_HOSTS_FILE: ${{ runner.temp }}/keygen-ssh/known_hosts
+        run: |
+          python - <<'PY'
+          import json, os, pathlib, urllib.request
+          directory = pathlib.Path(os.environ['KEYGEN_SITE_DEPLOY_KEY_FILE']).parent
+          directory.mkdir(mode=0o700)
+          for name in ('SITE', 'MEDIA', 'MEDIA2'):
+              value = os.environ[name + '_KEY']
+              if not value.strip():
+                  raise SystemExit('Missing KEYGEN_' + name + '_DEPLOY_KEY secret')
+              path = pathlib.Path(os.environ['KEYGEN_' + name + '_DEPLOY_KEY_FILE'])
+              path.touch(mode=0o600)
+              path.write_text(value.rstrip() + '\n')
+          with urllib.request.urlopen('https://api.github.com/meta', timeout=30) as response:
+              keys = json.load(response)['ssh_keys']
+          pathlib.Path(os.environ['KEYGEN_KNOWN_HOSTS_FILE']).write_text(
+              ''.join('github.com ' + key + '\n' for key in keys))
+          PY
+          python scripts/deploy_site.py --publication "$GITHUB_WORKSPACE/publication" \
+            --out "$GITHUB_WORKSPACE/deployment"
+
+      - name: Upload static export and deployment report
+        uses: actions/upload-artifact@v4
+        with:
+          name: keygen-site-${{ github.sha }}
+          path: |
+            deployment/static/
+            deployment/media-map.json
+            deployment/report.json
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Remove deploy keys
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/keygen-ssh"

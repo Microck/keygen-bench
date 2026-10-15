@@ -19,6 +19,7 @@
 - Native Mistral and Cohere routes; per-account request pacing for Cohere trial keys, OpenRouter `:free` endpoints and Cerebras; Cerebras history-key removal.
 - Independent repetitions follow explicit `run.py retry` chains: a rerun of an unstarted slot or non-model failure becomes the ordinal's sample, and superseded attempts stay listed.
 - Static export for GitHub Pages (`--host github-pages`) with media served from public GitHub Pages repositories.
+- Automatic GitHub Actions site builds from ranked `runs/` inputs, dry-run static artifacts, and changed-only deployment to the site and two size-bounded media repositories with stable media URLs.
 - Crypto donation page (`/crypto`) with per-network addresses, QR codes and copy buttons, linked from Support.
 - Cracktro-style preloader replacing the "Loading..." text: starfield and a chrome keygen-style logo, with load progress shown as a decoding serial and a dithered raster reveal of the mounted page.
 - Repository-ranked site builder with verified listener evidence, byte-exact FLAC decoding, stable published slugs, reviewed site metadata and an offline parity checker.
