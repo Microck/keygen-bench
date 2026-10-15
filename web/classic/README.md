@@ -23,6 +23,69 @@ All commands below run from the repository root. Use your own local campaign and
 
 `build.py`, `build_spend.py`, and `serve.py` use the Python standard library and repository modules. The browser fonts and bitmap assets are already included. `build_og.py` requires Pillow and FontTools with WOFF2 support. It decodes the bundled WOFF2 fonts before rendering them with Pillow; it does not rely on installed system fonts.
 
+## Build from repository runs
+
+The deployment builder reads only `runs/<model>/attempt-1/` through
+`attempt-3/`, never `other/`. It verifies frozen campaign identities, retained
+profiles, submitted XM checksums, playback traces and byte-exact decoded
+canonical WAVs. Standalone contribution attempts use their sealed `spec.json`
+configuration when no campaign envelope exists.
+
+```sh
+python3 web/classic/build_from_runs.py --runs runs --out /absolute/publication
+```
+
+Install the website requirements plus NumPy, `ffmpeg` with `libmp3lame`, and
+`flac`. The builder copies the canonical frontend, produces MP3/XM/full-render
+FLAC media, writes per-attempt evaluation summaries and builds OG cards.
+Only one canonical WAV is decoded at a time. FLAC loop sources contain the
+full canonical audio, not the short evaluator loop preview.
+
+`data/site/` contains the reviewed release dates, price catalog, historical
+spend ledger, reviewed publication exclusions and XM/ordinal-keyed
+published-link registry. Every playable published model needs a release date.
+The registry preserves established public slugs; new attempts
+receive model/ordinal/XM-hash slugs. Raw provider IDs stay in the retained runs,
+while display names drop route namespaces, free-endpoint suffixes and the
+Muse contributor suffix.
+`publication-policy.json` keeps the existing Space Bunny exclusion explicit
+without deleting or modifying its retained attempts.
+
+Committed `data/listener-v1-runs.json` binds listener ratings and caps to both
+XM and canonical WAV hashes. Missing eligible evidence fails with the complete
+attempt list unless `KEYGEN_LISTENER_PYTHON` points to the isolated listener
+environment. In that case the builder invokes the benchmark's listener and
+artifact-cap functions without modifying retained runs or calling providers.
+
+Use `--model MODEL` repeatedly for a local subset. `--no-media` still decodes
+and verifies canonical inputs, but omits media derivatives. It is intended for
+pull-request metadata/integrity validation, not deployment.
+
+```sh
+python3 web/classic/build_from_runs.py --runs runs --out /absolute/check --no-media
+python3 web/classic/check_runs_parity.py \
+  --data /absolute/check/dist/data.json \
+  --live /absolute/reviewed-live-data.json \
+  --listener-preview /absolute/reviewed-listener-data.json \
+  --report /absolute/parity-report.json
+python3 -m unittest discover -s tests -p test_build_from_runs.py
+```
+
+The parity check rejects changed XM membership, changed slugs, changed model
+membership or different listener best scores. It lists every other compared
+field difference. Campaign and repetition summaries now describe only the
+ranked slots. Superseded infrastructure attempts, outside-condition attempts,
+and campaign-wide roster/count history cannot be reconstructed without
+reading `other/`, so the builder does not claim to reproduce those histories.
+The spend ledger retains reviewed historical totals independently of this
+ranked-only export.
+
+Pricing uses the canonical builder's cache-write and context-tier rules. Where
+the recorded aggregate usage cannot establish an exact amount, the publication
+shows a bounded estimate or an unknown cost instead of the legacy prototype's
+guessed exact amount. Partly recorded usage with a known estimate is explicitly
+marked as a lower bound.
+
 ## Export, build, and serve
 
 Choose paths outside the campaign directory. The publication path must be new or empty.

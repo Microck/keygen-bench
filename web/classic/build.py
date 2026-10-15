@@ -53,7 +53,7 @@ PUBLIC_PRICE_HOSTS = (  # maker-published pricing pages only; third-party/proxy 
     "dev.meta.ai", "docs.mistral.ai", "docs.devin.ai", "tencentcloud.com",
     "longcat.chat", "cohere.com", "api.inceptionlabs.ai", "platform.stepfun.ai", "docs.arcee.ai",
     # API prices where the maker publishes none: OpenRouter's API and OpenCode Go (free models).
-    "openrouter.ai", "opencode.ai",
+    "openrouter.ai", "opencode.ai", "tokenfactory.nebius.com",
 )
 PUBLIC_FREE_PRICES = {"space-bunny-free": "https://opencode.ai/docs/go/"}
 
@@ -364,6 +364,23 @@ def repetition_groups(snapshots: list[dict], runs: list[dict], roster: set, addi
     return groups, duplicates
 
 
+def copy_frontend(publish_root: Path) -> None:
+    """Copy the canonical frontend's public asset allowlist."""
+    assets = ["index.html", "crypto.html", "app.js", "site.js"]
+    assets += [str(path.relative_to(HERE)) for path in (HERE / "core").glob("*.js")]
+    assets += ["core/ft2.css", "core/ft2gfx/tables.json", "core/ft2gfx/LICENSE-gfx.txt"]
+    assets += [str(path.relative_to(HERE)) for path in (HERE / "core/fonts").glob("*.woff2")]
+    assets += [str(path.relative_to(HERE)) for path in (HERE / "core/ft2gfx").glob("*.png")]
+    assets += [str(path.relative_to(HERE)) for path in (HERE / "core/icons").glob("*.png")]
+    assets += [str(path.relative_to(HERE)) for path in (HERE / "core/crypto").glob("*.svg")]
+    for relative in assets:
+        source, target = HERE / relative, publish_root / relative
+        if source.is_symlink():
+            raise ValueError("Public assets must not be symlinks")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, target)
+
+
 def build_snapshots(sources: list[Path], publish_root: Path, excluded: list[tuple[str, str, str]] = ()) -> None:
     """Assemble only explicitly allowlisted assets from sanitized public snapshots.
 
@@ -527,19 +544,7 @@ def build_snapshots(sources: list[Path], publish_root: Path, excluded: list[tupl
             "Only its attempt 1 can be ranked, like every other model's; its later attempts are not ranked." for group in groups if group.get("roster_addition")]
         out["repetition_groups"] = sorted(groups, key=lambda group: (cohort_order(next(c for c in cohorts if c["key"] == group["cohort_key"])), group["name"].lower()))
     (dist / "data.json").write_text(json.dumps(out, separators=(",", ":"), allow_nan=False) + "\n")
-    assets = ["index.html", "crypto.html", "app.js", "site.js"]
-    assets += [str(path.relative_to(HERE)) for path in (HERE / "core").glob("*.js")]
-    assets += ["core/ft2.css", "core/ft2gfx/tables.json", "core/ft2gfx/LICENSE-gfx.txt"]
-    assets += [str(path.relative_to(HERE)) for path in (HERE / "core/fonts").glob("*.woff2")]
-    assets += [str(path.relative_to(HERE)) for path in (HERE / "core/ft2gfx").glob("*.png")]
-    assets += [str(path.relative_to(HERE)) for path in (HERE / "core/icons").glob("*.png")]
-    assets += [str(path.relative_to(HERE)) for path in (HERE / "core/crypto").glob("*.svg")]
-    for relative in assets:
-        source, target = HERE / relative, publish_root / relative
-        if source.is_symlink():
-            raise ValueError("Public assets must not be symlinks")
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(source, target)
+    copy_frontend(publish_root)
     print(f"{main_count} original main first successes, {continuation_count} native continuations, {pilot_count} labeled pilots"
           f"{f', {addition_count} ranked rerun-queue roster additions of {len(additions)}' if additions else ''} -> {publish_root}")
     if groups:
