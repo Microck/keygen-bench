@@ -343,3 +343,16 @@ python3 web/classic/build_fonts.py
 ```
 
 The command reads `core/ft2gfx/` and writes `core/fonts/ft2-font{1,2,3}.woff2`. Rebuild the publication and OG images afterward. Preserve `core/ft2gfx/LICENSE-gfx.txt` and the attribution in the repository's `NOTICE.md`; the FT2 graphics and derived fonts have their own license.
+
+## Deterministic browser regression suite
+
+From the repository root, run `npm ci`, `npx e2e-web install chromium`, and
+`npm run test:e2e`. The pinned tester-army/e2e suite makes no model calls.
+Its Python fixture assembles only canonical frontend files and synthetic
+ranking data, an empty-pattern XM, and a generated tone in a temporary directory.
+It never serves the repository, retained runs, private configuration or credentials.
+
+Coverage includes desktop/mobile navigation, Best/Average URL state, synthetic
+local audio play/pause and literal bootstrap-error rendering. Existing offline
+player/ranking/export tests remain separate. These tests do not validate paid
+providers, submitted music quality, native FT2 rendering or production publication.

@@ -4,6 +4,8 @@
 
 ### Added
 
+- Add deterministic browser regression tests using synthetic local data and audio, without model calls or retained-run publication.
+
 - MIT License for original code and documentation; third-party assets keep their own licenses.
 - Community-run guide, three-attempt runner, bundle validator, submission templates and trusted-base validation workflow.
 - FT2-style results site with per-model routes, attempt selection, loop playback, scoring explanations and generated Open Graph cards.
@@ -27,6 +29,8 @@
 
 ### Changed
 
+- Fetch independent optional website metadata in parallel while preserving missing-file defaults and failure reporting.
+
 - Score tunes with an AI listener (listener-v1): 10 x the content-enjoyment rating of Meta Audiobox Aesthetics on the canonical render, with the silent and baked-sample caps. The listener runs in its own pinned environment (`benchmark/requirements-listener.txt`, `KEYGEN_LISTENER_PYTHON`) on the CPU with verified weights; contributor setup installs it and doctor checks it. Pitched clarity, development, dynamics, signal integrity and loop continuity remain as craft diagnostics; a voice with one onset in a passage no longer counts as development there. The site shows the four listener ratings (enjoyment scored, the other three marked unscored), explains how the listener model works on the Scoring page, and no longer shows or exports the old craft measurements.
 - Add a read-only, hash-verified rescorer for ranked attempts and the pinned reference corpus, with separate evaluation evidence and native reference return/stop boundaries.
 - Derive the contributor contract's scorer identity from the evaluator and reject mismatched campaign evaluations at publication export.
@@ -41,6 +45,8 @@
 - Use MiniMax's published API rates for the M3.1 Flash list-price estimate even when the recorded OpenRouter `:free` route reports zero cost.
 
 ### Fixed
+
+- Render bootstrap errors as literal text rather than HTML.
 
 - Move verified site inputs across filesystems when the temporary directory and publication output use different mounts.
 - Record listener operating system, CPU architecture and Python version; distinguish its 120-second rating window from whole-render artifact caps, and reject pre-listener public snapshots with the version-2 schema.
