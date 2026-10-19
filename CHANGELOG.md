@@ -38,6 +38,7 @@
 - Show only model names in tracker dropdowns and score-card headings, keep the original popup width, order models by reviewed release dates, and count distinct models in company menus.
 - Explain Rankings consistency as score spread, sort unknown spreads last in either direction, and remove the sidebar pricing-source link.
 - Total ordinal attempt costs in model rankings and show single upper estimates in Support, rankings and attempt sidebars, keeping ranges and missing-cost coverage in tooltips instead of visible `+` suffixes or warning paragraphs.
+- Use MiniMax's published API rates for the M3.1 Flash list-price estimate even when the recorded OpenRouter `:free` route reports zero cost.
 
 ### Fixed
 

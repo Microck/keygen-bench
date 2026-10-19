@@ -226,7 +226,7 @@ The pricing file has a top-level `models` array. Each entry contains:
 | `tiers` | Optional rate rows with an inclusive `min_prompt_tokens` threshold |
 | `source_url` | Maker's public pricing page |
 
-Input and output rates must both be known or both be `null`. The existing maker-domain allowlist in `build.py` excludes proxy/aggregator prices from public estimates. Add a maker's pricing domain there when supporting a new maker. Keep rate dates and source notes in your input file if needed; these notes are not published. Review prices before every publication.
+Input and output rates must both be known or both be `null`. The `PUBLIC_PRICE_HOSTS` allowlist in `build.py` accepts reviewed maker pricing pages and explicitly supported provider catalogs, not arbitrary proxy prices. Add a maker's domain there when supporting a new pricing source. Keep rate dates and source notes in your input file if needed; these notes are not published. Review prices before every publication.
 
 For tiered pricing, supply per-response usage so each request selects its own
 context tier before costs are summed. A large cumulative input-token total does
@@ -235,9 +235,11 @@ an explicit token breakdown for an exact cost, including zero counts when no
 writes occurred. Where recorded usage and documented prices support finite
 bounds but not an exact amount, `cost_range_usd` contains `min`, `max`, and a
 readable `reason`. The website displays that range, not a guessed exact price.
-The narrow documented `minimax/minimax-m3.1-flash:free` exception permits its
-public zero-price route ([OpenRouter listing](https://openrouter.ai/minimax/minimax-m3.1-flash%3Afree)).
-It does not permit arbitrary proxy catalogs or guessed free pricing.
+Use the model maker's published API rates for the estimate even if a run used a
+free provider route. For MiniMax M3.1 Flash, OpenRouter's `:free` responses
+reported zero cost, but the displayed amount is the equivalent value at
+[MiniMax's published API rates](https://www.minimax.io/blog/minimax-m31f), not
+an OpenRouter bill. Do not use arbitrary proxy catalogs or guessed prices.
 
 Without a separate ledger, the support page totals only the published attempts and labels that scope. Missing usage or prices remain unknown; a partial total has a `+` and reports incomplete coverage. The site never claims this is a provider bill.
 
