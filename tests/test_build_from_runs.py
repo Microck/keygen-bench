@@ -132,6 +132,26 @@ class RunsBuilderTests(unittest.TestCase):
         self.assertEqual(builder.display_name("stepfun/step-3.7-flash:free"), "step-3.7-flash")
         self.assertEqual(builder.display_name("longcat-2.5-preview-free"), "longcat-2.5-preview")
 
+    def test_minimax_free_route_uses_maker_api_list_price(self):
+        route_id = "minimax/minimax-m3.1-flash:free"
+        source_url = "https://www.minimax.io/blog/minimax-m31f"
+        model_key = builder.display_name(builder.price_id(route_id))
+        price = {"id": model_key, "maker": "MiniMax", "source_url": source_url,
+                 "input_usd_per_m": 0.15, "cached_input_usd_per_m": 0.015,
+                 "output_usd_per_m": 0.6}
+        published = builder.public_price(price)
+
+        self.assertEqual(model_key, "minimax-m3.1-flash")
+        self.assertEqual(published, {
+            "input_usd_per_m": 0.15,
+            "cached_input_usd_per_m": 0.015,
+            "output_usd_per_m": 0.6,
+            "source_url": source_url,
+        })
+        self.assertAlmostEqual(builder.estimate_cost({
+            "prompt_tokens": 957, "cached_tokens": 186, "completion_tokens": 100,
+        }, published, round_digits=None), 0.00017844)
+
     def test_new_attempt_uses_existing_model_metadata(self):
         self.identities.clear()
         self.write_site()

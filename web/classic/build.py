@@ -47,15 +47,14 @@ FLAG_RULES = {
 
 # Access routes (proxies, subscriptions, relays) are private: nothing below may reach data.json.
 PROVIDER_PREFIX = r"^(devin/|go-|vercel-[a-z]+/)"
-PUBLIC_PRICE_HOSTS = (  # maker-published pricing pages only; third-party/proxy tables are not shown
+PUBLIC_PRICE_HOSTS = (  # reviewed maker pricing and explicitly supported provider catalogs
     "developers.openai.com", "openai.com", "platform.claude.com", "ai.google.dev", "docs.x.ai", "api-docs.deepseek.com",
-    "docs.z.ai", "platform.kimi.ai", "alibabacloud.com", "mimo.mi.com", "platform.minimax.io",
+    "docs.z.ai", "platform.kimi.ai", "alibabacloud.com", "mimo.mi.com", "platform.minimax.io", "minimax.io",
     "dev.meta.ai", "docs.mistral.ai", "docs.devin.ai", "tencentcloud.com",
     "longcat.chat", "cohere.com", "api.inceptionlabs.ai", "platform.stepfun.ai", "docs.arcee.ai",
     # API prices where the maker publishes none: OpenRouter's API and OpenCode Go (free models).
     "openrouter.ai", "opencode.ai", "tokenfactory.nebius.com",
 )
-PUBLIC_FREE_PRICES = {"space-bunny-free": "https://opencode.ai/docs/go/"}
 
 
 def price_id(model: str) -> str:
@@ -85,17 +84,15 @@ def public_maker(model: str, price: dict) -> str:
 
 
 def public_price(price: dict) -> dict:
-    """Maker list prices and documented public free models, never proxy rate tables."""
+    """Return rates only from reviewed public pricing sources."""
     keys = ("input_usd_per_m", "cached_input_usd_per_m", "output_usd_per_m",
             "cache_write_usd_per_m", "cache_write_1h_usd_per_m")
     url = price.get("source_url") or ""
     host = (urlsplit(url).hostname or "").lower()
-    documented_free = (PUBLIC_FREE_PRICES.get(price.get("id")) == url
-                       and all(price.get(key) == 0 for key in keys[:3]))
     maker_source = any(host == allowed or host.endswith("." + allowed) for allowed in PUBLIC_PRICE_HOSTS)
     if host == "docs.devin.ai" and not (price.get("maker") == "Cognition" and price_id(price.get("id", "")).startswith("swe-")):
         maker_source = False
-    if not documented_free and not maker_source:
+    if not maker_source:
         return {**{k: None for k in keys[:3]}, "source_url": None}
     result = {**{k: price.get(k) for k in keys if k in price or k in keys[:3]}, "source_url": url}
     if price.get("tiers"):

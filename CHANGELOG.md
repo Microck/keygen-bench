@@ -13,6 +13,7 @@
 - Same-route native readiness pilots before community smoke and full runs, with proof retained in private work directories.
 - Direct OpenAI and Anthropic API-key routes and public HTTPS custom endpoints for supported native protocols.
 - Every attempt of the maintainer max-tier prompt-v2 campaigns and earlier runs under `runs/<model>/`: the three ranked attempts plus all other attempts in `other/`, with trajectories, transport logs, modules, lossless FLAC audio and evaluations (no videos).
+- MiniMax M3.1 Flash OpenRouter `:free` results with listener-v1 scores; keep the former Space Bunny Go attempts under `other/`.
 - Google AI Studio and Devin native routes.
 - xAI OAuth Responses route through OMP's loopback auth-gateway, with an authenticated pre-inference model-catalog identity check.
 - Best/Average ordering toggle at the right of the ranking toolbar with shareable URL state and final-ordinal means, preserving the same columns, attempt views and sidebar.
@@ -37,6 +38,7 @@
 - Show only model names in tracker dropdowns and score-card headings, keep the original popup width, order models by reviewed release dates, and count distinct models in company menus.
 - Explain Rankings consistency as score spread, sort unknown spreads last in either direction, and remove the sidebar pricing-source link.
 - Total ordinal attempt costs in model rankings and show single upper estimates in Support, rankings and attempt sidebars, keeping ranges and missing-cost coverage in tooltips instead of visible `+` suffixes or warning paragraphs.
+- Use MiniMax's published API rates for the M3.1 Flash list-price estimate even when the recorded OpenRouter `:free` route reports zero cost.
 
 ### Fixed
 
