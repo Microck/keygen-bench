@@ -6,15 +6,18 @@ test('independent optional metadata requests start together', async () => {
  const original = globalThis.fetch;
  const started = [];
  const releases = [];
+ let signalStarted;
+ const optionalStarted = new Promise(resolve => { signalStarted = resolve; });
  globalThis.fetch = async url => {
   if (url.endsWith('/data.json')) return Response.json({runs:[]});
   started.push(url);
+  signalStarted();
   return new Promise(resolve => releases.push(() => resolve(new Response(null,{status:404}))));
  };
  let pending;
  try {
   pending = loadData('/fixture/');
-  await new Promise(resolve => setTimeout(resolve,10));
+  await optionalStarted;
   assert.deepEqual(started.sort(), ['/fixture/model-metadata.json','/fixture/spend.json']);
  } finally {
   globalThis.fetch = async () => new Response(null,{status:404});
