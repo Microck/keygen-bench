@@ -6,10 +6,12 @@ export async function loadData(base = "./dist/") {
   if (!res.ok) throw new Error("Website data is missing. Build a publication with web/classic/build.py and serve its output directory.");
   const data = await res.json();
   data.base = base;
-  const spend = await fetch(base + "spend.json");
+  const [spend, metadata] = await Promise.all([
+    fetch(base + "spend.json"),
+    fetch(base + "model-metadata.json"),
+  ]);
   if (!spend.ok && spend.status !== 404) throw new Error(`Could not load spend data (${spend.status}).`);
   data.spend = spend.ok ? await spend.json() : null;
-  const metadata = await fetch(base + "model-metadata.json");
   if (!metadata.ok && metadata.status !== 404) throw new Error(`Could not load model metadata (${metadata.status}).`);
   data.modelMetadata = metadata.ok ? await metadata.json() : {};
   groupAttempts(data);

@@ -65,7 +65,10 @@ try {
   await render();
   intro?.done();
 } catch (err) {
-  app.innerHTML = `<div id="boot">${String(err.message || err)}</div>`;
+  const message = document.createElement("div");
+  message.id = "boot";
+  message.textContent = String(err.message || err);
+  app.replaceChildren(message);
   intro?.fail();
   throw err;
 }
