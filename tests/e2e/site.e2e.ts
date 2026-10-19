@@ -46,7 +46,7 @@ test("synthetic local audio can play and pause",async({app,screen,browser})=>{
 test("bootstrap errors remain text rather than markup",async({app,browser,screen})=>{
  await browser.addInitScript(()=>{
   const original=window.fetch;
-  window.fetch=(input,init)=>String(input).endsWith("/dist/data.json")
+  window.fetch=(input,init)=>new URL(input instanceof Request ? input.url : String(input), location.href).pathname.endsWith("/dist/data.json")
    ? Promise.reject(new Error("<strong>synthetic failure</strong>")) : original(input,init);
  });
  await app.open("/rankings");
