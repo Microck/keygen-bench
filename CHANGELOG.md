@@ -13,6 +13,7 @@
 - Same-route native readiness pilots before community smoke and full runs, with proof retained in private work directories.
 - Direct OpenAI and Anthropic API-key routes and public HTTPS custom endpoints for supported native protocols.
 - Every attempt of the maintainer max-tier prompt-v2 campaigns and earlier runs under `runs/<model>/`: the three ranked attempts plus all other attempts in `other/`, with trajectories, transport logs, modules, lossless FLAC audio and evaluations (no videos).
+- MiniMax M3.1 Flash OpenRouter `:free` results with listener-v1 scores; keep the former Space Bunny Go attempts under `other/`.
 - Google AI Studio and Devin native routes.
 - xAI OAuth Responses route through OMP's loopback auth-gateway, with an authenticated pre-inference model-catalog identity check.
 - Best/Average ordering toggle at the right of the ranking toolbar with shareable URL state and final-ordinal means, preserving the same columns, attempt views and sidebar.

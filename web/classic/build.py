@@ -55,7 +55,7 @@ PUBLIC_PRICE_HOSTS = (  # maker-published pricing pages only; third-party/proxy 
     # API prices where the maker publishes none: OpenRouter's API and OpenCode Go (free models).
     "openrouter.ai", "opencode.ai", "tokenfactory.nebius.com",
 )
-PUBLIC_FREE_PRICES = {"space-bunny-free": "https://opencode.ai/docs/go/"}
+PUBLIC_FREE_PRICES = {"minimax-m3.1-flash": "https://openrouter.ai/minimax/minimax-m3.1-flash%3Afree"}
 
 
 def price_id(model: str) -> str:

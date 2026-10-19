@@ -132,6 +132,21 @@ class RunsBuilderTests(unittest.TestCase):
         self.assertEqual(builder.display_name("stepfun/step-3.7-flash:free"), "step-3.7-flash")
         self.assertEqual(builder.display_name("longcat-2.5-preview-free"), "longcat-2.5-preview")
 
+    def test_openrouter_free_price_uses_the_published_model_key(self):
+        route_id = "minimax/minimax-m3.1-flash:free"
+        source_url = "https://openrouter.ai/minimax/minimax-m3.1-flash%3Afree"
+        model_key = builder.display_name(builder.price_id(route_id))
+        price = {"id": model_key, "source_url": source_url, "input_usd_per_m": 0,
+                 "cached_input_usd_per_m": 0, "output_usd_per_m": 0}
+
+        self.assertEqual(model_key, "minimax-m3.1-flash")
+        self.assertEqual(builder.public_price(price), {
+            "input_usd_per_m": 0,
+            "cached_input_usd_per_m": 0,
+            "output_usd_per_m": 0,
+            "source_url": source_url,
+        })
+
     def test_new_attempt_uses_existing_model_metadata(self):
         self.identities.clear()
         self.write_site()

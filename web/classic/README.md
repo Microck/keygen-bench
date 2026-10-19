@@ -48,8 +48,8 @@ The registry preserves established public slugs; new attempts
 receive model/ordinal/XM-hash slugs. Raw provider IDs stay in the retained runs,
 while display names drop route namespaces, free-endpoint suffixes and the
 Muse contributor suffix.
-`publication-policy.json` keeps the existing Space Bunny exclusion explicit
-without deleting or modifying its retained attempts.
+[MiniMax confirmed the former Space Bunny identity as MiniMax M3.1 Flash](https://www.minimax.io/blog/minimax-m31f). Its older OpenCode Go attempts
+stay under `other/`, while the newer OpenRouter `:free` attempts are ranked.
 
 Committed `data/listener-v1-runs.json` binds listener ratings and caps to both
 XM and canonical WAV hashes. Missing eligible evidence fails with the complete
@@ -235,8 +235,9 @@ an explicit token breakdown for an exact cost, including zero counts when no
 writes occurred. Where recorded usage and documented prices support finite
 bounds but not an exact amount, `cost_range_usd` contains `min`, `max`, and a
 readable `reason`. The website displays that range, not a guessed exact price.
-The narrow documented `space-bunny-free` exception permits its public zero-price
-route; it does not permit arbitrary proxy catalogs or guessed free pricing.
+The narrow documented `minimax/minimax-m3.1-flash:free` exception permits its
+public zero-price route ([OpenRouter listing](https://openrouter.ai/minimax/minimax-m3.1-flash%3Afree)).
+It does not permit arbitrary proxy catalogs or guessed free pricing.
 
 Without a separate ledger, the support page totals only the published attempts and labels that scope. Missing usage or prices remain unknown; a partial total has a `+` and reports incomplete coverage. The site never claims this is a provider bill.
 
