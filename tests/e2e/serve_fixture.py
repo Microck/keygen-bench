@@ -47,6 +47,7 @@ with tempfile.TemporaryDirectory(prefix='keygen-browser-fixture-') as temp:
           'audio':{'duration':4,'lufs':-20,'peak':0.1},
           'module':{'name':'Synthetic','channels':4,'bpm':125,'speed':6,'song_length':1,'loop_start':0,'patterns':1,'instruments':0,'samples':0},
           'usage':{'completion_tokens':100,'wall_minutes':1},'cost_usd':0,
+          'price':{'input_usd_per_m':0,'cached_input_usd_per_m':0,'output_usd_per_m':0},
           'media':{'xm':'fixture.xm','audio':'fixture.wav','wav':'fixture.wav'},
           'trace':[[0,0,0,0],[44100,0,1,0]],'provenance':{'attempt_ordinal':ordinal}})
     (dist / 'data.json').write_text(json.dumps({'runs':runs,'repetition_groups':[],'limitations':[],'campaigns':[],'flag_rules':{}}))
