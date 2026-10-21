@@ -23,13 +23,33 @@ the evaluator renders the submitted XM at 44.1 kHz / 16-bit in a fresh FT2 proce
 
 ## run a model
 
-start with [contributing runs](CONTRIBUTING-RUNS.md). the guided CLI builds the environment, configures a provider, checks prerequisites and runs a smoke attempt or the full three-attempt submission. API-key presets include OpenAI and Anthropic; other services can use compatible Chat Completions, Responses or Messages endpoints. OAuth routes use your own authorized local bridge.
+start with [contributing runs](CONTRIBUTING-RUNS.md). the guided CLI builds the environment, configures a provider, checks prerequisites and runs a smoke attempt or the full three-attempt submission. API-key presets include OpenAI and Anthropic; other services can use compatible Chat Completions, Responses or Messages endpoints. Use `python benchmark/contrib/cli.py login PROVIDER` for local Codex, Anthropic or xAI OAuth through your installed CLIProxyAPI bridge, or choose `--method api-key` for provider keys and custom OpenAI-compatible endpoints. Authentication is separate from frozen benchmark eligibility; the guide explains the restrictions.
 
 model requests can cost money. credentials stay outside the model's sandbox and must never be committed. keep your working runs outside the repository and publish only reviewed bundles.
 
 community submissions stay labelled separately until the maintainer verifies their provenance and re-renders and re-scores the module. the bundle validator can't prove which model produced a file or that no undisclosed attempts happened.
 
 for campaign configuration, evaluation and reporting, see [the benchmark guide](benchmark/README.md).
+
+## contribute with your AI agent
+
+Copy the prompt below into your coding agent and replace the angle-bracket placeholders. It can guide setup and verification; you still control account login, spending and public submission. The [contributor guide](CONTRIBUTING-RUNS.md#using-an-ai-agent) explains the checkpoints and current OAuth limits.
+
+```text
+I want to test <EXACT MODEL ID> from <PROVIDER OR OPENAI-COMPATIBLE BASE URL> on Keygen Bench, using <OAUTH OR API KEY>.
+
+Read https://github.com/Microck/keygen-bench/blob/main/AGENTS.md, CONTRIBUTING-RUNS.md and benchmark/README.md in that repository before doing anything. If I am testing an unmerged PR, use those files from that PR's exact commit instead and record it.
+
+Help me set up the contributor CLI and check prerequisites. Confirm the exact model, endpoint, native protocol, reasoning tier, output cap and authentication route rather than guessing. Prefer my requested OAuth route; never silently switch to paid API-key billing.
+
+Have me complete account login in my own local terminal/browser. Do not ask me to paste secrets into chat, search another application's credential store, commit credentials, or pass them into the model sandbox.
+
+Keep the benchmark's frozen prompts, tools, budgets and three-attempt rules unchanged. Login or a model-list response is not proof of benchmark compatibility. If the route cannot preserve required settings, stop and explain; do not bypass the check.
+
+Do offline checks first. Before any inference/readiness pilot, explain the model, route, planned run and possible charges and obtain my explicit spending approval. Then help with a smoke test and, only when I approve, the full three attempts. Keep every outcome, including failures.
+
+Review and validate the resulting bundle for secrets, privacy and provenance. Prepare the submission for my review; do not upload it, push it, or open a PR until I approve publication. Report what actually passed and what remains unverified.
+```
 
 ## runs
 
@@ -79,3 +99,4 @@ runs are paid out of pocket. if you want more models tested, you can chip in thr
 the code and docs are [MIT](LICENSE). third-party material keeps its own terms: the FT2 fonts and graphics are CC BY-NC-SA 4.0 and the FT2 build pins `8bitbubsy/ft2-clone` via a fork. see [NOTICE.md](NOTICE.md) for the full list and [the public-launch checklist](PUBLIC-LAUNCH.md) before publishing a formerly private checkout.
 
 to cite keygen bench, use [CITATION.cff](CITATION.cff) with the commit your experiment used.
+

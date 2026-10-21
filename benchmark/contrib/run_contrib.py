@@ -179,7 +179,14 @@ def private_work_path(path):
     return resolved
 
 
+def require_contributor_route(args):
+    # Do not rewrite historical evidence or validator schemas. Reject new runs only.
+    if args.provider in {"anthropic_oauth", "codex_oauth"}:
+        raise ValueError("This subscription OAuth bridge is not eligible for new frozen contributor runs: no-cloak does not preserve all generation controls. Use the direct provider API-key route; do not silently drop limits or change prompts.")
+
+
 def execute(args):
+    require_contributor_route(args)
     output, work = args.out.resolve(), private_work_path(args.work)
     if output == work or output.exists() or work.exists() or output in work.parents or work in output.parents:
         raise ValueError("Use separate new bundle and private work directories")
@@ -261,3 +268,4 @@ def main(argv=None):
 
 if __name__ == "__main__":
     sys.exit(main())
+

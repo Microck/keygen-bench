@@ -70,17 +70,28 @@ Use the [guided contributor CLI](../CONTRIBUTING-RUNS.md#guided-setup-and-run) f
 | `mistral` | Chat Completions | `https://api.mistral.ai/v1` |
 | `cohere` | Chat Completions | `https://api.cohere.ai/compatibility/v1` |
 | `custom` | Chat Completions, Responses or Messages | User-selected public HTTPS endpoint |
-| `anthropic_oauth` | Messages | User-owned authorized loopback bridge |
-| `codex_oauth` | Responses | User-owned authorized loopback bridge |
-| `xai_oauth` | Responses | OMP `auth-gateway` on loopback, backed by an authorized OMP auth broker |
+| `google` / setup alias `gemini` | Native Gemini | `https://generativelanguage.googleapis.com/v1beta` |
+| setup alias `xai` | Existing `custom` native transport | `https://api.x.ai/v1` |
+| setup aliases `openrouter`, `deepseek`, `groq` | Existing `custom` native transport | Provider-specific public endpoint |
 
-For xAI OAuth, use the contributor CLI's `verify` command before any inference.
-It checks authenticated `/v1/models` discovery for the exact `xai-oauth/<model>`
-ID and Responses protocol. OMP's auth-gateway serves the local OMP credential store
-through an auth broker bound to loopback; both local services must be running.
-The endpoint is a base URL, not the full request path. Custom service support requires compatible tool calling, generation controls and exact response-model identity. Selecting a protocol does not translate arbitrary service APIs or guarantee that a proxy forwards the requested settings. Public custom URLs are included in submission provenance; keep private endpoints and identifying tenant paths out of public bundles.
+Run `python benchmark/contrib/cli.py login PROVIDER` for local CLIProxyAPI OAuth
+with Codex/OpenAI, Anthropic or xAI. Use `--method api-key` explicitly for key
+setup, including custom OpenAI-compatible endpoints. Login does not select a
+model or authorize inference. See the [credential lifecycle and OAuth limits](../CONTRIBUTING-RUNS.md#oauth-login-with-api-keys-as-an-explicit-alternative).
 
-Only OAuth bridges use private loopback HTTP. Bridge login and server lifecycle remain the user's responsibility; the CLI records the executable digest rather than its private path or address. Never route a direct API key through a bridge without deliberately configuring that service.
+New contributor smoke/runs through `anthropic_oauth` and `codex_oauth` bridges
+are blocked: no-cloak does not preserve all frozen generation controls. We retain
+historical route definitions and validation so existing evidence remains readable.
+The advanced `xai_oauth` Responses route remains available with a user-authorized
+loopback bridge and exact model catalog check, but neither this check nor the
+bridge digest certifies final-upstream prompt/settings preservation or provider
+permission. The login command orchestrates xAI device login through the selected bridge. Never enable a
+compatibility prompt or injected tool to make a frozen run succeed.
+
+The public OpenAI ChatGPT OAuth flow is distinct from a Codex bridge, but its
+current unsupported output caps prevent a drop-in under this condition. It is
+not implemented. OAuth login and API-key setup are separate from frozen-route eligibility. Details
+and official sources are in the [contributor guide](../CONTRIBUTING-RUNS.md#authentication-is-not-benchmark-qualification).
 
 ## Configure a campaign
 
@@ -176,3 +187,4 @@ python -m unittest discover -s tests
 Tests use synthetic data and do not require paid inference. A container build exercises native FT2 acceptance. For a complete operational check, run a submission through local collection, trusted rendering and scoring, and confirm that owned containers and volumes are removed. Real provider access requires a separately authorized funded run.
 
 Never publish raw trajectory or transport logs without review. The community exporter reduces operational metadata and the validator checks common secret and private-address patterns, but neither can prove that arbitrary model text contains no personal data.
+

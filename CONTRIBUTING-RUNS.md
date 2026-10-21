@@ -4,6 +4,56 @@ Run one exact model three times and submit every outcome to
 [Microck/keygen-bench](https://github.com/Microck/keygen-bench).
 Community results stay separate from ranked results.
 
+
+## Using an AI agent
+
+The [README's copy-paste prompt](README.md#contribute-with-your-ai-agent) is a
+starting request for your coding agent, not permission to spend or publish.
+Replace the exact model, provider/base URL and authentication preference. If
+you do not know a value, ask the agent to research it rather than invent one.
+For an unmerged feature, read the guides from the exact PR commit, not a mixture
+of main and PR files.
+
+Ask the agent to work through these checkpoints:
+
+1. Read `AGENTS.md`, this guide and `benchmark/README.md`; inspect the installed
+   contributor CLI's `--help` and verify prerequisites. Use a dedicated local
+   controller with no personal/company files mounted into the sandbox.
+2. Confirm the exact model and response identity, public endpoint, native
+   protocol, documented reasoning tier/output cap and requested authentication
+   method. Custom OpenAI-compatible endpoints are supported when their tool
+   calling and generation controls satisfy the contract; compatibility alone
+   is not proof of model identity.
+3. Prepare the appropriate login command, then let **you** complete the local
+   browser/device-code or hidden-key prompt. Do not send passwords, API keys,
+   callback URLs, device codes or tokens to the agent's chat or run artifacts.
+   The bridge owns its provider tokens. Explicit API-key setup must never be
+   substituted for requested subscription OAuth without your agreement.
+4. Keep authentication and eligibility separate. Codex/Anthropic bridge login
+   can be configured while new frozen contributor runs remain blocked because
+   the inspected routes drop required controls. A model catalog, successful
+   login process or no-cloak setting does not waive that block. Gemini API-key
+   setup is not Antigravity OAuth. Explain unsupported paths rather than
+   promising a working run or changing the frozen experiment.
+5. Run offline doctor checks first. A catalog `verify` is a network/authentication
+   diagnostic, not an inference test or fairness certificate. Before any
+   readiness pilot, smoke or official run, describe the route, request scope and
+   possible charges and obtain your explicit approval. `--yes` is spending
+   authorization, not a price cap; the agent must not insert it on its own.
+6. After approval, run the smoke diagnostic and, with approval for the full run,
+   all three predetermined attempts. Preserve failed/interrupted outcomes.
+   Do not rerun scored attempts to select better results, change prompts,
+   silently remove output limits or enable identity/tool cloaking.
+7. Review the private bundle for secrets, personal data and accurate provenance;
+   validate it and have you review what will become public. Obtain separate
+   permission before uploading, pushing or opening the submission PR. Neither
+   passing validation nor having provider access authorizes publication.
+
+The setup/login commands do not make paid model calls. `doctor` is offline;
+`verify` contacts the configured bridge catalog; `smoke` and `run` include a
+real paid-or-quota-consuming readiness pilot before their attempts. Never
+describe a synthetic offline test as verification of a real provider login.
+
 ## Guided setup and run
 
 Use Linux with Python 3.11 or later and a working local Docker Engine.
@@ -25,7 +75,8 @@ Use the installed environments for the remaining commands:
 PYTHON="$HOME/.local/share/keygen-bench/venv/bin/python"
 export KEYGEN_LISTENER_PYTHON="$HOME/.local/share/keygen-bench/listener-venv/bin/python"
 CONFIG="$HOME/.config/keygen-bench/model.json"
-"$PYTHON" benchmark/contrib/cli.py configure --config "$CONFIG"
+"$PYTHON" benchmark/contrib/cli.py login openai --method api-key
+"$PYTHON" benchmark/contrib/cli.py configure --provider openai --config "$CONFIG"
 "$PYTHON" benchmark/contrib/cli.py doctor --config "$CONFIG"
 ```
 
@@ -39,24 +90,136 @@ Credentials are supplied separately; they are not stored in the configuration.
 Use `--no-input` and explicit configuration flags for automation; see
 `configure --help`. Presets supply endpoint defaults, not guessed model settings.
 
-For API-key routes, set `KEYGEN_CONTRIB_API_KEY` privately as shown below.
-For `anthropic_oauth` or `codex_oauth`, install and sign in to your own
-authorized bridge, start its loopback server, and provide its URL and executable
-path to the wizard. For `xai_oauth`, use OMP's `auth-gateway` backed by an
-authorized OMP auth broker that holds the xAI OAuth credential. OMP's gateway
-can serve the local OMP credential store through a broker bound to loopback.
-Start `omp auth-broker serve` on its default `127.0.0.1:8765` listener, then
-start the gateway with
-`OMP_AUTH_BROKER_URL=http://127.0.0.1:8765 omp auth-gateway serve --bind=127.0.0.1:8766`.
-Set the gateway's `/v1` URL as `--base-url`, and set the OMP executable as
-`--bridge-binary`. Create its inbound bearer with `omp auth-gateway token`, then
-supply that value privately as `KEYGEN_CONTRIB_API_KEY`. The contributor CLI
-never extracts or stores the xAI OAuth token. Before inference, run:
-`"$PYTHON" benchmark/contrib/cli.py verify --config "$CONFIG"`. This sends only
-an authenticated `GET /v1/models` request and confirms that the exact model is
-advertised by OMP as `xai-oauth/<model>` on Responses. It does not prove that an
-inference request will succeed. Doctor checks only that the listener accepts a
-TCP connection; it does not authenticate or send a provider request.
+### OAuth login, with API keys as an explicit alternative
+
+This is Keygen's contributor command, not an upstream `mini-swe-agent login`
+command. Upstream mini does not provide these login subcommands.
+
+Install a reviewed [CLIProxyAPI v8 release](https://github.com/router-for-me/CLIProxyAPI/releases)
+on your own trusted machine. Keygen does not download or execute an unselected
+bridge automatically. Then choose one account:
+
+```sh
+"$PYTHON" benchmark/contrib/cli.py login codex --bridge-binary /absolute/path/cli-proxy-api
+"$PYTHON" benchmark/contrib/cli.py login xai --bridge-binary /absolute/path/cli-proxy-api
+"$PYTHON" benchmark/contrib/cli.py login anthropic --bridge-binary /absolute/path/cli-proxy-api
+```
+
+Run only the commands for the providers you intend to use. `codex`/`openai`,
+`anthropic` and `xai` default to OAuth, never silently to billable API keys.
+The CLI explains community-support and provider restrictions and asks before
+starting login; `--accept-community-auth` records that deliberate choice.
+It requires an interactive terminal. `--no-browser` suppresses automatic browser
+opening, but does not make the consent/device-code flow unattended.
+
+- Codex uses CLIProxyAPI's device login (`-codex-device-login`), avoiding a local
+  callback listener. This is its community compatibility flow, not OpenAI's
+  separately documented open-source-client registration integration.
+- xAI uses its device login (`-xai-login`). This is an implemented community
+  flow; we have not established an official third-party subscription contract.
+- Anthropic uses its browser/PKCE login (`-claude-login`). Anthropic does not
+  officially permit third-party Claude subscription login here. The inspected
+  bridge callback listens on port 54545 and may bind beyond loopback, so use a
+  trusted local machine. Do not confuse this with supported API-key access or
+  Anthropic's unmodified-Claude-Code exception.
+- Gemini is available via explicit API-key setup below. The inspected bridge
+  exposes Antigravity, not a generic Gemini CLI login; we do not pretend they
+  are interchangeable or guess unsupported flags.
+
+The selected bridge handles its own provider-token storage and refresh. Keygen
+never reads or copies those provider tokens. Generated v8 configuration lives
+under `~/.config/keygen-benchmark/credentials/oauth/PROVIDER/`, with a dedicated
+private token directory, loopback inference listener, random local bearer and
+known prompt/tool cloaking disabled. Provider profiles are isolated and ports
+default to 8317 (Codex), 8318 (Anthropic) and 8319 (xAI). `--bridge-port` changes
+only the inference port, not browser OAuth callback ports. Existing profiles
+are reused rather than overwritten.
+
+Some bridge login helpers return exit code zero after reporting an error.
+Keygen therefore never equates process completion or credential-file presence
+with remotely verified authentication. No login makes inference requests.
+
+After login, keep the bridge in a separate foreground terminal:
+
+```sh
+"$PYTHON" benchmark/contrib/cli.py bridge-serve xai
+"$PYTHON" benchmark/contrib/cli.py auth-status xai
+"$PYTHON" benchmark/contrib/cli.py configure --provider xai_oauth \
+  --base-url http://127.0.0.1:8319/v1 --bridge-binary /absolute/path/cli-proxy-api --config "$CONFIG"
+"$PYTHON" benchmark/contrib/cli.py verify --config "$CONFIG"
+```
+
+Run/smoke uses only the generated local bearer, and only for the matching
+loopback endpoint and executable. `verify` also uses that matching local bearer automatically; it never reads
+provider tokens. `auth-status` reports
+configuration presence, not remote validity. Stop the bridge and revoke access
+in the provider account to sign out; automatic bridge OAuth logout/revocation
+is not implemented, and `logout --method oauth` says so rather than claiming
+that deleting a local file revokes access.
+
+### API keys and OpenAI-compatible endpoints
+
+Use `--method api-key` to deliberately choose API billing instead of OAuth:
+
+```sh
+"$PYTHON" benchmark/contrib/cli.py login anthropic --method api-key
+"$PYTHON" benchmark/contrib/cli.py login gemini --method api-key
+"$PYTHON" benchmark/contrib/cli.py login custom --method api-key --base-url https://YOUR-PROVIDER/v1
+"$PYTHON" benchmark/contrib/cli.py configure --provider custom --base-url https://YOUR-PROVIDER/v1 --config "$CONFIG"
+```
+
+Named key presets: OpenAI/Codex, Anthropic, xAI, Gemini/Google, OpenRouter,
+DeepSeek, Groq, Mistral and Cohere. Custom public HTTPS endpoints support the
+existing native Chat Completions, Responses or Messages transport. Choose the
+exact model ID, protocol, documented reasoning tier and output cap. Compatibility
+is not a guarantee of tool support, model identity or parameter preservation.
+There is no model allowlist for custom endpoints, but the frozen execution
+requirements still apply. Google uses its native Gemini adapter.
+
+API-key login prints the provider console link, asks permission to save and
+reads the key without echo. Keys are plaintext owner-only files (0600 under a
+0700 private directory), never inside model configuration or the checkout.
+A custom key is bound to its exact endpoint; keys are never automatically sent
+to another host or bridge. No provider request is sent during key setup.
+Use `--auth-dir` consistently for login, configure, doctor, smoke and run to
+select another private directory. API `auth-status` and `logout` also require
+`--method api-key` for OAuth-default providers; custom keys require the same
+`--base-url`. Local logout does not revoke a provider API key.
+
+For automation, supply the provider environment variable privately, then use
+`login PROVIDER --method api-key --no-input --save` only if local storage is
+intended. Custom login uses `KEYGEN_CONTRIB_API_KEY`; named profiles use their
+standard variables, such as `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `XAI_API_KEY`
+and `GEMINI_API_KEY`. `--replace` is required to overwrite saved keys. Never
+supply secrets in command-line arguments. Without storage, smoke/run can use
+these environment credentials directly at their matching destinations.
+
+### Authentication is not benchmark qualification
+
+A successful OAuth login is useful, but it does not establish unchanged prompts
+or generation settings. At inspected CLIProxyAPI commit
+`0db19025571684b198a2ef508f99b41c717337e8`, the Codex Responses translator removes
+output caps, temperature and top_p; Claude normalization removes temperature
+and top_p independently of no-cloak. Consequently new `codex_oauth` and
+`anthropic_oauth` contributor smoke/runs fail before spending. Login remains
+available separately. Do not silently remove these checks or replace frozen
+settings to make a route run. Historical evidence/validator schemas are retained.
+
+The advanced xAI route keeps its existing eligibility checks, but catalog lookup
+is not final-upstream payload verification. Known xAI search-tool injection is
+disabled in the generated profile. Before accepting bridge results as equivalent,
+verify the exact bridge version/config and sanitized final outbound request;
+client logs and model catalogs alone are insufficient. Provider-internal hidden
+instructions cannot be ruled out by client inspection.
+
+[OpenAI's official OSS OAuth](https://developers.openai.com/siwc/token-sharing-open-source)
+is a possible future direct transport, but its current
+[preview constraints](https://developers.openai.com/siwc/token-sharing-open-source/preview-limitations)
+also exclude the frozen output-token caps/sampling controls. It needs its own
+PKCE/client registration/token lifecycle and a disclosed compatible condition,
+not a silent drop-in. [Anthropic's current rules](https://code.claude.com/docs/en/legal-and-compliance#authentication-and-credential-use)
+distinguish API keys, third-party subscription credentials and the unmodified
+Claude Code binary. No wrapper setting changes those provider rules.
 
 Before either command runs a benchmark attempt, it performs a real native
 readiness pilot with the same model, provider, protocol, endpoint, tier,
@@ -137,14 +300,14 @@ runner and submission contract as the explicit invocation.
    `nim`, `vercel`, and `custom` for a public HTTPS service implementing
    Chat Completions, Responses, or Messages. Protocol compatibility does not
    establish model identity or equivalent reasoning behavior. See
-   `benchmark/README.md` for route restrictions. `codex_oauth` and
-   `anthropic_oauth` require your own authorized loopback bridge. `xai_oauth`
-   requires the OMP auth-broker/gateway path described above.
-6. Set your credential privately. Do not put it in a command, config, PR, or
-   committed file. Bash can read it without showing it or saving it in history:
+   `benchmark/README.md` for route restrictions. Prefer the provider API-key
+   setup above. OAuth login is available separately from frozen-route eligibility.
+6. Set your API key or local bridge bearer privately. Do not put it in a command,
+   config, PR, or committed file. Bash can read it without showing it or saving
+   it in history:
 
    ```sh
-   read -rsp 'Provider credential: ' KEYGEN_CONTRIB_API_KEY; echo
+   read -rsp 'Provider API key or local bridge bearer: ' KEYGEN_CONTRIB_API_KEY; echo
    export KEYGEN_CONTRIB_API_KEY
    ```
 
@@ -168,11 +331,12 @@ unset KEYGEN_CONTRIB_API_KEY
 ```
 
 For an OAuth route, pass its private loopback `--base-url` and
-`--bridge-binary PATH` pointing to the executable that runs your bridge. The
-bundle records the provider, API protocol, exact model, loopback transport
-class, and executable SHA-256. It does not publish the bridge address, port,
-or executable path. The hash identifies the supplied binary; it does not prove
-which server handled requests or what that server sent upstream.
+`--bridge-binary PATH` pointing to the executable that runs your bridge. Run
+`verify` first to check the exact advertised model without inference. The bundle
+records the provider, API protocol, exact model, loopback transport class, and
+executable SHA-256. It does not publish the bridge address, port, or executable
+path. The hash identifies the supplied binary; it does not prove its config,
+which server handled requests, or what that server sent upstream.
 
 Use new work and output directories. Before starting the three attempts, the
 command runs a real native readiness pilot with the exact configured route and
@@ -250,3 +414,4 @@ The PR workflow uses read-only permissions, no provider credentials, and
 validator code from the trusted base commit. Maintainers check provenance and
 re-render `tune.xm` with a separately selected trusted image. Submitted scores
 never establish a trusted result. See `submissions/README.md`.
+

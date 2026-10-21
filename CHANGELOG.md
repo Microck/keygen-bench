@@ -4,6 +4,8 @@
 
 ### Added
 
+- Copy-paste contributor-agent prompt and stepwise authentication, frozen-contract, spending and publication checkpoints.
+
 - Add deterministic browser regression tests using synthetic local data and audio, without model calls or retained-run publication.
 
 - MIT License for original code and documentation; third-party assets keep their own licenses.
@@ -12,6 +14,9 @@
 - Public-launch checklist covering Git history, personal data, credentials, licenses and release verification.
 - Repository agent instructions linking the maintained guides and defining local execution, privacy, provenance and verification boundaries.
 - Guided contributor CLI for setup, private configuration, offline preflight, bounded model smoke runs and spending-authorized official submissions.
+- OAuth-first contributor login orchestration for Codex, Anthropic and xAI through an explicitly selected local CLIProxyAPI binary, with isolated no-cloak profiles and foreground bridge startup; never treat process completion as verified authentication.
+- Explicit API-key login, local status/logout, private-storage consent and endpoint-bound credential reuse, including custom OpenAI-compatible endpoints, Gemini and other major APIs.
+- Explicit subscription-OAuth qualification limits and rejection of new Anthropic/Codex bridge contributor runs that cannot preserve frozen settings; retain historical evidence and catalog diagnostics without claiming upstream equivalence.
 - Same-route native readiness pilots before community smoke and full runs, with proof retained in private work directories.
 - Direct OpenAI and Anthropic API-key routes and public HTTPS custom endpoints for supported native protocols.
 - Every attempt of the maintainer max-tier prompt-v2 campaigns and earlier runs under `runs/<model>/`: the three ranked attempts plus all other attempts in `other/`, with trajectories, transport logs, modules, lossless FLAC audio and evaluations (no videos).
@@ -75,3 +80,4 @@
 - Historical operator notes and unrelated research drafts that are not required to run or evaluate the benchmark.
 
 The cleanup changes the current source tree only. Earlier commits and pull requests still require review before the repository becomes public.
+
