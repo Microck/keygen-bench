@@ -4,6 +4,8 @@
 
 ### Added
 
+- Copy-paste contributor-agent prompt and stepwise authentication, frozen-contract, spending and publication checkpoints.
+
 - Add deterministic browser regression tests using synthetic local data and audio, without model calls or retained-run publication.
 
 - MIT License for original code and documentation; third-party assets keep their own licenses.

@@ -4,6 +4,56 @@ Run one exact model three times and submit every outcome to
 [Microck/keygen-bench](https://github.com/Microck/keygen-bench).
 Community results stay separate from ranked results.
 
+
+## Using an AI agent
+
+The [README's copy-paste prompt](README.md#contribute-with-your-ai-agent) is a
+starting request for your coding agent, not permission to spend or publish.
+Replace the exact model, provider/base URL and authentication preference. If
+you do not know a value, ask the agent to research it rather than invent one.
+For an unmerged feature, read the guides from the exact PR commit, not a mixture
+of main and PR files.
+
+Ask the agent to work through these checkpoints:
+
+1. Read `AGENTS.md`, this guide and `benchmark/README.md`; inspect the installed
+   contributor CLI's `--help` and verify prerequisites. Use a dedicated local
+   controller with no personal/company files mounted into the sandbox.
+2. Confirm the exact model and response identity, public endpoint, native
+   protocol, documented reasoning tier/output cap and requested authentication
+   method. Custom OpenAI-compatible endpoints are supported when their tool
+   calling and generation controls satisfy the contract; compatibility alone
+   is not proof of model identity.
+3. Prepare the appropriate login command, then let **you** complete the local
+   browser/device-code or hidden-key prompt. Do not send passwords, API keys,
+   callback URLs, device codes or tokens to the agent's chat or run artifacts.
+   The bridge owns its provider tokens. Explicit API-key setup must never be
+   substituted for requested subscription OAuth without your agreement.
+4. Keep authentication and eligibility separate. Codex/Anthropic bridge login
+   can be configured while new frozen contributor runs remain blocked because
+   the inspected routes drop required controls. A model catalog, successful
+   login process or no-cloak setting does not waive that block. Gemini API-key
+   setup is not Antigravity OAuth. Explain unsupported paths rather than
+   promising a working run or changing the frozen experiment.
+5. Run offline doctor checks first. A catalog `verify` is a network/authentication
+   diagnostic, not an inference test or fairness certificate. Before any
+   readiness pilot, smoke or official run, describe the route, request scope and
+   possible charges and obtain your explicit approval. `--yes` is spending
+   authorization, not a price cap; the agent must not insert it on its own.
+6. After approval, run the smoke diagnostic and, with approval for the full run,
+   all three predetermined attempts. Preserve failed/interrupted outcomes.
+   Do not rerun scored attempts to select better results, change prompts,
+   silently remove output limits or enable identity/tool cloaking.
+7. Review the private bundle for secrets, personal data and accurate provenance;
+   validate it and have you review what will become public. Obtain separate
+   permission before uploading, pushing or opening the submission PR. Neither
+   passing validation nor having provider access authorizes publication.
+
+The setup/login commands do not make paid model calls. `doctor` is offline;
+`verify` contacts the configured bridge catalog; `smoke` and `run` include a
+real paid-or-quota-consuming readiness pilot before their attempts. Never
+describe a synthetic offline test as verification of a real provider login.
+
 ## Guided setup and run
 
 Use Linux with Python 3.11 or later and a working local Docker Engine.
