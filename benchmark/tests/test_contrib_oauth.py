@@ -91,6 +91,17 @@ class OAuthTests(unittest.TestCase):
         settings.base_url = "http://127.0.0.1:9999/v1"
         self.assertIsNone(cli.saved_credential(settings, self.directory))
 
+    def test_catalog_http_errors_report_status_without_response_or_credentials(self):
+        from urllib.error import HTTPError
+        settings = argparse.Namespace(provider="xai_oauth", api="responses", base_url="http://127.0.0.1:8319/v1", model="fixture")
+        for code in (401, 404, 500):
+            error = HTTPError(settings.base_url + "/models", code, "SYNTHETIC_SECRET", {}, io.BytesIO(b"PRIVATE_RESPONSE"))
+            with mock.patch.dict(os.environ, {"KEYGEN_CONTRIB_API_KEY": "SYNTHETIC_BEARER"}), mock.patch.object(cli, "urlopen", side_effect=error):
+                with self.assertRaisesRegex(ValueError, f"HTTP {code}; no inference") as caught:
+                    cli.verify_model_catalog(settings)
+                self.assertNotIn("SYNTHETIC", str(caught.exception))
+                self.assertNotIn("PRIVATE", str(caught.exception))
+
     def test_custom_key_is_bound_to_exact_endpoint(self):
         cli.private_directory(self.directory)
         cli.auth.save_key(self.directory, "custom", "SYNTHETIC_CUSTOM_KEY", endpoint="https://models.example/v1")

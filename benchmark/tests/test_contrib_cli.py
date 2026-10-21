@@ -237,6 +237,9 @@ class ContributionCLITests(unittest.TestCase):
             body = b""
 
             def do_GET(self):
+                if self.path != "/v1/models":
+                    self.send_error(404)
+                    return
                 if self.headers.get("Authorization") != "Bearer FAKE_CLI_CREDENTIAL_DO_NOT_ECHO":
                     raise AssertionError("bridge bearer was not sent")
                 self.send_response(200)
@@ -413,3 +416,4 @@ class ContributionCLITests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

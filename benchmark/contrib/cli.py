@@ -30,6 +30,7 @@ import subprocess
 import sys
 import tempfile
 from urllib.parse import urlsplit
+from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 import uuid
 
@@ -408,6 +409,10 @@ def verify_model_catalog(config):
             payload = json.loads(catalog_bytes)
     except CLIError:
         raise
+    except HTTPError as exc:
+        code = exc.code
+        exc.close()
+        raise CLIError(f"OAuth bridge model catalog returned HTTP {code}; no inference was sent") from None
     except Exception as exc:
         raise CLIError(f"Could not read OAuth bridge model catalog ({type(exc).__name__}); no inference was sent") from None
     if not isinstance(payload, dict) or not isinstance(payload.get("data"), list):
