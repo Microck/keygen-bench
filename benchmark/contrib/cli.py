@@ -540,6 +540,8 @@ def oauth_action(args):
             raise CLIError("OAuth completion is unverified; inspect the bridge's local terminal result")
         print(f"Next: bridge-serve {name}. Then configure --provider {oauth_bridge.ROUTES[name]} --base-url http://127.0.0.1:{config['server']['port']}/v1 --bridge-binary {shlex.quote(str(binary))}. Login is not benchmark qualification.")
     elif not path.exists():
+        if args.command == "bridge-serve":
+            raise CLIError("No OAuth profile configured; run login first. No bridge was started")
         print("No OAuth profile configured. No provider credential was inspected.")
     else:
         path, binary, config = oauth_bridge.load_config(directory, name, outside_path, check_owner)

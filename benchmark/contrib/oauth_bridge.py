@@ -10,7 +10,6 @@ import json
 import os
 from pathlib import Path
 import secrets
-import shutil
 import subprocess
 
 FLOWS = {"codex": "-codex-device-login", "anthropic": "-claude-login", "xai": "-xai-login"}
@@ -30,7 +29,9 @@ def config_path(directory, name):
 
 
 def resolve_binary(value):
-    path = Path(value).expanduser() if value else Path(shutil.which("cli-proxy-api") or "")
+    if not value:
+        raise ValueError("Select a reviewed CLIProxyAPI executable explicitly with --bridge-binary; PATH discovery is not used")
+    path = Path(value).expanduser()
     if not path.is_file() or not os.access(path, os.X_OK):
         raise ValueError("Install a reviewed CLIProxyAPI v8 release and select its executable with --bridge-binary; nothing is downloaded automatically")
     return path.resolve()

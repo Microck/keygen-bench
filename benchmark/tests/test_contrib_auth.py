@@ -52,10 +52,14 @@ class LoginTests(unittest.TestCase):
         self.assertNotEqual(self.command("login", "openai", "--save", env=env).returncode, 0)
         self.assertEqual(self.command("login", "openai", "--save", "--replace", env=env).returncode, 0)
 
-    def test_oauth_fails_before_storage_or_network_for_every_provider(self):
+    def test_noninteractive_oauth_rejects_for_the_expected_reason(self):
         for name in cli.auth.NAMES:
             result = self.command("login", name, "--method", "oauth", "--save")
             self.assertNotEqual(result.returncode, 0)
+            expected = ("OAuth requires an interactive local terminal" if name in {"openai", "codex", "anthropic", "xai"}
+                        else "No reviewed OAuth login flow for this provider")
+            self.assertIn(expected, result.stderr)
+            self.assertNotIn("_API_KEY", result.stderr)
             self.assertFalse(self.directory.exists())
 
     def test_saved_key_never_follows_custom_destination(self):

@@ -39,6 +39,30 @@ class OAuthTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             cli.oauth_bridge.provider("gemini")
 
+    def test_new_profile_never_discovers_binary_from_path(self):
+        with mock.patch.dict(os.environ, {"PATH": str(self.root)}):
+            with self.assertRaisesRegex(ValueError, "explicitly"):
+                cli.oauth_bridge.resolve_binary(None)
+        self.assertEqual(cli.oauth_bridge.resolve_binary(self.binary), self.binary)
+
+    def test_missing_profile_cannot_report_server_started(self):
+        with mock.patch.object(cli.oauth_bridge, "invoke") as invoke:
+            with self.assertRaisesRegex(ValueError, "No bridge was started"):
+                cli.provider_auth(self.args(command="bridge-serve"))
+            invoke.assert_not_called()
+        with redirect_stdout(io.StringIO()):
+            cli.provider_auth(self.args(command="auth-status"))
+        self.assertFalse(self.directory.exists())
+
+    def test_oauth_rejection_never_invokes_bridge_or_network(self):
+        with mock.patch.object(cli, "interactive", return_value=False), mock.patch.object(cli.oauth_bridge, "invoke") as invoke, mock.patch.object(cli, "urlopen") as network:
+            for name in cli.auth.NAMES:
+                with self.assertRaisesRegex(ValueError, "OAuth requires an interactive|No reviewed OAuth login"):
+                    cli.provider_auth(self.args(name, method="oauth", no_input=True))
+            invoke.assert_not_called()
+            network.assert_not_called()
+        self.assertFalse(self.directory.exists())
+
     def test_generated_config_is_private_isolated_and_no_cloak(self):
         path = cli.oauth_bridge.create_config(self.directory, "xai", self.binary, 8319, cli.private_directory)
         loaded_path, binary, config = cli.oauth_bridge.load_config(self.directory, "xai", cli.outside_path, cli.check_owner)
