@@ -40,23 +40,82 @@ Use `--no-input` and explicit configuration flags for automation; see
 `configure --help`. Presets supply endpoint defaults, not guessed model settings.
 
 For API-key routes, set `KEYGEN_CONTRIB_API_KEY` privately as shown below.
-For `anthropic_oauth` or `codex_oauth`, install and sign in to your own
-authorized bridge, start its loopback server, and provide its URL and executable
-path to the wizard. For `xai_oauth`, use OMP's `auth-gateway` backed by an
-authorized OMP auth broker that holds the xAI OAuth credential. OMP's gateway
-can serve the local OMP credential store through a broker bound to loopback.
-Start `omp auth-broker serve` on its default `127.0.0.1:8765` listener, then
-start the gateway with
-`OMP_AUTH_BROKER_URL=http://127.0.0.1:8765 omp auth-gateway serve --bind=127.0.0.1:8766`.
-Set the gateway's `/v1` URL as `--base-url`, and set the OMP executable as
-`--bridge-binary`. Create its inbound bearer with `omp auth-gateway token`, then
-supply that value privately as `KEYGEN_CONTRIB_API_KEY`. The contributor CLI
-never extracts or stores the xAI OAuth token. Before inference, run:
-`"$PYTHON" benchmark/contrib/cli.py verify --config "$CONFIG"`. This sends only
-an authenticated `GET /v1/models` request and confirms that the exact model is
-advertised by OMP as `xai-oauth/<model>` on Responses. It does not prove that an
-inference request will succeed. Doctor checks only that the listener accepts a
-TCP connection; it does not authenticate or send a provider request.
+For `anthropic_oauth`, `codex_oauth`, or `xai_oauth`, use your own authorized
+loopback bridge. The reference setup below disables Claude prompt replacement,
+Codex client-identity headers, and known extra tools. It keeps each provider
+login in its own credential store, outside this checkout. The contributor CLI
+uses only the bridge's local bearer; it never reads the provider's OAuth tokens.
+
+Before any OAuth inference, run `verify`. It sends only an authenticated
+`GET /v1/models` request and requires one exact model ID. It does not test
+inference or prove what the bridge sends upstream. Do not use a bridge that
+changes the frozen system prompt, tools, model, or generation settings. If a
+provider requires an extra client identity prompt or injected tool, stop that
+route rather than enabling a cloak or compatibility prompt.
+
+### Reference CLIProxyAPI setup
+
+Install a verified CLIProxyAPI release from its [official releases](https://github.com/router-for-me/CLIProxyAPI/releases).
+Set `BRIDGE_CONFIG` to a private config path outside the checkout. This example
+binds to loopback, uses a local bearer separate from provider credentials, and
+disables known prompt/tool additions:
+
+```yaml
+config-version: 8
+server:
+  host: 127.0.0.1
+  port: 8317
+access:
+  api-keys:
+    - REPLACE_WITH_A_RANDOM_LOCAL_BEARER
+management:
+  secret-key: ""
+oauth:
+  auth-dir: /absolute/private/path/keygen-cliproxyapi-auth
+upstream:
+  claude:
+    disable-claude-cloak-mode: true
+    disable-cloaking-model-list: true
+  codex:
+    disable-codex-cloaking: true
+  xai:
+    inject-x-search: false
+multimedia:
+  disable-image-generation: true
+plugins:
+  enabled: false
+```
+
+The [CLIProxyAPI config reference](https://github.com/router-for-me/CLIProxyAPI/blob/main/config.example.yaml)
+defines these settings. Use a dedicated config with no model aliases or fallback
+pools. Do not set a credential-level Claude `cloak_mode` override, because it
+can override the shared no-cloak setting. Sign in only to account routes you
+intend to use. For CLIProxyAPI v8, run only the login commands for the accounts
+you will use, then start the bridge in a separate terminal:
+
+```sh
+cli-proxy-api --config "$BRIDGE_CONFIG" -claude-login
+cli-proxy-api --config "$BRIDGE_CONFIG" -codex-login
+cli-proxy-api --config "$BRIDGE_CONFIG" -xai-login
+cli-proxy-api --config "$BRIDGE_CONFIG"
+```
+
+Pass `http://127.0.0.1:8317/v1` as
+`--base-url` and the CLIProxyAPI executable as `--bridge-binary`. Set
+`KEYGEN_CONTRIB_API_KEY` privately to the local bearer above, then run:
+
+```sh
+"$PYTHON" benchmark/contrib/cli.py verify --config "$CONFIG"
+```
+
+The CLI repeats this catalog check automatically for OAuth routes before its
+paid readiness pilot. For `xai_oauth`, it accepts either the exact provider ID
+returned by CLIProxyAPI or OMP's exact `xai-oauth/<model>` entry on
+`openai-responses`. For Anthropic OAuth, no-cloak mode can be rejected
+by an account route that requires Claude Code identity instructions ([known
+CLIProxyAPI OAuth limitation](https://github.com/router-for-me/CLIProxyAPI/issues/337));
+if that happens, stop. Do not enable cloaking for a benchmark run. The bridge's binary
+hash is recorded, but the hash does not prove its config or upstream behavior.
 
 Before either command runs a benchmark attempt, it performs a real native
 readiness pilot with the same model, provider, protocol, endpoint, tier,
@@ -137,14 +196,15 @@ runner and submission contract as the explicit invocation.
    `nim`, `vercel`, and `custom` for a public HTTPS service implementing
    Chat Completions, Responses, or Messages. Protocol compatibility does not
    establish model identity or equivalent reasoning behavior. See
-   `benchmark/README.md` for route restrictions. `codex_oauth` and
-   `anthropic_oauth` require your own authorized loopback bridge. `xai_oauth`
-   requires the OMP auth-broker/gateway path described above.
-6. Set your credential privately. Do not put it in a command, config, PR, or
-   committed file. Bash can read it without showing it or saving it in history:
+   `benchmark/README.md` for route restrictions. All OAuth providers require
+   a user-owned loopback bridge. Use the reference no-cloak profile above where
+   supported. The CLI verifies its model catalog before the paid readiness pilot.
+6. Set your API key or local bridge bearer privately. Do not put it in a command,
+   config, PR, or committed file. Bash can read it without showing it or saving
+   it in history:
 
    ```sh
-   read -rsp 'Provider credential: ' KEYGEN_CONTRIB_API_KEY; echo
+   read -rsp 'Provider API key or local bridge bearer: ' KEYGEN_CONTRIB_API_KEY; echo
    export KEYGEN_CONTRIB_API_KEY
    ```
 
@@ -168,11 +228,12 @@ unset KEYGEN_CONTRIB_API_KEY
 ```
 
 For an OAuth route, pass its private loopback `--base-url` and
-`--bridge-binary PATH` pointing to the executable that runs your bridge. The
-bundle records the provider, API protocol, exact model, loopback transport
-class, and executable SHA-256. It does not publish the bridge address, port,
-or executable path. The hash identifies the supplied binary; it does not prove
-which server handled requests or what that server sent upstream.
+`--bridge-binary PATH` pointing to the executable that runs your bridge. Run
+`verify` first to check the exact advertised model without inference. The bundle
+records the provider, API protocol, exact model, loopback transport class, and
+executable SHA-256. It does not publish the bridge address, port, or executable
+path. The hash identifies the supplied binary; it does not prove its config,
+which server handled requests, or what that server sent upstream.
 
 Use new work and output directories. Before starting the three attempts, the
 command runs a real native readiness pilot with the exact configured route and

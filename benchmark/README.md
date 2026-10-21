@@ -70,17 +70,33 @@ Use the [guided contributor CLI](../CONTRIBUTING-RUNS.md#guided-setup-and-run) f
 | `mistral` | Chat Completions | `https://api.mistral.ai/v1` |
 | `cohere` | Chat Completions | `https://api.cohere.ai/compatibility/v1` |
 | `custom` | Chat Completions, Responses or Messages | User-selected public HTTPS endpoint |
-| `anthropic_oauth` | Messages | User-owned authorized loopback bridge |
-| `codex_oauth` | Responses | User-owned authorized loopback bridge |
-| `xai_oauth` | Responses | OMP `auth-gateway` on loopback, backed by an authorized OMP auth broker |
+| `anthropic_oauth` | Messages | User-owned no-cloak loopback bridge, such as CLIProxyAPI |
+| `codex_oauth` | Responses | User-owned no-cloak loopback bridge, such as CLIProxyAPI |
+| `xai_oauth` | Responses | User-owned loopback bridge; CLIProxyAPI or OMP auth-gateway |
 
-For xAI OAuth, use the contributor CLI's `verify` command before any inference.
-It checks authenticated `/v1/models` discovery for the exact `xai-oauth/<model>`
-ID and Responses protocol. OMP's auth-gateway serves the local OMP credential store
-through an auth broker bound to loopback; both local services must be running.
-The endpoint is a base URL, not the full request path. Custom service support requires compatible tool calling, generation controls and exact response-model identity. Selecting a protocol does not translate arbitrary service APIs or guarantee that a proxy forwards the requested settings. Public custom URLs are included in submission provenance; keep private endpoints and identifying tenant paths out of public bundles.
+Use the contributor CLI's `verify` command before any OAuth inference. It checks
+authenticated `/v1/models` discovery for exactly the configured model ID. For
+OMP's xAI gateway it also requires the `xai-oauth/<model>` ID on
+`openai-responses`; CLIProxyAPI uses the provider's exact model ID. The check
+sends no inference and does not prove what a bridge sends upstream.
 
-Only OAuth bridges use private loopback HTTP. Bridge login and server lifecycle remain the user's responsibility; the CLI records the executable digest rather than its private path or address. Never route a direct API key through a bridge without deliberately configuring that service.
+The reference [CLIProxyAPI setup](../CONTRIBUTING-RUNS.md#reference-cliproxyapi-setup)
+disables Claude prompt replacement and model-list cloaking, Codex client-identity
+headers, xAI search-tool injection, image generation, and plugins. Use a dedicated
+config without model aliases or fallback pools. Use a bridge only when its source
+and config preserve the frozen prompt, tools, model and generation settings. A
+provider that requires added system instructions or tools is not eligible on
+that route. In particular, if Anthropic OAuth rejects no-cloak mode, stop rather
+than turning cloaking on. The endpoint is a base URL, not the full request path.
+Custom service support requires compatible tool calling, generation controls
+and exact model identity. Public custom URLs are included in submission
+provenance; keep private endpoints and identifying tenant paths out of public
+bundles.
+
+Only OAuth bridges use private loopback HTTP. Bridge login and server lifecycle
+remain the user's responsibility; the CLI records the executable digest rather
+than its private path or address. Never route a direct API key through a bridge
+without deliberately configuring that service.
 
 ## Configure a campaign
 

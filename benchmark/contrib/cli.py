@@ -109,7 +109,7 @@ def parser():
     doctor.add_argument("--xm", type=Path, help="Explicit synthetic XM for --sandbox")
     doctor.add_argument("--work", type=Path, help="New absolute private directory for --sandbox evidence")
     doctor.add_argument("--no-input", action="store_true", help="Doctor never prompts")
-    verify = commands.add_parser("verify", help="Check an xAI OAuth bridge catalog and exact model identity without inference")
+    verify = commands.add_parser("verify", help="Check an OAuth bridge catalog and exact model identity without inference")
     verify.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
     for name, description in (("smoke", "Spend on one bounded native-readiness pilot and smoke attempt; never eligible for submission"),
                               ("run", "Spend on one native-readiness pilot plus all three frozen attempts and package every outcome")):
@@ -363,34 +363,47 @@ def bridge_check(config):
     return runner.sha(config.bridge_binary)
 
 
-def verify_xai_catalog(config):
-    """Confirm the OMP OAuth gateway lists the exact Responses model before inference."""
-    if config.provider != "xai_oauth" or config.api != "responses":
-        raise CLIError("Catalog verification is currently defined only for the xAI OAuth Responses route")
+def verify_model_catalog(config):
+    """Confirm a user-owned OAuth bridge lists the exact configured model without inference."""
+    if config.provider not in runner.BRIDGE_PROVIDERS:
+        raise CLIError("Catalog verification is available only for OAuth bridge routes")
     if not os.environ.get("KEYGEN_CONTRIB_API_KEY"):
-        raise CLIError("Set KEYGEN_CONTRIB_API_KEY to the local OMP gateway bearer token; no inference was sent")
+        raise CLIError("Set KEYGEN_CONTRIB_API_KEY to the local bridge bearer token; no inference was sent")
     endpoint = config.base_url.rstrip("/") + "/models"
     request = Request(endpoint, headers={"Authorization": "Bearer " + os.environ["KEYGEN_CONTRIB_API_KEY"],
                                          "Accept": "application/json"})
     try:
         with urlopen(request, timeout=10) as response:
             if response.status != 200:
-                raise CLIError(f"OMP gateway model catalog returned HTTP {response.status}; no inference was sent")
+                raise CLIError(f"OAuth bridge model catalog returned HTTP {response.status}; no inference was sent")
             catalog_bytes = response.read(MAX_MODEL_CATALOG_BYTES + 1)
             if len(catalog_bytes) > MAX_MODEL_CATALOG_BYTES:
-                raise CLIError("OMP gateway model catalog exceeds 2 MiB; no inference was sent")
+                raise CLIError("OAuth bridge model catalog exceeds 2 MiB; no inference was sent")
             payload = json.loads(catalog_bytes)
     except CLIError:
         raise
     except Exception as exc:
-        raise CLIError(f"Could not read OMP gateway model catalog ({type(exc).__name__}); no inference was sent") from None
+        raise CLIError(f"Could not read OAuth bridge model catalog ({type(exc).__name__}); no inference was sent") from None
     if not isinstance(payload, dict) or not isinstance(payload.get("data"), list):
-        raise CLIError("OMP gateway returned an unsupported model catalog; no inference was sent")
-    expected_id = "xai-oauth/" + config.model
-    matches = [item for item in payload["data"] if isinstance(item, dict) and item.get("id") == expected_id]
-    if len(matches) != 1 or matches[0].get("api") != "openai-responses":
-        raise CLIError(f"OMP gateway did not advertise exactly {expected_id} on openai-responses; no inference was sent")
-    print(f"Verified OMP gateway catalog: {expected_id} (openai-responses). No inference was sent.")
+        raise CLIError("OAuth bridge returned an unsupported model catalog; no inference was sent")
+
+    # CLIProxyAPI returns provider model IDs, while OMP's xAI gateway prefixes IDs
+    # and declares the Responses protocol. Accept only those two exact catalog shapes.
+    expected_ids = {config.model}
+    if config.provider == "xai_oauth":
+        expected_ids.add("xai-oauth/" + config.model)
+    matches = [item for item in payload["data"]
+               if isinstance(item, dict) and item.get("id") in expected_ids]
+    if len(matches) != 1:
+        raise CLIError(f"OAuth bridge did not advertise exactly model {config.model}; no inference was sent")
+    match = matches[0]
+    if config.provider == "xai_oauth":
+        if match.get("id", "").startswith("xai-oauth/"):
+            if match.get("api") != "openai-responses":
+                raise CLIError(f"OMP did not advertise {config.model} on openai-responses; no inference was sent")
+        elif match.get("api") not in (None, "openai-responses"):
+            raise CLIError("OAuth bridge catalog does not advertise xAI on responses; no inference was sent")
+    print(f"Verified OAuth bridge catalog: {config.model} ({config.api}). No inference was sent.")
 
 
 def admit_artifact_disk(directory, synthetic_xm=None):
@@ -610,7 +623,7 @@ def main(argv=None):
             return doctor(args)
         elif args.command == "verify":
             settings = load_config(args.config)
-            verify_xai_catalog(settings)
+            verify_model_catalog(settings)
             return 0
         else:
             settings = load_config(args.config)
@@ -620,6 +633,8 @@ def main(argv=None):
             consent(args, settings)
             obtain_credential(args)
             bridge_check(settings)
+            if settings.provider in runner.BRIDGE_PROVIDERS:
+                verify_model_catalog(settings)
             if args.command == "run":
                 settings.work, settings.out = work, args.out
                 runner.execute(settings)

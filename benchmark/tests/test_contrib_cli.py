@@ -186,10 +186,12 @@ class ContributionCLITests(unittest.TestCase):
 
     def test_xai_model_catalog_verification_checks_exact_identity_and_protocol(self):
         class Handler(BaseHTTPRequestHandler):
+            body = json.dumps({"object": "list", "data": [
+                {"id": "xai-oauth/grok-4.5", "api": "openai-responses"}]}).encode()
+
             def do_GET(self):
                 self.assert_authorization()
-                body = json.dumps({"object": "list", "data": [
-                    {"id": "xai-oauth/grok-4.5", "api": "openai-responses"}]}).encode()
+                body = type(self).body
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(body)))
@@ -215,9 +217,59 @@ class ContributionCLITests(unittest.TestCase):
         previous = os.environ.get("KEYGEN_CONTRIB_API_KEY")
         os.environ["KEYGEN_CONTRIB_API_KEY"] = "FAKE_CLI_CREDENTIAL_DO_NOT_ECHO"
         try:
-            cli.verify_xai_catalog(settings)
+            cli.verify_model_catalog(settings)
+            Handler.body = json.dumps({"object": "list", "data": [
+                {"id": "xai-oauth/grok-4.5", "api": "openai-chat-completions"}]}).encode()
+            with self.assertRaisesRegex(cli.CLIError, "openai-responses"):
+                cli.verify_model_catalog(settings)
+            Handler.body = json.dumps({"object": "list", "data": [
+                {"id": "xai-oauth/grok-4.5", "api": "openai-responses"}]}).encode()
             with self.assertRaisesRegex(cli.CLIError, "did not advertise exactly"):
-                cli.verify_xai_catalog(argparse.Namespace(**{**vars(settings), "model": "grok-4.6"}))
+                cli.verify_model_catalog(argparse.Namespace(**{**vars(settings), "model": "grok-4.6"}))
+        finally:
+            if previous is None:
+                os.environ.pop("KEYGEN_CONTRIB_API_KEY", None)
+            else:
+                os.environ["KEYGEN_CONTRIB_API_KEY"] = previous
+
+    def test_oauth_bridge_catalog_accepts_exact_cli_proxy_model_ids_without_inference(self):
+        class Handler(BaseHTTPRequestHandler):
+            body = b""
+
+            def do_GET(self):
+                if self.headers.get("Authorization") != "Bearer FAKE_CLI_CREDENTIAL_DO_NOT_ECHO":
+                    raise AssertionError("bridge bearer was not sent")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(self.body)))
+                self.end_headers()
+                self.wfile.write(self.body)
+
+            def log_message(self, format, *args):
+                pass
+
+        previous = os.environ.get("KEYGEN_CONTRIB_API_KEY")
+        os.environ["KEYGEN_CONTRIB_API_KEY"] = "FAKE_CLI_CREDENTIAL_DO_NOT_ECHO"
+        try:
+            for provider, api, model in (("anthropic_oauth", "messages", "claude-sonnet-4-5"),
+                                         ("codex_oauth", "responses", "gpt-5.6-sol"),
+                                         ("xai_oauth", "responses", "grok-4.6")):
+                with self.subTest(provider=provider):
+                    Handler.body = json.dumps({"object": "list", "data": [{"id": model}]}).encode()
+                    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+                    thread = threading.Thread(target=server.serve_forever, daemon=True)
+                    thread.start()
+                    try:
+                        settings = argparse.Namespace(provider=provider, api=api, model=model,
+                                                      base_url=f"http://127.0.0.1:{server.server_port}/v1",
+                                                      bridge_binary=Path(sys.executable))
+                        cli.verify_model_catalog(settings)
+                        with self.assertRaisesRegex(cli.CLIError, "did not advertise exactly"):
+                            cli.verify_model_catalog(argparse.Namespace(**{**vars(settings), "model": model + "-alias"}))
+                    finally:
+                        server.shutdown()
+                        server.server_close()
+                        thread.join(timeout=2)
         finally:
             if previous is None:
                 os.environ.pop("KEYGEN_CONTRIB_API_KEY", None)
@@ -250,7 +302,7 @@ class ContributionCLITests(unittest.TestCase):
         os.environ["KEYGEN_CONTRIB_API_KEY"] = "FAKE_CLI_CREDENTIAL_DO_NOT_ECHO"
         try:
             with self.assertRaisesRegex(cli.CLIError, "exceeds 2 MiB"):
-                cli.verify_xai_catalog(settings)
+                cli.verify_model_catalog(settings)
         finally:
             if previous is None:
                 os.environ.pop("KEYGEN_CONTRIB_API_KEY", None)
