@@ -25,7 +25,8 @@ Use the installed environments for the remaining commands:
 PYTHON="$HOME/.local/share/keygen-bench/venv/bin/python"
 export KEYGEN_LISTENER_PYTHON="$HOME/.local/share/keygen-bench/listener-venv/bin/python"
 CONFIG="$HOME/.config/keygen-bench/model.json"
-"$PYTHON" benchmark/contrib/cli.py configure --config "$CONFIG"
+"$PYTHON" benchmark/contrib/cli.py login openai --method api-key
+"$PYTHON" benchmark/contrib/cli.py configure --provider openai --config "$CONFIG"
 "$PYTHON" benchmark/contrib/cli.py doctor --config "$CONFIG"
 ```
 
@@ -39,83 +40,136 @@ Credentials are supplied separately; they are not stored in the configuration.
 Use `--no-input` and explicit configuration flags for automation; see
 `configure --help`. Presets supply endpoint defaults, not guessed model settings.
 
-For API-key routes, set `KEYGEN_CONTRIB_API_KEY` privately as shown below.
-For `anthropic_oauth`, `codex_oauth`, or `xai_oauth`, use your own authorized
-loopback bridge. The reference setup below disables Claude prompt replacement,
-Codex client-identity headers, and known extra tools. It keeps each provider
-login in its own credential store, outside this checkout. The contributor CLI
-uses only the bridge's local bearer; it never reads the provider's OAuth tokens.
+### OAuth login, with API keys as an explicit alternative
 
-Before any OAuth inference, run `verify`. It sends only an authenticated
-`GET /v1/models` request and requires one exact model ID. It does not test
-inference or prove what the bridge sends upstream. Do not use a bridge that
-changes the frozen system prompt, tools, model, or generation settings. If a
-provider requires an extra client identity prompt or injected tool, stop that
-route rather than enabling a cloak or compatibility prompt.
+This is Keygen's contributor command, not an upstream `mini-swe-agent login`
+command. Upstream mini does not provide these login subcommands.
 
-### Reference CLIProxyAPI setup
-
-Install a verified CLIProxyAPI release from its [official releases](https://github.com/router-for-me/CLIProxyAPI/releases).
-Set `BRIDGE_CONFIG` to a private config path outside the checkout. This example
-binds to loopback, uses a local bearer separate from provider credentials, and
-disables known prompt/tool additions:
-
-```yaml
-config-version: 8
-server:
-  host: 127.0.0.1
-  port: 8317
-access:
-  api-keys:
-    - REPLACE_WITH_A_RANDOM_LOCAL_BEARER
-management:
-  secret-key: ""
-oauth:
-  auth-dir: /absolute/private/path/keygen-cliproxyapi-auth
-upstream:
-  claude:
-    disable-claude-cloak-mode: true
-    disable-cloaking-model-list: true
-  codex:
-    disable-codex-cloaking: true
-  xai:
-    inject-x-search: false
-multimedia:
-  disable-image-generation: true
-plugins:
-  enabled: false
-```
-
-The [CLIProxyAPI config reference](https://github.com/router-for-me/CLIProxyAPI/blob/main/config.example.yaml)
-defines these settings. Use a dedicated config with no model aliases or fallback
-pools. Do not set a credential-level Claude `cloak_mode` override, because it
-can override the shared no-cloak setting. Sign in only to account routes you
-intend to use. For CLIProxyAPI v8, run only the login commands for the accounts
-you will use, then start the bridge in a separate terminal:
+Install a reviewed [CLIProxyAPI v8 release](https://github.com/router-for-me/CLIProxyAPI/releases)
+on your own trusted machine. Keygen does not download or execute an unselected
+bridge automatically. Then choose one account:
 
 ```sh
-cli-proxy-api --config "$BRIDGE_CONFIG" -claude-login
-cli-proxy-api --config "$BRIDGE_CONFIG" -codex-login
-cli-proxy-api --config "$BRIDGE_CONFIG" -xai-login
-cli-proxy-api --config "$BRIDGE_CONFIG"
+"$PYTHON" benchmark/contrib/cli.py login codex --bridge-binary /absolute/path/cli-proxy-api
+"$PYTHON" benchmark/contrib/cli.py login xai --bridge-binary /absolute/path/cli-proxy-api
+"$PYTHON" benchmark/contrib/cli.py login anthropic --bridge-binary /absolute/path/cli-proxy-api
 ```
 
-Pass `http://127.0.0.1:8317/v1` as
-`--base-url` and the CLIProxyAPI executable as `--bridge-binary`. Set
-`KEYGEN_CONTRIB_API_KEY` privately to the local bearer above, then run:
+Run only the commands for the providers you intend to use. `codex`/`openai`,
+`anthropic` and `xai` default to OAuth, never silently to billable API keys.
+The CLI explains community-support and provider restrictions and asks before
+starting login; `--accept-community-auth` records that deliberate choice.
+It requires an interactive terminal. `--no-browser` suppresses automatic browser
+opening, but does not make the consent/device-code flow unattended.
+
+- Codex uses CLIProxyAPI's device login (`-codex-device-login`), avoiding a local
+  callback listener. This is its community compatibility flow, not OpenAI's
+  separately documented open-source-client registration integration.
+- xAI uses its device login (`-xai-login`). This is an implemented community
+  flow; we have not established an official third-party subscription contract.
+- Anthropic uses its browser/PKCE login (`-claude-login`). Anthropic does not
+  officially permit third-party Claude subscription login here. The inspected
+  bridge callback listens on port 54545 and may bind beyond loopback, so use a
+  trusted local machine. Do not confuse this with supported API-key access or
+  Anthropic's unmodified-Claude-Code exception.
+- Gemini is available via explicit API-key setup below. The inspected bridge
+  exposes Antigravity, not a generic Gemini CLI login; we do not pretend they
+  are interchangeable or guess unsupported flags.
+
+The selected bridge handles its own provider-token storage and refresh. Keygen
+never reads or copies those provider tokens. Generated v8 configuration lives
+under `~/.config/keygen-benchmark/credentials/oauth/PROVIDER/`, with a dedicated
+private token directory, loopback inference listener, random local bearer and
+known prompt/tool cloaking disabled. Provider profiles are isolated and ports
+default to 8317 (Codex), 8318 (Anthropic) and 8319 (xAI). `--bridge-port` changes
+only the inference port, not browser OAuth callback ports. Existing profiles
+are reused rather than overwritten.
+
+Some bridge login helpers return exit code zero after reporting an error.
+Keygen therefore never equates process completion or credential-file presence
+with remotely verified authentication. No login makes inference requests.
+
+After login, keep the bridge in a separate foreground terminal:
 
 ```sh
+"$PYTHON" benchmark/contrib/cli.py bridge-serve xai
+"$PYTHON" benchmark/contrib/cli.py auth-status xai
+"$PYTHON" benchmark/contrib/cli.py configure --provider xai_oauth \
+  --base-url http://127.0.0.1:8319/v1 --bridge-binary /absolute/path/cli-proxy-api --config "$CONFIG"
 "$PYTHON" benchmark/contrib/cli.py verify --config "$CONFIG"
 ```
 
-The CLI repeats this catalog check automatically for OAuth routes before its
-paid readiness pilot. For `xai_oauth`, it accepts either the exact provider ID
-returned by CLIProxyAPI or OMP's exact `xai-oauth/<model>` entry on
-`openai-responses`. For Anthropic OAuth, no-cloak mode can be rejected
-by an account route that requires Claude Code identity instructions ([known
-CLIProxyAPI OAuth limitation](https://github.com/router-for-me/CLIProxyAPI/issues/337));
-if that happens, stop. Do not enable cloaking for a benchmark run. The bridge's binary
-hash is recorded, but the hash does not prove its config or upstream behavior.
+Run/smoke uses only the generated local bearer, and only for the matching
+loopback endpoint and executable. `verify` also uses that matching local bearer automatically; it never reads
+provider tokens. `auth-status` reports
+configuration presence, not remote validity. Stop the bridge and revoke access
+in the provider account to sign out; automatic bridge OAuth logout/revocation
+is not implemented, and `logout --method oauth` says so rather than claiming
+that deleting a local file revokes access.
+
+### API keys and OpenAI-compatible endpoints
+
+Use `--method api-key` to deliberately choose API billing instead of OAuth:
+
+```sh
+"$PYTHON" benchmark/contrib/cli.py login anthropic --method api-key
+"$PYTHON" benchmark/contrib/cli.py login gemini --method api-key
+"$PYTHON" benchmark/contrib/cli.py login custom --method api-key --base-url https://YOUR-PROVIDER/v1
+"$PYTHON" benchmark/contrib/cli.py configure --provider custom --base-url https://YOUR-PROVIDER/v1 --config "$CONFIG"
+```
+
+Named key presets: OpenAI/Codex, Anthropic, xAI, Gemini/Google, OpenRouter,
+DeepSeek, Groq, Mistral and Cohere. Custom public HTTPS endpoints support the
+existing native Chat Completions, Responses or Messages transport. Choose the
+exact model ID, protocol, documented reasoning tier and output cap. Compatibility
+is not a guarantee of tool support, model identity or parameter preservation.
+There is no model allowlist for custom endpoints, but the frozen execution
+requirements still apply. Google uses its native Gemini adapter.
+
+API-key login prints the provider console link, asks permission to save and
+reads the key without echo. Keys are plaintext owner-only files (0600 under a
+0700 private directory), never inside model configuration or the checkout.
+A custom key is bound to its exact endpoint; keys are never automatically sent
+to another host or bridge. No provider request is sent during key setup.
+Use `--auth-dir` consistently for login, configure, doctor, smoke and run to
+select another private directory. API `auth-status` and `logout` also require
+`--method api-key` for OAuth-default providers; custom keys require the same
+`--base-url`. Local logout does not revoke a provider API key.
+
+For automation, supply the provider environment variable privately, then use
+`login PROVIDER --method api-key --no-input --save` only if local storage is
+intended. Custom login uses `KEYGEN_CONTRIB_API_KEY`; named profiles use their
+standard variables, such as `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `XAI_API_KEY`
+and `GEMINI_API_KEY`. `--replace` is required to overwrite saved keys. Never
+supply secrets in command-line arguments. Without storage, smoke/run can use
+these environment credentials directly at their matching destinations.
+
+### Authentication is not benchmark qualification
+
+A successful OAuth login is useful, but it does not establish unchanged prompts
+or generation settings. At inspected CLIProxyAPI commit
+`0db19025571684b198a2ef508f99b41c717337e8`, the Codex Responses translator removes
+output caps, temperature and top_p; Claude normalization removes temperature
+and top_p independently of no-cloak. Consequently new `codex_oauth` and
+`anthropic_oauth` contributor smoke/runs fail before spending. Login remains
+available separately. Do not silently remove these checks or replace frozen
+settings to make a route run. Historical evidence/validator schemas are retained.
+
+The advanced xAI route keeps its existing eligibility checks, but catalog lookup
+is not final-upstream payload verification. Known xAI search-tool injection is
+disabled in the generated profile. Before accepting bridge results as equivalent,
+verify the exact bridge version/config and sanitized final outbound request;
+client logs and model catalogs alone are insufficient. Provider-internal hidden
+instructions cannot be ruled out by client inspection.
+
+[OpenAI's official OSS OAuth](https://developers.openai.com/siwc/token-sharing-open-source)
+is a possible future direct transport, but its current
+[preview constraints](https://developers.openai.com/siwc/token-sharing-open-source/preview-limitations)
+also exclude the frozen output-token caps/sampling controls. It needs its own
+PKCE/client registration/token lifecycle and a disclosed compatible condition,
+not a silent drop-in. [Anthropic's current rules](https://code.claude.com/docs/en/legal-and-compliance#authentication-and-credential-use)
+distinguish API keys, third-party subscription credentials and the unmodified
+Claude Code binary. No wrapper setting changes those provider rules.
 
 Before either command runs a benchmark attempt, it performs a real native
 readiness pilot with the same model, provider, protocol, endpoint, tier,
@@ -196,9 +250,8 @@ runner and submission contract as the explicit invocation.
    `nim`, `vercel`, and `custom` for a public HTTPS service implementing
    Chat Completions, Responses, or Messages. Protocol compatibility does not
    establish model identity or equivalent reasoning behavior. See
-   `benchmark/README.md` for route restrictions. All OAuth providers require
-   a user-owned loopback bridge. Use the reference no-cloak profile above where
-   supported. The CLI verifies its model catalog before the paid readiness pilot.
+   `benchmark/README.md` for route restrictions. Prefer the provider API-key
+   setup above. OAuth login is available separately from frozen-route eligibility.
 6. Set your API key or local bridge bearer privately. Do not put it in a command,
    config, PR, or committed file. Bash can read it without showing it or saving
    it in history:
@@ -311,3 +364,4 @@ The PR workflow uses read-only permissions, no provider credentials, and
 validator code from the trusted base commit. Maintainers check provenance and
 re-render `tune.xm` with a separately selected trusted image. Submitted scores
 never establish a trusted result. See `submissions/README.md`.
+

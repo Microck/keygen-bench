@@ -9,8 +9,8 @@ Examples:
   <printed-venv-python> benchmark/contrib/cli.py run --work /private/new-run --out submissions/new-bundle
 
 Model smoke and run spend money and require confirmation. Doctor never sends
-provider requests. OAuth requires a separately installed, user-authorized
-loopback bridge; this CLI does not log in or extract account tokens.
+provider requests. Login orchestrates local OAuth or explicit API-key setup. Authentication is
+separate from compatibility with the frozen benchmark contract.
 """
 from __future__ import annotations
 
@@ -37,6 +37,8 @@ CONTRIB = Path(__file__).resolve().parent
 ROOT = CONTRIB.parents[1]
 sys.path.insert(0, str(CONTRIB))
 import run_contrib as runner
+import auth
+import oauth_bridge
 from native_models import PROVIDERS, PROTOCOLS, validate_model
 from score_playback import DEFAULT_BINARY, renderer_identity
 
@@ -56,6 +58,7 @@ VISUALIZER_IMAGE = "keygen-ft2-visualizer:local"
 APT_GUIDANCE = "sudo apt-get update && sudo apt-get install -y python3-venv build-essential git pkg-config libsdl2-dev libmicrohttpd-dev"
 CREDENTIAL_NAME = re.compile(r"(?:key|token)$|(?:^|_)(?:key|token|secret|password)(?:_|$)", re.I)
 MAX_MODEL_CATALOG_BYTES = 2 * 1024 * 1024
+DEFAULT_AUTH_DIR = Path.home() / ".config/keygen-benchmark/credentials"
 
 
 class CLIError(ValueError):
@@ -84,14 +87,29 @@ def json_object(text):
 def parser():
     result = Parser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     commands = result.add_subparsers(dest="command", required=True, parser_class=Parser)
+    for action in ("login", "auth-status", "logout", "bridge-serve"):
+        command = commands.add_parser(action, help={"login": "Configure a provider API key locally; no inference or subscription login", "auth-status": "Show local credential presence, not remote validity", "logout": "Remove a saved local key; does not revoke the provider key", "bridge-serve": "Run your configured OAuth bridge in the foreground"}[action])
+        command.add_argument("provider", choices=auth.NAMES)
+        command.add_argument("--auth-dir", type=Path, default=DEFAULT_AUTH_DIR)
+        command.add_argument("--no-input", action="store_true")
+        command.add_argument("--base-url", help="Exact public HTTPS endpoint for custom API-key login")
+        command.add_argument("--method", choices=["api-key", "oauth"], help="Defaults to OAuth for codex/openai/anthropic/xai, API key for other providers")
+        if action == "login":
+            command.add_argument("--bridge-binary", type=Path, help="Explicit installed CLIProxyAPI v8 executable")
+            command.add_argument("--bridge-port", type=int, help="Loopback inference port, not OAuth callback port")
+            command.add_argument("--no-browser", action="store_true")
+            command.add_argument("--accept-community-auth", action="store_true", help="Acknowledge community integration/provider restrictions, not official endorsement")
+            command.add_argument("--save", action="store_true", help="Explicitly allow owner-only plaintext key storage outside the checkout")
+            command.add_argument("--replace", action="store_true", help="Replace this provider's saved key")
     setup = commands.add_parser("setup", help="Install pinned packages and build both Docker targets and trusted renderer")
     setup.add_argument("--home", type=Path, default=DEFAULT_HOME, help="Private directory outside checkout for the virtual environment")
     setup.add_argument("--no-input", action="store_true", help="Never prompt; setup already needs no input")
     configure = commands.add_parser("configure", help="Save owner-only nonsecret model settings outside checkout")
     configure.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
+    configure.add_argument("--auth-dir", type=Path, default=DEFAULT_AUTH_DIR)
     configure.add_argument("--no-input", action="store_true")
     configure.add_argument("--replace", action="store_true", help="Replace an existing private configuration")
-    configure.add_argument("--provider", choices=sorted(PROVIDERS))
+    configure.add_argument("--provider", choices=sorted(set(PROVIDERS) | set(auth.NAMES)))
     configure.add_argument("--model", help="Exact model identifier, never an inferred default")
     configure.add_argument("--api", choices=["chat", "responses", "messages"])
     configure.add_argument("--base-url", help="Preset endpoint, reviewed custom HTTPS URL, or authorized loopback bridge /v1")
@@ -104,6 +122,7 @@ def parser():
     configure.add_argument("--visualizer-image", default=VISUALIZER_IMAGE)
     doctor = commands.add_parser("doctor", help="Check prerequisites offline, without model or HTTP requests")
     doctor.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
+    doctor.add_argument("--auth-dir", type=Path, default=DEFAULT_AUTH_DIR)
     doctor.add_argument("--infrastructure-only", action="store_true", help="Check runtime/images/renderer without provider configuration or credential")
     doctor.add_argument("--sandbox", action="store_true", help="Collect, render and score an explicit synthetic XM in offline Docker; never submission eligible")
     doctor.add_argument("--xm", type=Path, help="Explicit synthetic XM for --sandbox")
@@ -111,10 +130,12 @@ def parser():
     doctor.add_argument("--no-input", action="store_true", help="Doctor never prompts")
     verify = commands.add_parser("verify", help="Check an OAuth bridge catalog and exact model identity without inference")
     verify.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
+    verify.add_argument("--auth-dir", type=Path, default=DEFAULT_AUTH_DIR)
     for name, description in (("smoke", "Spend on one bounded native-readiness pilot and smoke attempt; never eligible for submission"),
                               ("run", "Spend on one native-readiness pilot plus all three frozen attempts and package every outcome")):
         command = commands.add_parser(name, help=description)
         command.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
+        command.add_argument("--auth-dir", type=Path, default=DEFAULT_AUTH_DIR)
         command.add_argument("--work", type=Path, required=True, help="New absolute private working directory outside checkout")
         if name == "run":
             command.add_argument("--out", type=Path, required=True, help="New bundle directory; review before publishing")
@@ -241,6 +262,11 @@ def configure(args):
                 raise CLIError(f"Missing --{field.replace('_', '-')}; supply it with --no-input, or configure in a terminal")
             text = input(label + ": ").strip()
             setattr(args, field, json_object(text) if field == "generation" else text)
+    if args.provider in auth.NAMES and args.provider != "custom":
+        profile = auth.PROFILES[auth.canonical(args.provider)]
+        args.provider = profile[0]
+        if args.base_url is None:
+            args.base_url = profile[1]
     if args.provider not in PROVIDERS:
         raise CLIError("Choose a supported provider; see configure --help")
     if args.base_url is None:
@@ -260,7 +286,7 @@ def configure(args):
     # Never serialize any environment value or hidden-prompt credential.
     save_config(args.config, values, replace=args.replace)
     print(f"Saved private configuration to {args.config}. No credential was saved.")
-    print("Set KEYGEN_CONTRIB_API_KEY privately in your controller environment, then run doctor. Run/smoke can also ask for it without echo in a terminal.")
+    print("Run login PROVIDER to save a private API key, or set KEYGEN_CONTRIB_API_KEY in your controller environment, then run doctor. Login never spends or changes these model settings.")
 
 
 def prerequisite_errors(*, build=True):
@@ -418,6 +444,136 @@ def admit_artifact_disk(directory, synthetic_xm=None):
                           directory=directory)
 
 
+def auth_directory(path, *, create=False):
+    path = outside_path(path)
+    if create:
+        return private_directory(path)
+    if path.exists():
+        check_owner(path, directory=True)
+    return path
+
+
+def provider_auth(args):
+    method = args.method or ("oauth" if args.provider in {"openai", "codex", "anthropic", "xai"} else "api-key")
+    if method == "oauth" or args.command == "bridge-serve":
+        return oauth_action(args)
+    name = auth.canonical(args.provider)
+    endpoint = None
+    if name == "custom":
+        if not args.base_url:
+            raise CLIError("Custom login requires --base-url with the exact public HTTPS endpoint")
+        endpoint = args.base_url.rstrip("/")
+        runner.validate_url(endpoint, "custom", "chat")
+        profile = ("custom", endpoint, "KEYGEN_CONTRIB_API_KEY", "your endpoint operator’s official key-management console")
+    else:
+        profile = auth.PROFILES[name]
+    if args.command == "login":
+        print(f"{args.provider}: API-key setup for {profile[1]}. This is NOT subscription login. API billing is separate.")
+        print(f"Manage keys: {profile[3]}")
+        if not args.save:
+            if not interactive(args):
+                raise CLIError("Use --save to explicitly allow local plaintext credential storage, or keep the key in the environment")
+            if input("Save the key in an owner-only plaintext file outside the checkout? [y/N] ").strip().lower() not in {"y", "yes"}:
+                print("Nothing saved. Use your provider key in the environment for each session.")
+                return
+        key = os.environ.get(profile[2])
+        if not key and name == "google":
+            key = os.environ.get("GOOGLE_API_KEY")
+        if not key:
+            if not interactive(args):
+                raise CLIError(f"Set {profile[2]} privately, or run login in a terminal for a hidden prompt")
+            key = getpass.getpass("Provider API key (hidden): ")
+        auth.save_key(auth_directory(args.auth_dir, create=True), name, key, replace=args.replace, endpoint=endpoint)
+        print(f"Configured {args.provider} locally. Not remotely verified; no provider request or inference was sent. Next: configure --provider {args.provider}.")
+    else:
+        directory = auth_directory(args.auth_dir)
+        key = auth.read_key(directory, name, endpoint)
+        if args.command == "auth-status":
+            print("Saved API key present; remote validity unverified." if key else "No saved API key. Environment keys may still be used.")
+        elif key is not None:
+            (directory / (auth.identity(name, endpoint)[0] + ".json")).unlink()
+            print("Removed the local key only. Provider key remains active; revoke it in the provider console if needed. Environment variables are unchanged.")
+        else:
+            print("No saved API key to remove. Environment variables are unchanged.")
+
+
+def oauth_action(args):
+    name = oauth_bridge.provider(args.provider)
+    directory = outside_path(args.auth_dir)
+    path = oauth_bridge.config_path(directory, name)
+    if args.command == "login":
+        if not interactive(args):
+            raise CLIError("OAuth requires an interactive local terminal; --no-browser still needs user consent/device-code completion")
+        print("This uses your installed CLIProxyAPI community OAuth integration, not a provider endorsement. No inference starts. Provider terms and route compatibility still apply.")
+        if name == "anthropic":
+            print("Anthropic does not officially permit third-party subscription login here. The bridge's browser callback may listen beyond loopback on port 54545; run only on a trusted local machine. This route is blocked from new frozen benchmark runs.")
+        if name == "codex":
+            print("This is CLIProxyAPI's Codex device flow, not OpenAI's separately documented OSS OAuth integration. Frozen benchmark execution remains blocked because generation controls are not preserved.")
+        if not args.accept_community_auth and input("Proceed with this community login and private credential storage? [y/N] ").strip().lower() not in {"y", "yes"}:
+            print("Login cancelled; no credentials requested.")
+            return
+        if path.exists() or path.is_symlink():
+            path, binary, config = oauth_bridge.load_config(directory, name, outside_path, check_owner)
+            if args.bridge_binary and args.bridge_binary.resolve() != binary:
+                raise CLIError("Existing OAuth profile belongs to a different binary; do not silently replace it")
+        else:
+            binary = oauth_bridge.resolve_binary(args.bridge_binary)
+            help_result = subprocess.run([str(binary), "-help"], capture_output=True, text=True, timeout=15)
+            if oauth_bridge.FLOWS[name] not in help_result.stdout + help_result.stderr:
+                raise CLIError("Selected bridge does not advertise this OAuth login flag; use a reviewed compatible release")
+            port = args.bridge_port or {"codex": 8317, "anthropic": 8318, "xai": 8319}[name]
+            path = oauth_bridge.create_config(directory, name, binary, port, private_directory)
+            path, binary, config = oauth_bridge.load_config(directory, name, outside_path, check_owner)
+        code = oauth_bridge.invoke(oauth_bridge.command(binary, path, name, no_browser=args.no_browser))
+        if code:
+            raise CLIError("Bridge login process failed; no inference was started")
+        # A login helper can swallow errors. Only observe persistence, never read tokens.
+        token_dir = Path(config["oauth"]["auth-dir"])
+        persisted = any(item.is_file() and not item.is_symlink() for item in token_dir.iterdir())
+        print("Bridge login process completed. " + ("Credential files exist, but remote validity is unverified." if persisted else "No credential file was observed; do not assume login succeeded."))
+        if not persisted:
+            raise CLIError("OAuth completion is unverified; inspect the bridge's local terminal result")
+        print(f"Next: bridge-serve {name}. Then configure --provider {oauth_bridge.ROUTES[name]} --base-url http://127.0.0.1:{config['server']['port']}/v1 --bridge-binary {shlex.quote(str(binary))}. Login is not benchmark qualification.")
+    elif not path.exists():
+        print("No OAuth profile configured. No provider credential was inspected.")
+    else:
+        path, binary, config = oauth_bridge.load_config(directory, name, outside_path, check_owner)
+        if args.command == "bridge-serve":
+            if not interactive(args):
+                raise CLIError("Run bridge-serve in a local terminal; it remains in the foreground until stopped")
+            print("Starting only the loopback bridge. This does not authorize a benchmark or certify upstream equivalence.")
+            if oauth_bridge.invoke(oauth_bridge.command(binary, path, name, serve=True)):
+                raise CLIError("Bridge server exited unsuccessfully")
+        elif args.command == "auth-status":
+            print("OAuth profile configured; remote authentication and benchmark compatibility are unverified. Provider tokens were not read.")
+        else:
+            raise CLIError("Stop bridge-serve first and revoke access through the provider account. This command does not pretend local deletion revokes OAuth; automatic bridge logout is not implemented.")
+
+
+def saved_credential(settings, directory):
+    for provider, route in oauth_bridge.ROUTES.items():
+        if settings.provider == route:
+            path = oauth_bridge.config_path(outside_path(directory), provider)
+            if not path.exists():
+                return None
+            _, binary, config = oauth_bridge.load_config(directory, provider, outside_path, check_owner)
+            expected = f"http://127.0.0.1:{config['server']['port']}/v1"
+            if settings.base_url.rstrip("/") != expected or settings.bridge_binary.resolve() != binary:
+                return None
+            return config["access"]["api-keys"][0]  # Local bearer, never the provider token.
+    name = auth.matching_profile(settings)
+    if name is None:
+        if settings.provider == "custom":
+            return auth.read_key(auth_directory(directory), "custom", settings.base_url.rstrip("/"))
+        return None
+    profile = auth.PROFILES[name]
+    # Provider-specific environment credentials are only used at their exact destination.
+    key = os.environ.get(profile[2])
+    if not key and name == "google":
+        key = os.environ.get("GOOGLE_API_KEY")
+    return auth.validate_key(key) if key else auth.read_key(auth_directory(directory), name)
+
+
 def doctor(args):
     errors = prerequisite_errors(build=False) + package_errors()
     for warning in prerequisite_errors():
@@ -458,8 +614,8 @@ def doctor(args):
             bridge_digest = bridge_check(config)
             if bridge_digest:
                 print(f"Authorized bridge executable SHA-256: {bridge_digest}; TCP listener is reachable. Upstream authentication is unverified.")
-            if not os.environ.get("KEYGEN_CONTRIB_API_KEY"):
-                errors.append("KEYGEN_CONTRIB_API_KEY is not set; set it privately before a funded run")
+            if not os.environ.get("KEYGEN_CONTRIB_API_KEY") and not saved_credential(config, args.auth_dir):
+                errors.append("No credential configured; run login PROVIDER or set KEYGEN_CONTRIB_API_KEY privately before a funded run")
         except Exception as exc:
             errors.append(safe_error(exc))
     docker = None
@@ -548,9 +704,14 @@ def consent(args, config):
         raise CLIError("Spending was not authorized; no provider request was sent")
 
 
-def obtain_credential(args):
+def obtain_credential(args, settings=None):
     if os.environ.get("KEYGEN_CONTRIB_API_KEY"):
         return
+    if settings is not None:
+        key = saved_credential(settings, args.auth_dir)
+        if key:
+            os.environ["KEYGEN_CONTRIB_API_KEY"] = key
+            return
     if not interactive(args):
         raise CLIError("Set KEYGEN_CONTRIB_API_KEY privately in the environment; --no-input cannot ask for a credential")
     credential = getpass.getpass("Controller provider/bridge credential (never saved): ")
@@ -615,7 +776,9 @@ def main(argv=None):
     previous_key = os.environ.get("KEYGEN_CONTRIB_API_KEY")
     previous_umask = os.umask(0o077)
     try:
-        if args.command == "setup":
+        if args.command in {"login", "auth-status", "logout", "bridge-serve"}:
+            provider_auth(args)
+        elif args.command == "setup":
             setup(args)
         elif args.command == "configure":
             configure(args)
@@ -623,6 +786,10 @@ def main(argv=None):
             return doctor(args)
         elif args.command == "verify":
             settings = load_config(args.config)
+            if not os.environ.get("KEYGEN_CONTRIB_API_KEY"):
+                key = saved_credential(settings, args.auth_dir)
+                if key:
+                    os.environ["KEYGEN_CONTRIB_API_KEY"] = key
             verify_model_catalog(settings)
             return 0
         else:
@@ -630,8 +797,9 @@ def main(argv=None):
             work = runner.private_work_path(args.work)
             if work.exists():
                 raise CLIError("Use a new work directory; existing attempt evidence must not be overwritten")
+            runner.require_contributor_route(settings)
             consent(args, settings)
-            obtain_credential(args)
+            obtain_credential(args, settings)
             bridge_check(settings)
             if settings.provider in runner.BRIDGE_PROVIDERS:
                 verify_model_catalog(settings)
@@ -657,3 +825,4 @@ def main(argv=None):
 
 if __name__ == "__main__":
     sys.exit(main())
+

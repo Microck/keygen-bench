@@ -23,7 +23,7 @@ the evaluator renders the submitted XM at 44.1 kHz / 16-bit in a fresh FT2 proce
 
 ## run a model
 
-start with [contributing runs](CONTRIBUTING-RUNS.md). the guided CLI builds the environment, configures a provider, checks prerequisites and runs a smoke attempt or the full three-attempt submission. API-key presets include OpenAI and Anthropic; other services can use compatible Chat Completions, Responses or Messages endpoints. OAuth routes use your own authorized local bridge.
+start with [contributing runs](CONTRIBUTING-RUNS.md). the guided CLI builds the environment, configures a provider, checks prerequisites and runs a smoke attempt or the full three-attempt submission. API-key presets include OpenAI and Anthropic; other services can use compatible Chat Completions, Responses or Messages endpoints. Use `python benchmark/contrib/cli.py login PROVIDER` for local Codex, Anthropic or xAI OAuth through your installed CLIProxyAPI bridge, or choose `--method api-key` for provider keys and custom OpenAI-compatible endpoints. Authentication is separate from frozen benchmark eligibility; the guide explains the restrictions.
 
 model requests can cost money. credentials stay outside the model's sandbox and must never be committed. keep your working runs outside the repository and publish only reviewed bundles.
 
@@ -79,3 +79,4 @@ runs are paid out of pocket. if you want more models tested, you can chip in thr
 the code and docs are [MIT](LICENSE). third-party material keeps its own terms: the FT2 fonts and graphics are CC BY-NC-SA 4.0 and the FT2 build pins `8bitbubsy/ft2-clone` via a fork. see [NOTICE.md](NOTICE.md) for the full list and [the public-launch checklist](PUBLIC-LAUNCH.md) before publishing a formerly private checkout.
 
 to cite keygen bench, use [CITATION.cff](CITATION.cff) with the commit your experiment used.
+
