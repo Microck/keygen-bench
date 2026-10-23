@@ -1,6 +1,6 @@
 # Muse Wonder Full access investigation
 
-Checked 2026-10-23. Status: requested, access investigation only. No budget estimate,
+Checked 2026-10-23. Status: requested; experimental SDK/MCP transport implemented, live access unverified. No budget estimate,
 fundraising target, funded run, subscription purchase, or frozen-provider approval.
 The support page deliberately does not show $0 or a progress bar for this request.
 
@@ -21,7 +21,7 @@ covers starting sessions, turns, approvals, cancellation and resume. This is a
 concrete automation route for Muse Code, not a raw inference API or a verified
 Wonder Full benchmark integration. No live account has been tested here.
 
-A candidate mini-swe-agent transport is:
+The [implemented experimental mini transport](../benchmark/experimental/muse_sdk/README.md) follows this path:
 
 1. Start an isolated, version-pinned Muse Code host with authorized subscription
    authentication kept outside the benchmark container.
@@ -35,8 +35,8 @@ A candidate mini-swe-agent transport is:
 
 [MCP tools run outside Muse Code's own sandbox](https://meta-models.github.io/muse-code-sdk/1.4/guides/extend/mcp-servers/).
 The MCP server must only relay calls to the benchmark sandbox, never execute model
-commands on the host. This held-call design is a hypothesis to prototype, not an
-implemented or tested adapter in this PR. An approval response alone is not a tool
+commands on the host. The held-call path is implemented and tested offline with real mini and the MCP
+relay against a synthetic Muse backend; it has not been tested with a live account. An approval response alone is not a tool
 result injection API.
 
 ## What prevents a frozen-equivalence claim
@@ -74,4 +74,9 @@ First prove a synthetic multi-turn Bash round trip, identity, cancellation,
 isolation, prompt/tool inventory and absence (or complete disclosure) of auxiliary
 inference. Then verify the pinned FT2 render/scoring flow. Keep all results outside
 the ranked condition until the contract is demonstrably met. No credentials,
-account inspection, live model calls or spending were involved in this research.
+account inspection, live model calls or spending were involved. The official
+1.4.12-R6909.1 host was checksum-verified and exercised offline with the echo
+provider to verify handshake, session MCP registration, facade attachment and
+shutdown. Its real CLI rejected whole-map MCP overrides; the implementation uses
+the negotiated sessionMcp surface instead of assuming the SDK facade forwards
+configuration.
