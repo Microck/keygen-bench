@@ -183,6 +183,7 @@ export const SUPPORT = {
   // raised: USD donated so far towards that model; update by hand.
   // tip: shows a hover asterisk with this note.
   wanted: [
+    { model: "Muse Wonder Full", maker: "Meta", accessOnly: true, price: "Muse Code", tip: "Requested without a budget estimate: subscription-only access in Muse Code. A compatible benchmark route is still under investigation; this is not regular Muse Wonder at max effort." },
     { model: "o1-pro", maker: "OpenAI", price: "$150/$600", typical: 690, est: 2065, heavy: 3705, raised: 0 },
     { model: "gpt-5.5-pro", maker: "OpenAI", price: "$30/$180", typical: 165, est: 465, heavy: 805, raised: 0 },
     { model: "gpt-5.4-pro", maker: "OpenAI", price: "$30/$180", typical: 165, est: 465, heavy: 805, raised: 0 },
@@ -199,6 +200,7 @@ export const SUPPORT = {
     summary: "How the estimate works",
     sections: [
       { title: "Where the estimate comes from", lines: [
+        "Access-only requests have no budget estimate or fundraising target. They need a verified execution route before a benchmark can be promised.",
         "Each estimate is what three longer-than-usual runs would cost at the model's public API price (shown as dollars per million tokens in/out).",
         "Runs vary a lot. The model decides how many turns it takes, from a dozen to several hundred, and every turn resends the whole conversation, so a long run costs far more than a short one.",
         "The planning assumptions per run are 1.03 million input and 125,000 output tokens for typical, 3.5 million and 270,000 for long, and 6.9 million and 333,000 for heavy. These are estimates, not limits or measured usage for a new model.",

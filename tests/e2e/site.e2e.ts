@@ -11,6 +11,14 @@ for (const width of [390,1280]) {
   await expect(browser).toHaveURL(/\/scoring/);
   await screen.getByRole("button","Support",{exact:true}).click();
   await expect(browser).toHaveURL(/\/support/);
+  await expect(screen.getByText("Muse Wonder Full",{exact:false})).toBeVisible();
+  expect(await browser.evaluate(() => {
+   const row=document.querySelector('[data-access-only="true"]');
+   return !!row && !row.querySelector('[role="progressbar"]') &&
+    row.textContent?.includes("Not set") && !/NaN|\$0/.test(row.textContent ?? "");
+  })).toBe(true);
+  expect(await browser.evaluate(() => document.querySelectorAll('[role="progressbar"]').length > 0)).toBe(true);
+
   await screen.getByRole("button","Rankings",{exact:true}).click();
   await expect(screen.getByRole("button","Best",{exact:true})).toBeVisible();
   await expect(browser).toHaveURL(/mode=average/);

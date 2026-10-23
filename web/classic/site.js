@@ -802,6 +802,13 @@ export async function mount(root, ctx) {
         h("div", { class: "sunken ft2-scroll support-list", style: { flex: "1", padding: "2px", overflow: "auto" } },
           h("div", { class: "muted wanted" }, h("span", { style: { gridColumn: "1 / span 2" } }, "Model"), h("span", {}, "Price in/out"), h("span", { class: "we" }, "Est.")),
           ...SUPPORT.wanted.map((w) => {
+            if (w.accessOnly) return h("div", { class: "wanted", "data-access-only": "true" },
+              badge(w.maker),
+              h("span", { class: "wn" }, w.model,
+                w.tip ? h("span", { class: "hint", tabindex: "0", "aria-label": w.tip, "data-tip": w.tip }, "*") : null),
+              h("span", { class: "muted" }, w.price),
+              h("span", { class: "we", "aria-label": "No budget estimate" }, "Not set"),
+              h("span", { class: "muted", style: { gridColumn: "1 / -1" } }, "Access investigation; no funding target"));
             const range = `3 typical runs ${usd(w.typical)}. 3 long runs ${usd(w.est)} (the estimate). 3 heavy runs ${usd(w.heavy)}.`;
             const pct = Math.min(100, (w.raised / w.est) * 100);
             const raised = `${usd(w.raised)} of ${usd(w.est)} raised`;
