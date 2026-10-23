@@ -17,8 +17,8 @@ export function approvalDecision(req){
 }
 export function createRuntime({museBin,profileHome,cwd,effort,allowContributor=false,sdkLoader=()=>import('@muse-code/sdk')}){
  if(!isAbsolute(profileHome)||!isAbsolute(cwd)||!isAbsolute(museBin))throw new Error('Explicit absolute binary, private profile and empty workspace paths required');
- let handshake,host,client,relay,stopped=false,active=false;const receipt={condition:'muse-sdk-experimental-not-frozen',system_prompt_replaced:false,auxiliary_inference:'not-excluded',cost_usd:null};
- async function close(){stopped=true;const c=client;client=null;if(c)await c.close();else if(handshake)await handshake.close();relay?.closeAllConnections();await new Promise(resolve=>relay?.listening?relay.close(resolve):resolve());}
+ let handshake,host,client,relay,closing,stopped=false,active=false;const receipt={condition:'muse-sdk-experimental-not-frozen',system_prompt_replaced:false,auxiliary_inference:'not-excluded',cost_usd:null};
+ function close(){stopped=true;return closing??=(async()=>{const c=client;client=null;try{if(c)await c.close();else if(handshake)await handshake.close();}finally{relay?.closeAllConnections();await new Promise(resolve=>relay?.listening?relay.close(resolve):resolve());}})();}
  return {receipt,cancelStart:close,async start({model,systemPrompt,prompt,execute}){
   if(stopped)throw new Error('Runtime closed');
   if(!/^muse-wonder-full-1\.0(?:-contributor)?$/.test(model))throw new Error('Only exact Wonder Full 1.0 IDs are accepted');
@@ -30,10 +30,10 @@ export function createRuntime({museBin,profileHome,cwd,effort,allowContributor=f
     const a=Buffer.from(req.headers.authorization??''),b=Buffer.from(`Bearer ${token}`);
     if(a.length!==b.length||!timingSafeEqual(a,b)){res.writeHead(401).end();return;}
     if(req.method!=='POST'||req.url!=='/tool'){res.writeHead(404).end();return;}
-    if(active||stopped){res.writeHead(409).end();return;}active=true;
+    if(active||stopped){res.writeHead(409).end();return;}active=true;const ac=new AbortController();const cancel=()=>{if(!res.writableEnded)ac.abort();};res.once("close",cancel);
     try{let bytes=0,parts=[];for await(const part of req){bytes+=part.length;if(bytes>1024*1024)throw new Error('Too large');parts.push(part);}
-     const result=await execute(JSON.parse(Buffer.concat(parts).toString()));res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify(result));
-    }catch{if(!res.destroyed)res.writeHead(502).end();}finally{active=false;}
+     const result=await execute(JSON.parse(Buffer.concat(parts).toString()),ac.signal);res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify(result));
+    }catch{if(!res.destroyed)res.writeHead(502).end();}finally{res.removeListener("close",cancel);active=false;}
    });
    await new Promise((resolve,reject)=>{relay.once('error',reject);relay.listen(0,'127.0.0.1',resolve);});
    const sdk=await sdkLoader();if(stopped)throw new Error('Closed before spawn');

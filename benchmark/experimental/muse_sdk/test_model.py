@@ -51,7 +51,7 @@ finally:
                 self.assertTrue(port.isdigit(), port)
                 env['BRIDGE_URL'] = f'http://127.0.0.1:{port}/v1'
                 completed = subprocess.run([os.sys.executable, '-c', script], env=env,
-                                           capture_output=True, text=True, timeout=30)
+                                           capture_output=True, text=True, timeout=30, cwd=ROOT.parents[2])
                 self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
             finally:
                 server.terminate()

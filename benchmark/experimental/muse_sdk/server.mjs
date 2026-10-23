@@ -1,3 +1,4 @@
+import {shutdownServer} from './shutdown.mjs';
 import { parseArgs } from 'node:util';import { mkdtemp,rm } from 'node:fs/promises';import { tmpdir } from 'node:os';import {join} from 'node:path';
 import {Session,makeServer} from './bridge.mjs';import {createRuntime} from './runtime.mjs';
 const {values:v}=parseArgs({options:{help:{type:'boolean'},model:{type:'string'},effort:{type:'string'},'muse-bin':{type:'string'},'profile-home':{type:'string'},port:{type:'string',default:'8321'},'allow-credit-usage':{type:'boolean'},'accept-experimental-condition':{type:'boolean'},'accept-contributor-training':{type:'boolean'}}});
@@ -8,5 +9,5 @@ const token=process.env.KEYGEN_MUSE_BRIDGE_TOKEN;if(!token||token.length<24)thro
 const cwd=await mkdtemp(join(tmpdir(),'keygen-muse-empty-'));
 const runtime=createRuntime({museBin:v['muse-bin'],profileHome:v['profile-home'],cwd,effort:v.effort,allowContributor:!!v['accept-contributor-training']});
 const session=new Session(runtime,v.model);const server=makeServer(session,token);let closing=false;
-async function shutdown(){if(closing)return;closing=true;server.close();try{await session.close();}finally{await rm(cwd,{recursive:true,force:true});}}
-process.once('SIGINT',()=>void shutdown());process.once('SIGTERM',()=>void shutdown());server.listen(port,'127.0.0.1',()=>console.log(`Experimental Muse bridge on loopback ${port}; upstream Muse harness retained.`));
+async function shutdown(){if(closing)return;closing=true;await shutdownServer(server,session,()=>rm(cwd,{recursive:true,force:true}));}
+process.once('SIGINT',()=>void shutdown().catch(()=>{console.error('Muse bridge shutdown failed');process.exitCode=1;}));process.once('SIGTERM',()=>void shutdown().catch(()=>{console.error('Muse bridge shutdown failed');process.exitCode=1;}));server.listen(port,'127.0.0.1',()=>console.log(`Experimental Muse bridge on loopback ${port}; upstream Muse harness retained.`));

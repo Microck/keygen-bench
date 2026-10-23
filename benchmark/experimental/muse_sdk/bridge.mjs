@@ -50,13 +50,15 @@ export class Session {
       if(!this.history.length) {
         this.tool=structuredClone(body.tools);
         this.handle=await this.runtime.start({model:this.model,systemPrompt:messages[0].content,prompt:messages[1].content,
-          tool:body.tools[0].function, execute: async args => {
+          tool:body.tools[0].function, execute: async (args, signal) => {
             if(this.closed) throw new ContractError('Session closed');
             if(this.pending.size) throw new ContractError('Parallel tool calls are not supported');
             if(typeof args?.command!=='string' || Object.keys(args).some(k=>k!=='command')) throw new ContractError('Invalid Bash arguments');
             const id=`muse_mini_${++this.counter}`; const result=deferred(); this.pending.set(id,result);
             this.emit({role:'assistant',content:null,tool_calls:[{id,type:'function',function:{name:'bash',arguments:JSON.stringify(args)}}]});
-            return result.promise;
+            const cancel=()=>{void this.close().catch(()=>{});};
+            if(signal?.aborted)cancel();else signal?.addEventListener("abort",cancel,{once:true});
+            try{return await result.promise;}finally{signal?.removeEventListener("abort",cancel);}
           }});
         if(this.closed) {await this.handle.close(); throw new ContractError('Session closed during SDK startup');}
         this.handle.done.then(() => this.emit({terminal:true}), () => this.emit({failed:true}));
@@ -73,13 +75,14 @@ export class Session {
     } catch(error) { await this.close(); throw error; }
     finally {this.busy=false;}
   }
-  async close() {
-    if(this.closed) return; this.closed=true;
+  close() { return this.closing ??= this.teardown(); }
+  async teardown() {
+    this.closed=true;
     this.waiter?.reject(new ContractError('Session closed')); this.waiter=null;
     for(const result of this.pending.values()) result.reject(new ContractError('Session closed'));
     this.pending.clear();
-    await this.runtime.cancelStart?.();
-    if(this.handle) await this.handle.close();
+    try { await this.runtime.cancelStart?.(); }
+    finally { if(this.handle) await this.handle.close(); }
   }
 }
 
