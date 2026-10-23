@@ -11,11 +11,15 @@ for (const width of [390,1280]) {
   await expect(browser).toHaveURL(/\/scoring/);
   await screen.getByRole("button","Support",{exact:true}).click();
   await expect(browser).toHaveURL(/\/support/);
-  await expect(screen.getByText("Muse Wonder Full",{exact:false})).toBeVisible();
+  await expect(screen.getByText("muse-wonder-full-1.0",{exact:false})).toBeVisible();
   expect(await browser.evaluate(() => {
    const row=document.querySelector('[data-access-only="true"]');
-   return !!row && !row.querySelector('[role="progressbar"]') &&
-    row.textContent?.includes("Not set") && !/NaN|\$0/.test(row.textContent ?? "");
+   const bar=row?.querySelector('[role="progressbar"]');
+   const names=[...document.querySelectorAll('.wanted .wn')].map(el=>el.childNodes[0]?.textContent);
+   return !!row && !!bar && bar.classList.contains("fund") &&
+    !bar.hasAttribute("aria-valuenow") && bar.getAttribute("aria-valuetext")==="No funding target set" &&
+    row.textContent?.includes("Access needed") && !/NaN|\$0/.test(row.textContent ?? "") &&
+    names[0]==="muse-wonder-full-1.0" && names[1]==="claude-3-opus";
   })).toBe(true);
   expect(await browser.evaluate(() => document.querySelectorAll('[role="progressbar"]').length > 0)).toBe(true);
 

@@ -802,23 +802,17 @@ export async function mount(root, ctx) {
         h("div", { class: "sunken ft2-scroll support-list", style: { flex: "1", padding: "2px", overflow: "auto" } },
           h("div", { class: "muted wanted" }, h("span", { style: { gridColumn: "1 / span 2" } }, "Model"), h("span", {}, "Price in/out"), h("span", { class: "we" }, "Est.")),
           ...SUPPORT.wanted.map((w) => {
-            if (w.accessOnly) return h("div", { class: "wanted", "data-access-only": "true" },
+            const accessOnly = w.accessOnly === true;
+            const range = accessOnly ? "Subscription-only access; no budget estimate set." : `3 typical runs ${usd(w.typical)}. 3 long runs ${usd(w.est)} (the estimate). 3 heavy runs ${usd(w.heavy)}.`;
+            const pct = accessOnly ? 0 : Math.min(100, (w.raised / w.est) * 100);
+            const raised = accessOnly ? "Access needed · no funding target" : `${usd(w.raised)} of ${usd(w.est)} raised`;
+            return h("div", { class: "wanted", ...(accessOnly ? { "data-access-only": "true" } : {}) },
               badge(w.maker),
               h("span", { class: "wn" }, w.model,
                 w.tip ? h("span", { class: "hint", tabindex: "0", "aria-label": w.tip, "data-tip": w.tip }, "*") : null),
               h("span", { class: "muted" }, w.price),
-              h("span", { class: "we", "aria-label": "No budget estimate" }, "Not set"),
-              h("span", { class: "muted", style: { gridColumn: "1 / -1" } }, "Access investigation; no funding target"));
-            const range = `3 typical runs ${usd(w.typical)}. 3 long runs ${usd(w.est)} (the estimate). 3 heavy runs ${usd(w.heavy)}.`;
-            const pct = Math.min(100, (w.raised / w.est) * 100);
-            const raised = `${usd(w.raised)} of ${usd(w.est)} raised`;
-            return h("div", { class: "wanted" },
-              badge(w.maker),
-              h("span", { class: "wn" }, w.model,
-                w.tip ? h("span", { class: "hint", tabindex: "0", "aria-label": w.tip, "data-tip": w.tip }, "*") : null),
-              h("span", { class: "muted" }, w.price),
-              h("span", { class: "hint goal we", tabindex: "0", "aria-label": range, "data-tip": range }, usd(w.est)),
-              h("span", { class: "fund sunken", role: "progressbar", "aria-label": raised, "aria-valuemin": "0", "aria-valuemax": String(w.est), "aria-valuenow": String(w.raised), title: raised },
+              h("span", { class: "hint goal we", tabindex: "0", "aria-label": range, "data-tip": range }, accessOnly ? "—" : usd(w.est)),
+              h("span", { class: "fund sunken", role: "progressbar", "aria-label": raised, ...(accessOnly ? { "aria-valuetext": "No funding target set" } : { "aria-valuemin": "0", "aria-valuemax": String(w.est), "aria-valuenow": String(w.raised) }), title: raised },
                 h("i", { style: { width: pct + "%" } }),
                 h("b", {}, raised)));
           }),
