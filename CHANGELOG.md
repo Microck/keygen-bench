@@ -4,6 +4,10 @@
 
 ### Added
 
+- Opt-in Muse Code SDK/MCP transport for mini-owned Bash execution, with pinned host/catalog checks, explicit non-frozen provenance, separate Contributor consent and offline round-trip tests.
+
+- Request Muse Wonder Full without a budget or fundraising target, with access-only support-page rendering and a documented SDK/MCP feasibility investigation.
+
 - Copy-paste contributor-agent prompt and stepwise authentication, frozen-contract, spending and publication checkpoints.
 
 - Add deterministic browser regression tests using synthetic local data and audio, without model calls or retained-run publication.
