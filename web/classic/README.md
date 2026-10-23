@@ -359,7 +359,9 @@ providers, submitted music quality, native FT2 rendering or production publicati
 
 ## Access-only model requests
 
-`SUPPORT.wanted` entries with `accessOnly: true` omit numeric cost estimates and
-fundraising progress. They are access investigations, not free or funded runs.
+`SUPPORT.wanted` entries with `accessOnly: true` omit numeric cost estimates and monetary
+progress values, but retain the same row and sunken progress-track styling. Their
+track is labelled "Access needed · no funding target", not a fabricated $0 goal.
+They are access requests, not free or funded runs.
 See [Muse Wonder Full access](../../docs/muse-wonder-full-access.md) for the current
 SDK/MCP route and its unverified fairness constraints.
