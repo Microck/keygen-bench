@@ -4,6 +4,8 @@
 
 ### Added
 
+- Opt-in experimental Cursor SDK bridge and mini model adapter with held Bash callbacks, strict transcript/control validation, credential-redacted diagnostics and offline integration tests. No frozen-provider eligibility or live fairness claim.
+
 - Copy-paste contributor-agent prompt and stepwise authentication, frozen-contract, spending and publication checkpoints.
 
 - Add deterministic browser regression tests using synthetic local data and audio, without model calls or retained-run publication.

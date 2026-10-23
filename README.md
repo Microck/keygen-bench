@@ -100,3 +100,7 @@ the code and docs are [MIT](LICENSE). third-party material keeps its own terms: 
 
 to cite keygen bench, use [CITATION.cff](CITATION.cff) with the commit your experiment used.
 
+
+## experimental Cursor credits
+
+An opt-in [Cursor SDK → mini-swe-agent diagnostic](benchmark/experimental/cursor_sdk/README.md) keeps Bash execution in mini. It is not a qualified frozen provider and does not run or spend credits automatically.

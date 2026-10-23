@@ -415,3 +415,7 @@ validator code from the trusted base commit. Maintainers check provenance and
 re-render `tune.xm` with a separately selected trusted image. Submitted scores
 never establish a trusted result. See `submissions/README.md`.
 
+
+## experimental Cursor SDK transport
+
+The [isolated Cursor/mini diagnostic](benchmark/experimental/cursor_sdk/README.md) is separate from contributor smoke/run. It requires explicit spending consent and cannot produce an eligible submission. Do not relabel it as a custom provider or remove frozen generation controls to make it pass.
