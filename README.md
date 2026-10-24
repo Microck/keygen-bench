@@ -100,3 +100,7 @@ the code and docs are [MIT](LICENSE). third-party material keeps its own terms: 
 
 to cite keygen bench, use [CITATION.cff](CITATION.cff) with the commit your experiment used.
 
+
+## experimental Cursor credits
+
+The opt-in [Cursor SDK → mini-swe-agent workflow](benchmark/experimental/cursor_sdk/README.md) runs full three-attempt music experiments with FT2 rendering and scoring, while mini owns Bash execution. Results stay explicitly experimental, not leaderboard-qualified. A separate small probe tests transport only. Neither workflow starts or spends credits automatically.

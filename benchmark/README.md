@@ -188,3 +188,7 @@ Tests use synthetic data and do not require paid inference. A container build ex
 
 Never publish raw trajectory or transport logs without review. The community exporter reduces operational metadata and the validator checks common secret and private-address patterns, but neither can prove that arbitrary model text contains no personal data.
 
+
+## experimental transports
+
+See the [Cursor SDK / mini workflow](experimental/cursor_sdk/README.md) for full private three-attempt music experiments, FT2 rendering and scoring, or a small transport probe. It retains mini-side Bash execution but is not accepted by the frozen native provider validator. SDK tool wrapping, ambient context, generation controls, model identity and billing still require independent qualification.
