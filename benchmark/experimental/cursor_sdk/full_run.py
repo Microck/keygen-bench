@@ -190,6 +190,9 @@ def start_bridge(directory, model, effort, token, cursor_key):
 
 def score_experiment(directory):
     """Use the trusted scorer, then separate artifact evaluation from route eligibility."""
+    # NumPy memory-mapped captures load this stdlib DSO lazily. Initialize it
+    # before the scorer fingerprints loaded libraries; do not bypass its guard.
+    import mmap  # noqa: F401
     import score
     profile = score.profile_attempt(directory, force=True)
     if profile is None:
