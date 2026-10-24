@@ -142,7 +142,7 @@ def worker(spec_path):
                              max_consecutive_format_errors=1,
                              output_path=directory / 'mini-home/trajectory.private.json')
         result = agent.run(task=config['prompts']['task'], frozen_system=config['prompts']['system'])
-        if result.get('exit_status') not in {'Submitted', 'LimitsExceeded', 'Terminated', 'FormatError'}:
+        if result.get('exit_status') not in {'Submitted', 'LimitsExceeded', 'TimeExceeded', 'Terminated', 'FormatError', 'RepeatedFormatError'}:
             result['failure_category'] = 'INFRA'
     except Exception as error:
         result = {'exit_status': type(error).__name__, 'failure_category': 'INFRA'}

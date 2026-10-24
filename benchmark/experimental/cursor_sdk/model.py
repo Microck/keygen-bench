@@ -4,6 +4,7 @@ from urllib.parse import urlsplit
 from urllib.request import Request, build_opener, ProxyHandler
 
 from minisweagent.models.litellm_model import LitellmModel
+from benchmark.native_models import OBSERVATION, FORMAT_ERROR
 
 CONDITION = "cursor-sdk-experimental-not-frozen"
 
@@ -32,6 +33,7 @@ class CursorMiniModel(LitellmModel):
         # No sampling/output-cap fields: this is an explicitly different condition,
         # not a silently relaxed native_models route. Dollar cost remains unknown.
         super().__init__(model_name=f"openai/{model_name}", cost_tracking="ignore_errors",
+                         observation_template=OBSERVATION, format_error_template=FORMAT_ERROR,
                          model_kwargs={"api_base": bridge_url, "api_key": token,
                                        "timeout": request_timeout_seconds + 5, "max_retries": 0, "drop_params": False})
 

@@ -29,14 +29,20 @@ from pathlib import Path
 from minisweagent.agents.default import DefaultAgent
 from minisweagent.environments.local import LocalEnvironment
 from benchmark.experimental.cursor_sdk.model import CursorMiniModel
+class CanonicalShapeEnvironment(LocalEnvironment):
+ def execute(self,*args,**kwargs):
+  result=super().execute(*args,**kwargs)
+  result.pop('exception_info',None)
+  return result
 m=CursorMiniModel(model_name='fixture',bridge_url=os.environ['BRIDGE_URL'],allow_credit_usage=True,accept_experimental_condition=True)
 try:
- a=DefaultAgent(m,LocalEnvironment(cwd=os.environ['HOME']),system_template='EXACT SYSTEM',instance_template='EXACT TASK',step_limit=3,cost_limit=0)
+ a=DefaultAgent(m,CanonicalShapeEnvironment(cwd=os.environ['HOME']),system_template='EXACT SYSTEM',instance_template='EXACT TASK',step_limit=3,cost_limit=0,wall_time_limit_seconds=7200)
  result=a.run()
  assert result['exit_status']=='Submitted', result
  assert Path(os.environ['HOME'],'proof.txt').read_text()=='mini-owned'
  output=json.dumps(a.serialize())
  assert os.environ['KEYGEN_CURSOR_BRIDGE_TOKEN'] not in output
+ assert any('<time_left>' in message.get('content','') for message in a.messages if message.get('role')=='tool')
  assert a.serialize()['info']['cursor_experiment']['frozen_eligible'] is False
  assert a.serialize()['info']['cursor_experiment']['cost_known'] is False
  print('PASS: real mini -> actual bridge -> mocked SDK callback -> mini Bash -> callback continuation')
