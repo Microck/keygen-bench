@@ -183,7 +183,7 @@ export const SUPPORT = {
   // raised: USD donated so far towards that model; update by hand.
   // tip: shows a hover asterisk with this note.
   wanted: [
-    { model: "muse-wonder-full-1.0", maker: "Meta", accessOnly: true, price: "", tip: "Requested without a budget estimate: subscription-only access in Muse Code. An experimental SDK bridge exists; live access and benchmark equivalence are unverified; this is not regular Muse Wonder at max effort." },
+    { model: "muse-wonder-full-1.0", maker: "Meta", accessOnly: true, price: "", tip: "Full is only available through a Muse Code subscription. I need access to test it. No run budget is set yet; any runs will be marked experimental." },
     { model: "claude-3-opus", maker: "Anthropic", price: "$15/$75", typical: 40, est: 85, heavy: 125, raised: 0, tip: "I also need access to this model: it's retired and only open to researchers. If you can lend me a hand getting API access, it would be really appreciated." },
     { model: "o1-pro", maker: "OpenAI", price: "$150/$600", typical: 690, est: 2065, heavy: 3705, raised: 0 },
     { model: "gpt-5.5-pro", maker: "OpenAI", price: "$30/$180", typical: 165, est: 465, heavy: 805, raised: 0 },
