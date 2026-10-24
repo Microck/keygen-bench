@@ -4,6 +4,7 @@ No Cursor login/inference and no neural listener weights. This proves orchestrat
 not real-provider access, musical quality, fairness or model identity.
 """
 import argparse
+import copy
 import base64
 import json
 import math
@@ -54,8 +55,19 @@ class NativeFullRunTests(unittest.TestCase):
                 for name in full.ATTEMPTS:
                     directory=root/name;directory.mkdir()
                     signal.alarm(180)
-                    with patch.object(full,'start_bridge',side_effect=start_fixture):
+                    import score
+                    snapshots=[]
+                    original=score.profile_inputs
+                    def observe_inputs(*args,**kwargs):
+                        value=original(*args,**kwargs);snapshots.append(copy.deepcopy(value));return value
+                    with patch.object(full,'start_bridge',side_effect=start_fixture), patch.object(score,'profile_inputs',side_effect=observe_inputs):
                         status,profile=full.run_attempt(directory,args,config,docker,'unused-synthetic-key')
+                    if status.get('failure_category') == 'EVAL' and len(snapshots) >= 2:
+                        def changed(a,b,prefix=''):
+                            if isinstance(a,dict) and isinstance(b,dict):
+                                return [item for key in set(a)|set(b) for item in changed(a.get(key),b.get(key),prefix+'/'+str(key))]
+                            return [prefix] if a != b else []
+                        print('Evaluator provenance changes:',changed(snapshots[0],snapshots[-1])[:30])
                     signal.alarm(0)
                     self.assertIsNone(status['failure_category'],{'status':status,'evaluation_error':profile.get('evaluation_error') if profile else None})
                     self.assertEqual(status['render'],'ok',status)
