@@ -53,3 +53,13 @@ test('closing during SDK startup disposes a late handle',async()=>{
  await session.close();finish({done:Promise.resolve(),async close(){disposed++;}});
  await assert.rejects(query,/closed during/);assert.equal(cancelled,1);assert.equal(disposed,1);
 });
+
+test('close waits for teardown and still closes handle when startup cancellation fails',async()=>{
+ let closed=0;
+ const session=new Session({cancelStart:async()=>{throw new Error('cancel failed');}},'fixture');
+ session.handle={close:async()=>{closed++;}};
+ const first=session.close();const second=session.close();
+ assert.equal(first,second);
+ await assert.rejects(first,/cancel failed/);
+ assert.equal(closed,1);
+});

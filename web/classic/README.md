@@ -356,3 +356,12 @@ Coverage includes desktop/mobile navigation, Best/Average URL state, synthetic
 local audio play/pause and literal bootstrap-error rendering. Existing offline
 player/ranking/export tests remain separate. These tests do not validate paid
 providers, submitted music quality, native FT2 rendering or production publication.
+
+## Access-only model requests
+
+`SUPPORT.wanted` entries with `accessOnly: true` omit numeric cost estimates and monetary
+progress values, but retain the same row and sunken progress-track styling. Their
+track is labelled "Muse Code access needed", not a fabricated $0 goal.
+They are access requests, not free or funded runs.
+See [Muse Wonder Full access](../../docs/muse-wonder-full-access.md) for the current
+SDK/MCP route and its unverified fairness constraints.

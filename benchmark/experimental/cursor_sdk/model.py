@@ -10,7 +10,8 @@ CONDITION = "cursor-sdk-experimental-not-frozen"
 
 class CursorMiniModel(LitellmModel):
     def __init__(self, *, model_name: str, bridge_url: str = "http://127.0.0.1:8320/v1",
-                 allow_credit_usage: bool = False, accept_experimental_condition: bool = False):
+                 allow_credit_usage: bool = False, accept_experimental_condition: bool = False,
+                 request_timeout_seconds: int = 120):
         if not allow_credit_usage or not accept_experimental_condition:
             raise ValueError("Explicit credit-use and experimental-condition consent required")
         url = urlsplit(bridge_url)
@@ -24,13 +25,15 @@ class CursorMiniModel(LitellmModel):
         token = os.environ.get("KEYGEN_CURSOR_BRIDGE_TOKEN", "")
         if len(token) < 24:
             raise ValueError("Dedicated local bridge bearer required; no Cursor credentials enter mini")
+        if type(request_timeout_seconds) is not int or not 1 <= request_timeout_seconds <= 3600:
+            raise ValueError("Request timeout must be an integer from 1 to 3600 seconds")
         self._bridge_url = bridge_url
         self._token = token
         # No sampling/output-cap fields: this is an explicitly different condition,
         # not a silently relaxed native_models route. Dollar cost remains unknown.
         super().__init__(model_name=f"openai/{model_name}", cost_tracking="ignore_errors",
                          model_kwargs={"api_base": bridge_url, "api_key": token,
-                                       "timeout": 125, "max_retries": 0, "drop_params": False})
+                                       "timeout": request_timeout_seconds + 5, "max_retries": 0, "drop_params": False})
 
     def query(self, messages, **kwargs):
         if kwargs:

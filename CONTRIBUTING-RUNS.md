@@ -418,4 +418,26 @@ never establish a trusted result. See `submissions/README.md`.
 
 ## experimental Cursor SDK transport
 
-The [isolated Cursor/mini diagnostic](benchmark/experimental/cursor_sdk/README.md) is separate from contributor smoke/run. It requires explicit spending consent and cannot produce an eligible submission. Do not relabel it as a custom provider or remove frozen generation controls to make it pass.
+The [isolated Cursor/mini transport](benchmark/experimental/cursor_sdk/README.md) is separate from contributor smoke/run. It requires explicit spending consent and cannot produce an eligible submission. Do not relabel it as a custom provider or remove frozen generation controls to make it pass.
+
+
+### Full Cursor-credit experiments (not ranked submissions)
+
+The [experimental Cursor guide](benchmark/experimental/cursor_sdk/README.md#full-music-experiment-separate-explicit-spending-approval-required)
+provides a full three-attempt music workflow with FT2 rendering and scoring through
+mini-swe-agent. Use `python -m benchmark.experimental.cursor_sdk.full_run --help`;
+`probe.py` is only the small transport test. Full experiments preserve the normal
+music task and local limits, but remain a different, explicitly non-ranked
+condition because upstream identity/settings/prompt equivalence is unverified.
+Spending approval and a verified billing limit remain separate prerequisites.
+## Muse Wonder Full: experimental subscription transport
+
+Wonder Full is requested without a fundraising target. It is not regular Wonder
+at max effort and is not a qualified native provider. The implemented
+[Muse Code SDK/MCP adapter](benchmark/experimental/muse_sdk/README.md) hands Bash
+execution to mini while keeping the upstream Muse harness explicit. It requires
+an entitled, privately authenticated Muse Code profile and separate usage consent.
+It does not purchase access, reuse subscription credentials in a generic API
+client, or imply frozen equivalence. Start with its synthetic Docker diagnostic;
+keep any subsequent runs separate and non-ranked until prompt/tool and inference
+provenance requirements are met. See the [access notes](docs/muse-wonder-full-access.md).

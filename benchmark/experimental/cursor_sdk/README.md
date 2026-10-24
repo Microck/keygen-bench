@@ -1,6 +1,7 @@
 # experimental Cursor → mini-swe-agent bridge
 
-This is a diagnostic integration, **not an eligible frozen benchmark provider**.
+This supports private three-attempt music experiments and a small transport probe.
+It is **not an eligible frozen benchmark provider**.
 It uses official `@cursor/sdk` 1.0.40. No private Cursor endpoints, token scraping,
 model substitutions or system-prompt-as-user-message fallbacks are used.
 
@@ -34,8 +35,9 @@ alone does not prove that ambient context has been removed.
 - SDK cost is not reliably known here. Mini's numeric accumulator uses zero only
   to satisfy its interface; `cost_known: false` and `dollar_cost: null` disclose
   this. Never interpret that zero as free inference or a spending limit.
-- No automatic transcript recovery, format repair, retry, alias fallback, scoring
-  or public submission packaging is provided. One bridge process per attempt.
+- No format repair, retry, alias fallback or public submission packaging is
+  provided. Full experiments use one fresh bridge and sandbox per attempt, retain
+  failures and score artifacts separately from leaderboard qualification.
 - The canonical runner/provider allowlist and all frozen prompts/limits are
   unchanged. Do not call this route `custom` to bypass their restrictions.
 
@@ -48,13 +50,76 @@ Run `node server.mjs --help`. From the repository root, run:
 ```sh
 python -m benchmark.experimental.cursor_sdk.probe --help
 node --test benchmark/experimental/cursor_sdk/bridge.test.mjs
-python -m unittest benchmark.experimental.cursor_sdk.test_model
+python -m unittest benchmark.experimental.cursor_sdk.test_model benchmark.experimental.cursor_sdk.test_full_run
 ```
 
 These tests use a synthetic SDK runtime. They do not authenticate to Cursor or
 verify billing, system-prompt entitlements, real model identity or fairness.
 The Python test runs only fixed synthetic commands in a disposable local folder;
 it is not a Docker/FT2 acceptance test.
+
+## full music experiment (separate explicit spending approval required)
+
+Use this command for the actual benchmark task, not `probe.py`. It runs the same
+music prompt through mini-swe-agent, with three independent slots, no step limit,
+120 minutes per attempt, 120 seconds per Bash command and a 60-minute model-request
+timeout. The normal trusted code collects `submission/tune.xm`, renders it in a
+fresh FT2 Docker sandbox and applies the benchmark's listener/artifact-cap scorer.
+No canonical provider allowlist, campaign validator, ranking or historical data is
+modified to admit this different transport.
+
+First build the pinned agent image and install the analysis renderer and separate
+listener environment using [benchmark setup](../../README.md#prerequisites).
+The command verifies Docker, pinned image ancestry, mini/SDK versions, renderer,
+listener and disk space before starting Cursor inference. The listener's identity
+check can download its pinned weights; it does not call a paid model API.
+
+Inspect the exact task/limits without Docker or any model calls:
+
+```sh
+python -m benchmark.experimental.cursor_sdk.full_run \
+  --model EXACT_CURSOR_MODEL_ID --agent-image sha256:LOCAL_IMMUTABLE_IMAGE_ID \
+  --work /absolute/new/private-experiment --plan
+```
+
+After explicit approval, configure `CURSOR_API_KEY` privately in the controller
+and run the same command with these flags instead of `--plan`:
+
+```sh
+python -m benchmark.experimental.cursor_sdk.full_run \
+  --model EXACT_CURSOR_MODEL_ID --agent-image sha256:LOCAL_IMMUTABLE_IMAGE_ID \
+  --work /absolute/new/private-experiment \
+  --allow-credit-usage --accept-experimental-condition
+```
+
+Optional `--effort EXACT_CATALOG_VALUE` is passed unchanged to Cursor; there is no
+fallback to another model or effort. The controller starts/stops the bridges for
+you on loopback-only ephemeral ports with separate private homes. The Cursor key
+goes only to the Node SDK process; mini receives a fresh local-only bearer, and
+neither credential enters the command sandbox. Do not start `server.mjs` manually
+for this full workflow.
+
+Outputs remain private (owner-only files/directories):
+
+- `experiment.json`: exact prompt/limit manifest, requested identity, image and
+  evaluator provenance, plus explicit transport differences.
+- `attempt-1/` through `attempt-3/`: statuses, trajectories, submitted XM, canonical
+  WAV and scorer profiles. Private runtime homes are not submission artifacts.
+- `experimental-results.json`: all three planned slots, scores when available,
+  best score, mean only when all three slots have scores, and unknown dollar cost.
+
+Model failures are retained, not retried. Infrastructure, entitlement or evaluator
+failures stop further spending and leave remaining slots explicitly `NOT_STARTED`.
+A missing score is `null`, never a fabricated zero. Cancellation/timeout stops
+owned worker/bridge processes and removes only the run's own Docker resources.
+
+`artifact_evaluation_eligible` means the artifact could be scored; `eligible`,
+`frozen_eligible` and `leaderboard_eligible` remain false in the experimental output.
+A real score does not prove upstream prompt/tool/settings equivalence or model
+identity. Do not upload this directory as a canonical community submission, rename
+the route `custom`, or count it as leaderboard-qualified. Review private artifacts
+for sensitive material before sharing anything. Neither timeout nor consent flags
+implement a dollar cap; confirm an enforceable billing limit separately.
 
 ## live diagnostic (separate explicit approval required)
 
@@ -111,3 +176,13 @@ Local verification: Node contract tests and real pinned mini/LiteLLM against thi
 bridge's mocked SDK runtime. No funded Cursor inference or Docker/FT2 rendering
 was run while preparing this change. Account enablement, exact effective tools,
 ambient context, provider-side model identity and billing remain unverified.
+
+
+## offline full-pipeline acceptance
+
+`test_full_run.py` checks orchestration contracts without Docker or inference.
+`test_native_full_run.py` is opt-in via `KEYGEN_CURSOR_NATIVE_TEST_IMAGE`: it uses
+real mini, three network-disabled FT2 Docker sandboxes, collection, fresh rendering
+and the real scorer, but a synthetic SDK and the explicitly fake listener fixture.
+It makes no Cursor calls and downloads no neural listener weights. This validates
+the pipeline, not live model entitlement, billing, model quality or fairness.

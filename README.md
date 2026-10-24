@@ -103,4 +103,4 @@ to cite keygen bench, use [CITATION.cff](CITATION.cff) with the commit your expe
 
 ## experimental Cursor credits
 
-An opt-in [Cursor SDK → mini-swe-agent diagnostic](benchmark/experimental/cursor_sdk/README.md) keeps Bash execution in mini. It is not a qualified frozen provider and does not run or spend credits automatically.
+The opt-in [Cursor SDK → mini-swe-agent workflow](benchmark/experimental/cursor_sdk/README.md) runs full three-attempt music experiments with FT2 rendering and scoring, while mini owns Bash execution. Results stay explicitly experimental, not leaderboard-qualified. A separate small probe tests transport only. Neither workflow starts or spends credits automatically.

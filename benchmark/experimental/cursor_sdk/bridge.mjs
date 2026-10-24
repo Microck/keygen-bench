@@ -72,14 +72,19 @@ export class Session {
     } catch(error) { await this.close(); throw error; }
     finally {this.busy=false;}
   }
-  async close() {
-    if(this.closed) return; this.closed=true;
+  close() {
+    if (this.closePromise) return this.closePromise;
+    this.closed=true;
     this.waiter?.reject(new ContractError('Session closed')); this.waiter=null;
     for(const result of this.pending.values()) result.reject(new ContractError('Session closed'));
     this.pending.clear();
-    await this.runtime.cancelStart?.();
-    if(this.handle) await this.handle.close();
+    this.closePromise=(async()=>{
+      try { await this.runtime.cancelStart?.(); }
+      finally { if(this.handle) await this.handle.close(); }
+    })();
+    return this.closePromise;
   }
+
 }
 
 export function makeServer(session, token, timeoutMs=120_000) {
@@ -94,9 +99,9 @@ export function makeServer(session, token, timeoutMs=120_000) {
       if(req.method==='GET'&&req.url==='/health'){reply(200,{condition:CONDITION,live_verified:false});return;}
       if(req.method!=='POST'||req.url!=='/v1/chat/completions'){reply(404,{error:'not found'});return;}
       let size=0; const chunks=[];
-      for await(const chunk of req){size+=chunk.length;if(size>8*1024*1024)throw new ContractError('Request exceeds 8 MiB diagnostic limit');chunks.push(chunk);}
+      for await(const chunk of req){size+=chunk.length;if(size>8*1024*1024)throw new ContractError('Request exceeds 8 MiB bridge limit');chunks.push(chunk);}
       const body=JSON.parse(Buffer.concat(chunks).toString('utf8'));
-      timer=setTimeout(()=>{void session.close().catch(()=>{});reply(504,{error:'Diagnostic deadline exceeded'});},timeoutMs);
+      timer=setTimeout(()=>{void session.close().catch(()=>{});reply(504,{error:'Model request deadline exceeded'});},timeoutMs);
       res.once('close',()=>{if(!res.writableEnded)void session.close().catch(()=>{});});
       reply(200,await session.query(body));
     } catch(error) {
