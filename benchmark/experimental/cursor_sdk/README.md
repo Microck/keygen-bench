@@ -70,6 +70,8 @@ modified to admit this different transport.
 
 First build the pinned agent image and install the analysis renderer and separate
 listener environment using [benchmark setup](../../README.md#prerequisites).
+The exact pinned Debian base from `benchmark/Dockerfile` must also be in the local
+Docker image store; pull that digest if BuildKit only cached it internally.
 The command verifies Docker, pinned image ancestry, mini/SDK versions, renderer,
 listener and disk space before starting Cursor inference. The listener's identity
 check can download its pinned weights; it does not call a paid model API.
@@ -173,8 +175,8 @@ balance or include the result in a frozen community/ranked submission.
 - [Cursor staff on private-client proxies](https://forum.cursor.com/t/does-using-oh-my-pi-s-cursor-provider-or-an-openai-compatible-proxy-to-the-same-endpoints-violate-cursor-s-tos/167778/5): private endpoints are not a supported substitute for the SDK.
 
 Local verification: Node contract tests and real pinned mini/LiteLLM against this
-bridge's mocked SDK runtime. No funded Cursor inference or Docker/FT2 rendering
-was run while preparing this change. Account enablement, exact effective tools,
+bridge's mocked SDK runtime. No funded Cursor inference was run. The separate CI native fixture described
+below verifies the Docker/FT2 path with synthetic inputs. Account enablement, exact effective tools,
 ambient context, provider-side model identity and billing remain unverified.
 
 

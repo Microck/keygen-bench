@@ -176,7 +176,11 @@ def start_bridge(directory, model, effort, token, cursor_key):
             if process.poll() is not None:
                 raise RuntimeError('Cursor bridge startup failed; no fallback attempted')
             if ready.exists():
-                info = json.loads(ready.read_text())
+                try:
+                    info = json.loads(ready.read_text())
+                except (json.JSONDecodeError, UnicodeDecodeError):
+                    time.sleep(0.05)
+                    continue
                 port = info['port']
                 if type(port) is not int or not 1024 <= port <= 65535:
                     raise ValueError('Invalid bridge readiness port')

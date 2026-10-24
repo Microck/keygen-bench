@@ -7,6 +7,13 @@ import re
 import subprocess
 
 
+def configure_probe_environment():
+    os.environ['MSWEA_MODEL_RETRY_STOP_AFTER_ATTEMPT'] = '1'
+    os.environ['LITELLM_MODE'] = 'PRODUCTION'
+    os.environ['LITELLM_LOCAL_MODEL_COST_MAP'] = 'True'
+    os.environ['NO_PROXY'] = os.environ['no_proxy'] = '127.0.0.1,localhost'
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--model', required=True, help='Exact Cursor catalogue model ID')
@@ -25,9 +32,7 @@ def main():
     if out.is_relative_to(repo) or out.exists():
         parser.error('Output must be a new private file outside the checkout')
     subprocess.run(['docker', 'image', 'inspect', args.image], check=True, stdout=subprocess.DEVNULL)
-    os.environ['MSWEA_MODEL_RETRY_STOP_AFTER_ATTEMPT'] = '1'
-    os.environ['LITELLM_MODE'] = 'PRODUCTION'
-    os.environ['LITELLM_LOCAL_MODEL_COST_MAP'] = 'True'
+    configure_probe_environment()
     from minisweagent.agents.default import DefaultAgent
     from minisweagent.environments.docker import DockerEnvironment
     from .model import CursorMiniModel, CONDITION

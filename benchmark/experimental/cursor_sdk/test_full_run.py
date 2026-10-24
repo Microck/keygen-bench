@@ -14,6 +14,30 @@ IMAGE = 'sha256:' + '1' * 64
 
 
 class FullRunTests(unittest.TestCase):
+    def test_partial_readiness_file_is_polled_until_complete(self):
+        with tempfile.TemporaryDirectory() as root:
+            directory=Path(root);ready=directory/'bridge-ready.json'
+            process=Mock();process.poll.return_value=None
+            def start(*args,**kwargs):
+                ready.write_text('{')
+                return process
+            def finish_write(_seconds):
+                ready.write_text(json.dumps({'port':43210}))
+            with patch.object(full.subprocess,'Popen',side_effect=start), \
+                 patch.object(full.time,'sleep',side_effect=finish_write) as sleep, \
+                 patch.object(full,'stop_process') as stop:
+                result,url=full.start_bridge(directory,'fixture',None,'synthetic-local-token','synthetic-upstream-key')
+            self.assertIs(result,process);self.assertEqual(url,'http://127.0.0.1:43210/v1')
+            sleep.assert_called_once();stop.assert_not_called()
+
+    def test_probe_excludes_loopback_from_proxy_before_mini_import(self):
+        from .probe import configure_probe_environment
+        with patch.dict(os.environ,{'HTTP_PROXY':'http://proxy.invalid:8080','no_proxy':'elsewhere'},clear=True):
+            configure_probe_environment()
+            self.assertEqual(os.environ['NO_PROXY'],'127.0.0.1,localhost')
+            self.assertEqual(os.environ['no_proxy'],'127.0.0.1,localhost')
+            self.assertEqual(os.environ['MSWEA_MODEL_RETRY_STOP_AFTER_ATTEMPT'],'1')
+
     def test_frozen_music_task_and_local_limits(self):
         config = full.configuration()
         self.assertEqual(config['limits'], full.LIMITS)
