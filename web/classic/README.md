@@ -361,7 +361,7 @@ providers, submitted music quality, native FT2 rendering or production publicati
 
 `SUPPORT.wanted` entries with `accessOnly: true` omit numeric cost estimates and monetary
 progress values, but retain the same row and sunken progress-track styling. Their
-track is labelled "Access needed · no funding target", not a fabricated $0 goal.
+track is labelled "Muse Code access needed", not a fabricated $0 goal.
 They are access requests, not free or funded runs.
 See [Muse Wonder Full access](../../docs/muse-wonder-full-access.md) for the current
 SDK/MCP route and its unverified fairness constraints.

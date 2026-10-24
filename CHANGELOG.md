@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Fixed
+
+- Keep Support button-link labels black and simplify the Muse Full access request.
+
 ### Added
 
 - Opt-in Muse Code SDK/MCP transport for mini-owned Bash execution, with pinned host/catalog checks, explicit non-frozen provenance, separate Contributor consent and offline round-trip tests.

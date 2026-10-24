@@ -91,6 +91,7 @@ const CSS = `
 .vb .toc { gap: 2px; }
 .vb pre.formula { margin: 0 0 7px; color: var(--pattext); font: inherit; }
 .vb .well a { color: var(--pattext); }
+.vb .well a.btn { color: var(--btntext); }
 .vb table.plain { border-collapse: collapse; margin-bottom: 7px; }
 .vb table.plain td { padding: 0 10px 0 0; color: var(--pattext); }
 .vb table.plain tr:first-child td { color: #fff; }
@@ -805,7 +806,7 @@ export async function mount(root, ctx) {
             const accessOnly = w.accessOnly === true;
             const range = accessOnly ? "Subscription-only access; no budget estimate set." : `3 typical runs ${usd(w.typical)}. 3 long runs ${usd(w.est)} (the estimate). 3 heavy runs ${usd(w.heavy)}.`;
             const pct = accessOnly ? 0 : Math.min(100, (w.raised / w.est) * 100);
-            const raised = accessOnly ? "Access needed · no funding target" : `${usd(w.raised)} of ${usd(w.est)} raised`;
+            const raised = accessOnly ? "Muse Code access needed" : `${usd(w.raised)} of ${usd(w.est)} raised`;
             return h("div", { class: "wanted", ...(accessOnly ? { "data-access-only": "true" } : {}) },
               badge(w.maker),
               h("span", { class: "wn" }, w.model,
