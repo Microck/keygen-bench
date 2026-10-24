@@ -57,7 +57,7 @@ class NativeFullRunTests(unittest.TestCase):
                     with patch.object(full,'start_bridge',side_effect=start_fixture):
                         status,profile=full.run_attempt(directory,args,config,docker,'unused-synthetic-key')
                     signal.alarm(0)
-                    self.assertIsNone(status['failure_category'],status)
+                    self.assertIsNone(status['failure_category'],{'status':status,'evaluation_error':profile.get('evaluation_error') if profile else None})
                     self.assertEqual(status['render'],'ok',status)
                     self.assertTrue((directory/'canonical/canonical.wav').is_file())
                     self.assertTrue((directory/'trajectory.json').is_file())

@@ -281,6 +281,7 @@ def run_attempt(directory, args, config, docker, cursor_key):
         profile = score_experiment(directory)
         if profile and (profile.get('evaluation_error') or {}).get('category') == 'EVAL':
             status['failure_category'] = 'EVAL'
+            status['evaluation_error'] = profile['evaluation_error']
     except Exception as error:
         profile = {'eligible': False, 'frozen_eligible': False, 'leaderboard_eligible': False,
                    'experimental_condition': CONDITION, 'evaluation_status': 'error',
