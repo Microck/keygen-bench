@@ -2,6 +2,8 @@
 import importlib.util
 import json
 import os
+import shutil
+import sys
 from pathlib import Path
 import subprocess
 import tempfile
@@ -59,6 +61,33 @@ class DeployTests(unittest.TestCase):
         report = deploy_site.deploy(self.pub, out, self.remotes, self.seed,
                                     "https://keygen.micr.dev", dry_run, **kwargs)
         return out, report
+
+    def test_workflow_sparse_checkout_preserves_bundle_contract_inputs(self):
+        repository = SCRIPT.parents[1]
+        workflow = (repository / ".github/workflows/deploy-site.yml").read_text()
+        patterns = workflow.split("<<'PATTERNS'\n", 1)[1].split("PATTERNS", 1)[0]
+        patterns = "\n".join(line.strip() for line in patterns.splitlines()) + "\n"
+        fixture = self.root / "source"
+        fixture.mkdir()
+        shutil.copytree(repository / "benchmark", fixture / "benchmark",
+                        ignore=shutil.ignore_patterns("__pycache__"))
+        (fixture / "scripts").mkdir()
+        shutil.copyfile(repository / "scripts/build-ft2-linux.sh",
+                        fixture / "scripts/build-ft2-linux.sh")
+        self.run_git("init", "--quiet", str(fixture))
+        self.run_git("-C", str(fixture), "add", ".")
+        self.run_git("-C", str(fixture), "-c", "user.name=Fixture",
+                     "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false",
+                     "commit", "--quiet", "-m", "synthetic contract inputs")
+        sparse = self.root / "sparse"
+        self.run_git("clone", "--quiet", "--no-checkout", str(fixture), str(sparse))
+        subprocess.run(["git", "-C", str(sparse), "sparse-checkout", "set", "--no-cone", "--stdin"],
+                       input=patterns, text=True, check=True, capture_output=True)
+        self.run_git("-C", str(sparse), "checkout", "--quiet")
+        subprocess.run([sys.executable, "-c",
+                        "import sys; sys.path.insert(0, 'benchmark/contrib'); "
+                        "from validate_bundle import contract; contract()"],
+                       cwd=sparse, check=True, capture_output=True)
 
     def test_export_local_push_and_unchanged_skip(self):
         out, report = self.deploy()
