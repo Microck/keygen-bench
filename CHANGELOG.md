@@ -4,6 +4,8 @@
 
 ### Fixed
 
+- Publish maintainer-verified community bundles through the canonical site pipeline, with playable attempts, source receipts and route disclosures, without comparative ranks.
+
 - Keep Support button-link labels black and simplify the Muse Full access request.
 
 ### Added

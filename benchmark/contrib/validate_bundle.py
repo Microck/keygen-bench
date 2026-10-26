@@ -278,7 +278,7 @@ def validate(root):
     return manifest
 
 
-def rescore(root, trusted_image, output):
+def rescore(root, trusted_image, output, *, publication_note=None, source_url=None):
     """Use a maintainer-selected image, never execute a contributor-selected image."""
     import run
     import score
@@ -290,19 +290,39 @@ def rescore(root, trusted_image, output):
     if output == root.resolve() or root.resolve() in output.parents:
         raise ValueError("Rescore output must be outside the sealed bundle")
     output.mkdir(parents=True, exist_ok=False)
-    write_json(output / "verification.json", {"bundle_sha256": sha(root / "manifest.json"),
+    bundle_sha256 = sha(root / "manifest.json")
+    write_json(output / "verification.json", {"bundle_sha256": bundle_sha256,
                "trusted_agent_image": image, "contract": contract()})
+    manifest = json.loads((root / "manifest.json").read_text())
+    environment = manifest["environment"]
+    frozen = environment["contract"]
+    model = environment["model"]
+    config = {"schema": "keygen-native-campaign-3", "models": [model],
+              "image": environment["images"]["agent"], "visualizer_image": environment["images"]["visualizer"],
+              "prompts": frozen["prompt"], "limits": frozen["limits"],
+              "native": frozen["native"], "policies": {"attempt_selection": frozen["attempt_selection"]}}
     for attempt in ATTEMPTS:
         source = root / attempt
         target = output / attempt
         (target / "submission").mkdir(parents=True)
         shutil.copyfile(source / "trajectory.json", target / "trajectory.json")
+        shutil.copyfile(source / "transport.jsonl", target / "transport.jsonl")
+        write_json(target / "environment.json", environment)
+        write_json(target / "spec.json", {"config": config, "model": model})
+        write_json(target / "ATTEMPT.json", {"attempt_id": attempt, "slot": attempt,
+                   "campaign_id": "community-" + bundle_sha256,
+                   "publication": {"kind": "community-submitted", "bundle_sha256": bundle_sha256,
+                       "trusted_agent_image": image,
+                       "source_url": source_url, "note": publication_note or
+                       "Community-submitted; maintainer re-rendered and re-scored. Not comparatively ranked."}})
+
         status = json.loads((source / "status.json").read_text())
         if (source / "tune.xm").exists():
             shutil.copyfile(source / "tune.xm", target / "submission/tune.xm")
             try:
                 status["audio"] = run.render(docker, image, target, {"limits": LIMITS})
                 status["module"] = run.module_facts(target)
+                status["render"] = "ok"
             except ValueError:
                 # Preserve invalid artifacts as failed outcomes, then evaluate later slots.
                 status.update(status="MODEL_FAILED", eligible=False, render="invalid",
@@ -314,13 +334,74 @@ def rescore(root, trusted_image, output):
         print(json.dumps(profile))
 
 
+
+def publish_review(root, review, output):
+    """Retain a reviewed render without leaking evaluator installation paths.
+
+    Raw evaluation files stay private in review. Only home-directory prefixes in
+    profile provenance labels change; artifact and executable hashes stay intact.
+    """
+    if not shutil.which("flac"):
+        raise ValueError("Publication requires flac for byte-exact WAV retention")
+    receipt = json.loads((review / "verification.json").read_text())
+    if receipt["bundle_sha256"] != sha(root / "manifest.json"):
+        raise ValueError("Trusted review belongs to a different sealed bundle")
+    output.mkdir(parents=True, exist_ok=False)
+
+    def public_labels(value):
+        if isinstance(value, dict):
+            return {public_labels(key): public_labels(item) for key, item in value.items()}
+        if isinstance(value, list):
+            return [public_labels(item) for item in value]
+        if isinstance(value, str):
+            return re.sub(r"/(?:home|Users)/[^/]+/", "HOME/", value)
+        return value
+
+    for attempt in ATTEMPTS:
+        source, target = review / attempt, output / attempt
+        target.mkdir()
+        for name in ("status.json", "trajectory.json", "transport.jsonl", "environment.json",
+                     "spec.json", "ATTEMPT.json", "profile.json", "submission", "canonical", "evaluations"):
+            path = source / name
+            if path.is_dir():
+                shutil.copytree(path, target / name)
+            elif name not in {"submission", "canonical", "evaluations"}:
+                shutil.copyfile(path, target / name)
+        for path in target.rglob("*.json"):
+            if path.name == "profile.json":
+                raw_hash = sha(path)
+                write_json(path, public_labels(json.loads(path.read_text())))
+                identity = json.loads((target / "ATTEMPT.json").read_text())
+                identity["publication"].update(raw_profile_sha256=raw_hash,
+                    profile_projection="Absolute evaluator home prefixes replaced with HOME/; artifact hashes unchanged.")
+                # The top-level profile is the one consumed by the site builder.
+                if path.parent == target:
+                    write_json(target / "ATTEMPT.json", identity)
+        wav = target / "canonical/canonical.wav"
+        if wav.is_file():
+            import subprocess
+            subprocess.run(["flac", "--silent", "--keep-foreign-metadata", "-o", str(wav) + ".flac", str(wav)], check=True)
+            wav.unlink()
+        for path in target.rglob("*"):
+            if path.is_file() and path.suffix in {".json", ".jsonl", ".xm"}:
+                content = path.read_bytes()
+                if SECRET.search(content) or PRIVATE.search(content):
+                    raise ValueError("Publication privacy scan failed; inspect the private review")
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("bundles", type=Path, nargs="+")
     parser.add_argument("--rescore", action="store_true")
     parser.add_argument("--trusted-agent-image", help="Maintainer-built image required for rescore")
     parser.add_argument("--rescore-out", type=Path, help="New directory for trusted evaluation")
+    parser.add_argument("--publication-out", type=Path, help="New canonical runs/<model> directory for the reviewed publication")
+    parser.add_argument("--publication-note", help="Public review and route-limit disclosure for rescored results")
+    parser.add_argument("--source-url", help="Public HTTPS URL of the reviewed submission")
     args = parser.parse_args()
+    if args.source_url:
+        public_documentation_url(args.source_url)
+    if (args.publication_note or args.source_url or args.publication_out) and not args.rescore:
+        parser.error("Publication metadata requires --rescore")
     if args.rescore and (len(args.bundles) != 1 or not args.trusted_agent_image or not args.rescore_out):
         parser.error("Rescore requires one bundle, --trusted-agent-image and --rescore-out")
     if not args.rescore and (args.trusted_agent_image or args.rescore_out):
@@ -329,7 +410,10 @@ def main():
         for root in args.bundles:
             validate(root)
             if args.rescore:
-                rescore(root, args.trusted_agent_image, args.rescore_out)
+                rescore(root, args.trusted_agent_image, args.rescore_out,
+                        publication_note=args.publication_note, source_url=args.source_url)
+                if args.publication_out:
+                    publish_review(root, args.rescore_out, args.publication_out)
             print(f"Valid community bundle: {root}")
     except (ValueError, KeyError, TypeError, OSError, RuntimeError) as exc:
         parser.exit(1, f"Bundle rejected ({type(exc).__name__}); check format and secret scan locally.\n")

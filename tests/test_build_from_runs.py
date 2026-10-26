@@ -1,5 +1,6 @@
 """Offline publication tests with small synthetic ranked attempts."""
 import errno
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -229,6 +230,70 @@ class RunsBuilderTests(unittest.TestCase):
         self.dump(self.site / "model-metadata.json", {})
         with self.assertRaisesRegex(ValueError, "Unknown model metadata"):
             self.build(no_media=True)
+
+    def test_explicit_unknown_release_date_is_not_fabricated(self):
+        self.dump(self.site / "model-metadata.json", {"test-model": {
+            "release_date": None, "release_date_note": "No verified maker announcement."}})
+        data = self.build(no_media=True)
+        self.assertEqual(len(data["runs"]), 2)
+        metadata = json.loads((self.root / "publication/dist/model-metadata.json").read_text())
+        self.assertIsNone(metadata["test-model"]["release_date"])
+
+    def test_community_receipt_rejects_missing_source(self):
+        directory = self.runs / "test-model/attempt-1"
+        identity = json.loads((directory / "ATTEMPT.json").read_text())
+        identity["publication"] = {"kind": "community-submitted", "bundle_sha256": "0" * 64,
+                                   "note": "Historical route, not comparatively ranked."}
+        self.dump(directory / "ATTEMPT.json", identity)
+        report = self.root / "report"
+        report.mkdir()
+        with self.assertRaisesRegex(ValueError, "missing reviewed community bundle"):
+            builder.load_attempt(directory, report, {})
+
+    @unittest.skipUnless(shutil.which("flac"), "requires lossless encoder")
+    def test_public_review_preserves_hashes_and_removes_home_prefixes(self):
+        from benchmark.contrib.validate_bundle import publish_review
+        bundle, review = self.root / "bundle", self.root / "review"
+        self.dump(bundle / "manifest.json", {"sealed": "synthetic fixture"})
+        self.dump(review / "verification.json", {"bundle_sha256": sha256(bundle / "manifest.json")})
+        for ordinal in range(1, 4):
+            directory = review / f"attempt-{ordinal}"
+            for name in ("status.json", "trajectory.json", "environment.json", "spec.json"):
+                self.dump(directory / name, {})
+            self.dump(directory / "ATTEMPT.json", {"publication": {"kind": "community-submitted"}})
+            self.dump(directory / "profile.json", {"inputs": {"binary_sha256": "a" * 64,
+                "path": "/home/private-user/venv/bin/python"}, "craft": {"craft_score": 70}})
+            (directory / "transport.jsonl").write_text("")
+        published = self.root / "published-review"
+        publish_review(bundle, review, published)
+        for ordinal in range(1, 4):
+            directory = published / f"attempt-{ordinal}"
+            profile = json.loads((directory / "profile.json").read_text())
+            self.assertEqual(profile["inputs"]["path"], "HOME/venv/bin/python")
+            self.assertEqual(profile["inputs"]["binary_sha256"], "a" * 64)
+            self.assertEqual(profile["craft"]["craft_score"], 70)
+            identity = json.loads((directory / "ATTEMPT.json").read_text())
+            self.assertEqual(identity["publication"]["raw_profile_sha256"],
+                             sha256(review / f"attempt-{ordinal}/profile.json"))
+        self.assertIn("/home/private-user", (review / "attempt-1/profile.json").read_text())
+
+    @unittest.skipUnless(importlib.util.find_spec("PIL") and importlib.util.find_spec("fontTools"),
+                         "requires OG image dependencies")
+    def test_community_og_has_routes_but_no_comparative_rank(self):
+        dist = self.root / "community-cards"
+        self.dump(dist / "data.json", {"generated": "2026-01-01", "runs": [{
+            "model_key": "test-model", "slug": "test-model-a1", "name": "test-model (attempt 1)",
+            "maker": "OpenAI", "score": 70.0, "exhibition": True,
+            "publication_note": "Community-submitted, not comparatively ranked.",
+            "provenance": {"attempt_ordinal": 1}, "listener": {
+                "content_enjoyment": 7.0, "production_quality": 8.0, "production_complexity": 5.0}}]})
+        subprocess.run([sys.executable, str(ROOT / "web/classic/build_og.py"),
+                        "--dist", str(dist)], check=True, capture_output=True)
+        metadata = json.loads((dist / "og/meta.json").read_text())
+        description = metadata["/tracker/test-model"]["description"]
+        self.assertIn("not comparatively ranked", description)
+        self.assertNotIn("Rank 1", description)
+        self.assertTrue((dist / "og/test-model.png").is_file())
 
     def test_missing_release_date_fails(self):
         self.dump(self.site / "model-metadata.json", {"test-model": {}})

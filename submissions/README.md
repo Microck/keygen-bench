@@ -74,3 +74,8 @@ with provenance and every attempt/failure visible. Never silently add them to
 ranked results. CI validation alone is not acceptance or a musical-quality claim.
 GitHub retains public history; handle deletion requests under the maintainer's
 data policy and rotate exposed credentials even if a file is removed later.
+
+Trusted rescore output includes publication receipts and sealed public specifications
+for the [canonical site builder](../web/classic/README.md#reviewed-community-publication).
+Publish all three slots under `runs/<model>/` only after review. Community results
+remain labelled, playable exhibitions with no comparative rank.

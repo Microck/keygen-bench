@@ -48,7 +48,7 @@ def checked_path(directory: Path, relative: str) -> Path:
     return path
 
 
-def load_attempt(directory: Path, report_root: Path) -> tuple[dict, dict, str]:
+def load_attempt(directory: Path, report_root: Path, bundles: dict | None = None) -> tuple[dict, dict, str]:
     identity = read_json(checked_path(directory, "ATTEMPT.json"))
     attempt_id = identity["attempt_id"]
     if not re.fullmatch(r"[A-Za-z0-9_.:-]+", attempt_id):
@@ -68,7 +68,8 @@ def load_attempt(directory: Path, report_root: Path) -> tuple[dict, dict, str]:
             raise ValueError(f"{directory}: standalone model differs from sealed spec")
         config = {**spec["config"], "models": [spec["model"]],
                   "schema": "keygen-native-campaign-3",
-                  "campaign_id": "next-max-tier-" + identity["campaign_id"]}
+                  "campaign_id": identity["campaign_id"] if identity.get("publication") else
+                  "next-max-tier-" + identity["campaign_id"]}
         campaign_hash, fingerprint = digest(config), digest(config)
         link.mkdir()
         for filename in ("status.json", "profile.json"):
@@ -88,6 +89,32 @@ def load_attempt(directory: Path, report_root: Path) -> tuple[dict, dict, str]:
     row["source_campaign_id"] = f"campaign-{campaign_hash}"
     row["condition_fingerprint"] = condition_fingerprint(config, status["model"])
     row["repetition"] = int(directory.name.removeprefix("attempt-"))
+    publication = identity.get("publication")
+    if publication:
+        bundle = (bundles or {}).get(publication["bundle_sha256"])
+        if not bundle or publication["kind"] != "community-submitted" or not publication.get("note"):
+            raise ValueError(f"{directory}: missing reviewed community bundle or disclosure")
+        manifest = read_json(bundle / "manifest.json")
+        frozen = manifest["environment"]["contract"]
+        if (config["prompts"] != frozen["prompt"] or config["limits"] != frozen["limits"]
+                or config["native"] != frozen["native"] or config["models"] != [manifest["environment"]["model"]]
+                or config["image"] != manifest["environment"]["images"]["agent"]
+                or config["visualizer_image"] != manifest["environment"]["images"]["visualizer"]):
+            raise ValueError(f"{directory}: reviewed contract mismatch")
+        source = bundle / directory.name
+        submitted = read_json(source / "status.json")
+        if any(status.get(key) != submitted.get(key) for key in
+               ("model", "attempt_id", "repetition", "started_at", "finished_at", "wall_seconds", "totals")):
+            raise ValueError(f"{directory}: reviewed submission identity mismatch")
+        for retained, original in (("submission/tune.xm", "tune.xm"),
+                                   ("trajectory.json", "trajectory.json"),
+                                   ("transport.jsonl", "transport.jsonl")):
+            if (source / original).is_file() and sha256(checked_path(directory, retained)) != sha256(source / original):
+                raise ValueError(f"{directory}: reviewed submission checksum mismatch: {retained}")
+        row["publication"] = publication
+        row["cohort"] = {"key": "community/" + publication["bundle_sha256"],
+                         "condition": "community-submitted", "prompt_version": config["prompts"]["version"],
+                         "label": "Community-submitted, maintainer re-scored; not comparatively ranked"}
     return row, config, campaign_hash
 
 
@@ -132,7 +159,7 @@ def scored_profile(row: dict, directory: Path, evidence: dict, stage: Path) -> t
 
 def build_from_runs(runs_root: Path, output: Path, listener_scores: Path,
                     *, no_media: bool = False, models: list[str] | None = None,
-                    site: Path = SITE, cards: bool = True) -> dict:
+                    site: Path = SITE, cards: bool = True, submissions: Path = ROOT / "submissions") -> dict:
     started = time.monotonic()
     runs_root, output = runs_root.resolve(), output.resolve()
     if (output == ROOT or ROOT.is_relative_to(output) or output.is_relative_to(runs_root)
@@ -160,6 +187,22 @@ def build_from_runs(runs_root: Path, output: Path, listener_scores: Path,
     if models and set(models) != {path.name for path in selected}:
         raise ValueError("Requested model directories are missing")
     selected = [path for path in selected if path.name not in exclusions]
+    # Validate only referenced bundles, once each. Unreviewed submissions are not publication inputs.
+    from benchmark.contrib.validate_bundle import validate
+    required = set()
+    for model in selected:
+        for path in model.glob("attempt-*/ATTEMPT.json"):
+            publication = read_json(path).get("publication")
+            if publication:
+                required.add(publication["bundle_sha256"])
+    bundles = {}
+    for manifest in submissions.glob("*/*/manifest.json") if required else []:
+        manifest_hash = sha256(manifest)
+        if manifest_hash in required:
+            validate(manifest.parent)
+            bundles[manifest_hash] = manifest.parent
+    if required - bundles.keys():
+        raise ValueError("Missing reviewed community bundle")
     loaded, missing = [], []
     with tempfile.TemporaryDirectory(prefix="keygen-site-") as temporary:
         work = Path(temporary)
@@ -170,7 +213,7 @@ def build_from_runs(runs_root: Path, output: Path, listener_scores: Path,
             for directory in directories:
                 if directory.is_symlink() or not directory.is_dir() or not re.fullmatch(r"attempt-[123]", directory.name):
                     raise ValueError(f"{directory}: invalid ranked slot")
-                row, config, campaign_hash = load_attempt(directory, report_root)
+                row, config, campaign_hash = load_attempt(directory, report_root, bundles)
                 row["retained_profile_sha256"] = sha256(directory / "profile.json") if (directory / "profile.json").is_file() else None
                 row["retained_status_sha256"] = sha256(directory / "status.json")
                 row.pop("profile", None)
@@ -219,7 +262,10 @@ def build_from_runs(runs_root: Path, output: Path, listener_scores: Path,
                 identity = {}
             if key not in metadata:
                 raise ValueError(f"Unknown model metadata: {key}")
-            if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", metadata[key].get("release_date", "")):
+            release = metadata[key].get("release_date")
+            unknown_release = ("release_date" in metadata[key] and release is None
+                               and bool(metadata[key].get("release_date_note")))
+            if not unknown_release and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", release or ""):
                 raise ValueError(f"Missing release_date: {key}")
             run_slug = identity.get("slug", f"{slug(key)}-a{ordinal}-{xm_hash[:12]}")
             if not re.fullmatch(r"[a-z0-9][a-z0-9-]*", run_slug):
@@ -227,7 +273,7 @@ def build_from_runs(runs_root: Path, output: Path, listener_scores: Path,
             source_evaluation = {key: row[key] for key in ("score_version", "evaluation_fingerprint")}
             source_evaluation["profile_sha256"] = row["retained_profile_sha256"]
             if xm_hash in evidence:
-                listener_identity = scores.get("listener")
+                listener_identity = evidence[xm_hash].get("listener", scores.get("listener"))
             else:
                 from benchmark.score import listener_identity as local_listener_identity
                 listener_identity = local_listener_identity()
@@ -249,6 +295,10 @@ def build_from_runs(runs_root: Path, output: Path, listener_scores: Path,
                 evaluation_kind="listener-evidence" if xm_hash in evidence else "listener-local",
                 listener=listener_identity, source_evaluation=source_evaluation,
                 configuration_source="campaign.json" if (directory / "campaign.json").is_file() else "sealed standalone spec.json")
+            if row.get("publication"):
+                run.update(exhibition=True, publication_note=row["publication"]["note"])
+                run["provenance"].update(row["publication"])
+                run["provenance"]["configuration_source"] = "sealed community bundle contract"
             run["provenance"].pop("profile_sha256")
             # Known partial usage is a lower bound, not a zero bill.
             if run["cost_usd"] is None and row["usage_unknown"]:
@@ -282,12 +332,14 @@ def build_from_runs(runs_root: Path, output: Path, listener_scores: Path,
                          state=state, ranked_slug=None, best_ordinal=None)
             if eligible:
                 best = min(eligible, key=lambda a: (-a["score"], a["ordinal"]))
-                best["ranked"] = True
+                comparative = not by_slug[best["slug"]]["exhibition"]
+                best["ranked"] = comparative
                 group.update(ranked_slug=best["slug"], best_ordinal=best["ordinal"])
                 for attempt in eligible:
                     run = by_slug[attempt["slug"]]
-                    run.update(ranked=attempt is best, attempt_of=None if attempt is best else best["slug"])
-                ranked.append(by_slug[best["slug"]])
+                    run.update(ranked=comparative and attempt is best, attempt_of=None if attempt is best else best["slug"])
+                if comparative:
+                    ranked.append(by_slug[best["slug"]])
         for cohort_key in {run["cohort"]["key"] for run in ranked}:
             members = sorted((run for run in ranked if run["cohort"]["key"] == cohort_key),
                              key=lambda run: (-run["score"], run["name"]))
