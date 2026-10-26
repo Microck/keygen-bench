@@ -113,7 +113,7 @@ def models(data):
     ranked = sorted((m for m in out if not m["exhibition"]), key=lambda m: -m["best"]["score"])
     for i, m in enumerate(ranked):
         m["rank"] = i + 1
-    return ranked
+    return ranked + sorted((m for m in out if m["exhibition"]), key=lambda m: m["key"])
 
 
 def home(ms, path, date):
@@ -126,7 +126,7 @@ def home(ms, path, date):
     row = 29 * K
     top = ms[:5]
     # The bar track ends a clear gap before the widest score, so a full bar never touches its number.
-    score_w = max(d.textlength(f"{m['best']['score']:.1f}", font=BIG) for m in top)
+    score_w = max((d.textlength(f"{m['best']['score']:.1f}", font=BIG) for m in top), default=0)
     bar_w = 80 * K
     bar_x = W - 12 * K - score_w - 10 * K - bar_w
     for i, m in enumerate(top):
@@ -152,7 +152,8 @@ def model_card(m, total, path):
     room = W - 8 * K - d.textlength(f"{r['score']:.1f}", font=HUGE) - 70 * K
     nf = BIG if d.textlength(m["label"], font=BIG) <= room else font(1, 20 * 2)
     text(d, (64 * K, 42 * K if nf is BIG else 48 * K), m["label"], nf, PAL["white"], PAL["dsktop2"])
-    text(d, (64 * K, 66 * K), f"{m['maker']}  |  rank {m['rank']} of {total}", SMALL, PAL["dim"])
+    placement = "community-submitted, not ranked" if r.get("publication_note") else "exhibition, not ranked" if m["exhibition"] else f"rank {m['rank']} of {total}"
+    text(d, (64 * K, 66 * K), f"{m['maker']}  |  {placement}", SMALL, PAL["dim"])
     text(d, (W - 8 * K, 38 * K), f"{r['score']:.1f}", HUGE, PAL["white"], PAL["looppin"], anchor="ra")
     sunken(d, [5 * K, 92 * K, W - 5 * K - 1, H - 6 * K - 1])
     L = r["listener"]  # enjoyment sets the score; quality and complexity add context
@@ -185,18 +186,20 @@ def main():
     og = args.dist / "og"
     og.mkdir(exist_ok=True)
     date = str(data.get("generated", ""))[:10]
-    home(ms, og / "home.png", date)
-    top = ", ".join(f"{m['label']} {m['best']['score']:.1f}" for m in ms[:3])
-    desc = f"{len(ms)} AI models write keygen tunes in FastTracker II, scored from the audio. Top: {top}."
+    ranked = [m for m in ms if not m["exhibition"]]
+    home(ranked, og / "home.png", date)
+    top = ", ".join(f"{m['label']} {m['best']['score']:.1f}" for m in ranked[:3])
+    desc = f"{len(ranked)} ranked AI models write keygen tunes in FastTracker II, scored from the audio. Top: {top}."
     meta = {}
     for route, title in [("/", "Keygen Bench"), ("/tracker", "Keygen Bench: Tracker"), ("/rankings", "Keygen Bench: Rankings"),
                          ("/scoring", "Keygen Bench: How scoring works"), ("/support", "Keygen Bench: Support")]:
         meta[route] = {"title": title, "description": desc, "image": "/dist/og/home.png"}
     for m in ms:
-        model_card(m, len(ms), og / f"{m['key']}.png")
+        model_card(m, len(ranked), og / f"{m['key']}.png")
         r = m["best"]
+        placement = (r.get("publication_note") or "Exhibition, not ranked.") if m["exhibition"] else f"Rank {m['rank']} of {len(ranked)}."
         info = {"title": f"{m['label']}: {r['score']:.1f} | Keygen Bench",
-                "description": f"Rank {m['rank']} of {len(ms)}. Best of {len(m['scores'])} attempt{'s' if len(m['scores']) != 1 else ''} writing a keygen tune in FastTracker II. Listen to it in the tracker.",
+                "description": f"{placement} Best of {len(m['scores'])} attempt{'s' if len(m['scores']) != 1 else ''} writing a keygen tune in FastTracker II. Listen to it in the tracker.",
                 "image": f"/dist/og/{m['key']}.png"}
         meta[f"/tracker/{m['key']}"] = meta[f"/rankings/{m['key']}"] = info
     (og / "meta.json").write_text(json.dumps(meta, indent=1))

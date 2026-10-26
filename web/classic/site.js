@@ -253,6 +253,7 @@ export async function mount(root, ctx) {
         ...row(["Enjoy", L.content_enjoyment, "#55FF55", "The score: content enjoyment x 10."]),
         h("div", { style: { gridColumn: "1 / -1", borderTop: "1px solid var(--pattext)", opacity: "0.4", margin: "1px 0" } }),
         ...unscored.flatMap(([kk, v]) => row([kk, v, undefined, note, true]))),
+      r.publication_note ? h("p", { class: "note", style: { padding: "2px 4px" } }, r.publication_note) : null,
       compact ? null : h("dl", { class: "kv sunken" },
         h("dt", { title: bestRankHelp }, "Best rank"), h("dd", { title: bestRankHelp }, rankText(r)),
         h("dt", {}, "Est. cost"), h("dd", { title: r.cost_range_usd?.reason }, costText(r)),
@@ -626,12 +627,12 @@ export async function mount(root, ctx) {
           kv([
             [h("span", { title: bestRankHelp }, "Best rank"), h("span", { title: bestRankHelp }, rankText(r))],
             ["Maker", r.maker], ["Effort", effort(r)], ["Wall time", r.usage.wall_minutes + " min"],
-            ...(r.exhibition ? [["Chat turns", r.usage.turns], ["Commands", r.usage.commands]] : [["Requests", r.usage.requests], ["Commands", r.usage.commands]]),
+            ...(r.exhibition && r.provenance?.kind !== "community-submitted" ? [["Chat turns", r.usage.turns], ["Commands", r.usage.commands]] : [["Requests", r.usage.requests], ["Commands", r.usage.commands]]),
             ["In tokens", tokens(r.usage.prompt_tokens)], ["- cached", tokens(r.usage.cached_tokens)],
             ["Out tokens", tokens(r.usage.completion_tokens)], ["- reasoning", tokens(r.usage.reasoning_tokens)],
             ["Est. cost", h("span", { title: r.cost_range_usd?.reason }, costText(r))],
           ]),
-          r.exhibition ? h("p", { class: "note" }, "Run by hand in the chat app: it reports no token counts and has no per-token price. Not ranked.") : null),
+          r.exhibition && r.provenance?.kind !== "community-submitted" ? h("p", { class: "note" }, "Run by hand in the chat app: it reports no token counts and has no per-token price. Not ranked.") : null),
         h("section", { class: "panel raised" }, h("h2", {}, "Price"),
           kv([
             ["$/M in", nf(r.price.input_usd_per_m)], ["$/M cached", nf(r.price.cached_input_usd_per_m)], ["$/M out", nf(r.price.output_usd_per_m)],
