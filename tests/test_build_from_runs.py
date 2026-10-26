@@ -17,7 +17,8 @@ sys.path[:0] = [str(ROOT / "web/classic"), str(ROOT), str(ROOT / "benchmark")]
 import build_from_runs as builder
 from benchmark.report import digest
 from benchmark.score import benchmark_score
-from collect_public import sha256
+from collect_public import response_usage, sha256
+from build import estimate_request_cost
 from check_runs_parity import compare
 
 
@@ -38,6 +39,26 @@ class RunsBuilderTests(unittest.TestCase):
         self.make_attempt(1, 7.0)
         self.make_attempt(2, 8.0)
         self.write_site()
+
+    def test_response_receipts_recover_cached_usage_and_price_each_context(self):
+        directory = self.root / "receipts"
+        directory.mkdir()
+        receipts = [
+            {"usage": {"input_tokens": 100000, "output_tokens": 1000,
+                       "input_tokens_details": {"cached_tokens": 90000, "cache_write_tokens": 0}}},
+            {"usage": {"input_tokens": 300000, "output_tokens": 2000,
+                       "input_tokens_details": {"cached_tokens": 280000, "cache_write_tokens": 0}}},
+        ]
+        (directory / "transport.jsonl").write_text("\n".join(json.dumps(row) for row in receipts))
+        totals = {"requests": 2, "prompt_tokens": 400000, "completion_tokens": 3000, "cached_tokens": 0}
+        requests = response_usage(directory, totals)
+        self.assertEqual(sum(row["cached_tokens"] for row in requests), 370000)
+        price = {"input_usd_per_m": 1, "cached_input_usd_per_m": .05, "output_usd_per_m": 5,
+                 "tiers": [{"min_prompt_tokens": 272001, "input_usd_per_m": 2,
+                            "cached_input_usd_per_m": .1, "output_usd_per_m": 7.5}]}
+        self.assertAlmostEqual(sum(estimate_request_cost(row, price) for row in requests), .1025)
+        self.assertIsNone(response_usage(directory, {**totals, "requests": 3}))
+        self.assertIsNone(response_usage(directory, {**totals, "prompt_tokens": 400001}))
 
     def tearDown(self):
         self.temporary.cleanup()

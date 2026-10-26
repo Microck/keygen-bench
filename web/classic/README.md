@@ -80,7 +80,10 @@ reading `other/`, so the builder does not claim to reproduce those histories.
 The spend ledger retains reviewed historical totals independently of this
 ranked-only export.
 
-Pricing uses the canonical builder's cache-write and context-tier rules. Where
+Pricing uses the canonical builder's cache-write and context-tier rules. Complete
+Responses transport receipts are reconciled with request/input/output totals
+before using their cache counts and per-request context tiers. These take
+precedence over lossy controller cache aggregates. Where
 the recorded aggregate usage cannot establish an exact amount, the publication
 shows a bounded estimate or an unknown cost instead of the legacy prototype's
 guessed exact amount. Partly recorded usage with a known estimate is explicitly
@@ -108,7 +111,7 @@ python3 benchmark/contrib/validate_bundle.py submissions/MODEL/DATE-HANDLE \
 ```
 
 The canonical builder publishes these results as `community-submitted`, in their
-own cohort, with all three attempts and the review note visible. They are playable
+own cohort, with all three attempts and the review note retained in provenance. They are playable
 exhibitions, never comparative ranks or podium entries. The builder verifies the
 receipt against the committed bundle and its original ordinals. A rescore does not
 certify unverified upstream generation settings. Do not change the sealed bundle.

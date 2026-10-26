@@ -253,7 +253,6 @@ export async function mount(root, ctx) {
         ...row(["Enjoy", L.content_enjoyment, "#55FF55", "The score: content enjoyment x 10."]),
         h("div", { style: { gridColumn: "1 / -1", borderTop: "1px solid var(--pattext)", opacity: "0.4", margin: "1px 0" } }),
         ...unscored.flatMap(([kk, v]) => row([kk, v, undefined, note, true]))),
-      r.publication_note ? h("p", { class: "note", style: { padding: "2px 4px" } }, r.publication_note) : null,
       compact ? null : h("dl", { class: "kv sunken" },
         h("dt", { title: bestRankHelp }, "Best rank"), h("dd", { title: bestRankHelp }, rankText(r)),
         h("dt", {}, "Est. cost"), h("dd", { title: r.cost_range_usd?.reason }, costText(r)),
