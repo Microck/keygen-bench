@@ -4,6 +4,8 @@
 
 ### Fixed
 
+- Keep code-only CI checkouts free of retained run and submission artifacts, avoiding checkout timeouts before tests start.
+
 - Keep the pinned FT2 build script in the deployment checkout so reviewed community bundle verification can run.
 
 - Publish maintainer-verified community bundles through the canonical site pipeline, with playable attempts, source receipts and route disclosures, without comparative ranks.
