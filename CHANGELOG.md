@@ -4,6 +4,9 @@
 
 ### Fixed
 
+- Put Terra in release-date order, add official API prices, and calculate complete Responses usage from per-request cache receipts.
+- Keep detailed publication disclosures in provenance rather than the score sidebar.
+
 - Keep code-only CI checkouts free of retained run and submission artifacts, avoiding checkout timeouts before tests start.
 
 - Keep the pinned FT2 build script in the deployment checkout so reviewed community bundle verification can run.
