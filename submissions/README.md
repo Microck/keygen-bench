@@ -69,13 +69,22 @@ eligibility and evaluation errors. The analysis renderer has a separate bounded
 64 MiB XM input limit; larger permitted submissions need explicit maintainer
 review and may fail scoring.
 
-Label accepted results `community-submitted`. Publish them in a separate cohort
-with provenance and every attempt/failure visible. Never silently add them to
-ranked results. CI validation alone is not acceptance or a musical-quality claim.
-GitHub retains public history; handle deletion requests under the maintainer's
-data policy and rotate exposed credentials even if a file is removed later.
+Merging a bundle retains evidence; it does not publish a result. Label accepted
+results `community-submitted`. Publish them in their own cohort with provenance
+and every attempt and failure visible. Verified community results stay playable
+exhibitions: they never receive a comparative rank, podium place or average rank,
+and they never join the maintainer's ranked results. Review and trusted rescoring
+do not prove which model produced a file, that the route received the declared
+settings, or that no undisclosed attempts happened. CI validation alone is not
+acceptance or a musical-quality claim. GitHub retains public history; handle
+deletion requests under the maintainer's data policy and rotate exposed
+credentials even if a file is removed later.
 
 Trusted rescore output includes publication receipts and sealed public specifications
 for the [canonical site builder](../web/classic/README.md#reviewed-community-publication).
-Publish all three slots under `runs/<model>/` only after review. Community results
-remain labelled, playable exhibitions with no comparative rank.
+After review, publish all three slots under
+`runs/<model>/community/<YYYY-MM-DD>-<handle>/`, named after the submission
+directory. That works whether or not the model already has maintainer runs; it
+never writes to `runs/<model>/attempt-N/` or `other/`, so earlier maintainer
+attempts, their ordinals and their public URLs stay as they are. Each further
+submission for the same model gets its own directory.

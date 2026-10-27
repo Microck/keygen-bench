@@ -96,8 +96,11 @@ must validate, re-render and re-score the sealed bundle with a trusted image.
 The rescore command writes canonical attempt slots, a sealed specification from
 the bundle contract, and per-attempt publication receipts. Set `--publication-note`
 to disclose route limits and `--source-url` to the reviewed submission. Keep this
-output separate from the sealed bundle. Pass `--publication-out runs/<model>` to
-retain canonical slots with lossless compressed WAVs and public evaluator labels.
+output separate from the sealed bundle. Pass
+`--publication-out runs/<model>/community/<submission directory>` to retain the
+slots with lossless compressed WAVs and public evaluator labels. The command
+refuses any other target and any existing directory, so it works for a model that
+already has maintainer runs without touching `runs/<model>/attempt-N/` or `other/`.
 Raw evaluation files stay in the private rescore output; publication receipts pin
 their original profile hashes. Only absolute home prefixes in dependency labels
 change, not artifact hashes, executable hashes, ratings or music.
@@ -105,18 +108,29 @@ change, not artifact hashes, executable hashes, ratings or music.
 ```sh
 python3 benchmark/contrib/validate_bundle.py submissions/MODEL/DATE-HANDLE \
   --rescore --trusted-agent-image keygen-ft2-benchmark:local \
-  --rescore-out /absolute/private-review --publication-out runs/MODEL \
+  --rescore-out /absolute/private-review --publication-out runs/MODEL/community/DATE-HANDLE \
   --source-url https://github.com/OWNER/REPO/pull/NUMBER \
   --publication-note "Community-submitted; disclose any route limits here. Not comparatively ranked."
 ```
 
-The canonical builder publishes these results as `community-submitted`, in their
-own cohort, with all three attempts and the review note retained in provenance. They are playable
-exhibitions, never comparative ranks or podium entries. The builder verifies the
-receipt against the committed bundle and its original ordinals. A rescore does not
-certify unverified upstream generation settings. Do not change the sealed bundle.
-Model metadata may explicitly use `release_date: null` with `release_date_note`
-when no release date has been verified; do not substitute the attempt date.
+The canonical builder publishes each community directory as its own
+`community-submitted` cohort and model route, `/tracker/<model>-community-<date-handle>`,
+with all three attempts and the review note retained in provenance. They are playable
+exhibitions, never comparative ranks, average ranks or podium entries, even after
+verification. Adding a community directory does not change the routes, slugs or
+ranks of the maintainer's `runs/<model>/attempt-N` slots. The builder accepts a
+publication receipt only inside `community/`, verifies it against the committed
+bundle with the same directory name and its original ordinals, and rejects
+receipts in maintainer slots. A rescore does not certify unverified upstream
+generation settings, model identity or the absence of undisclosed attempts. Do not
+change the sealed bundle. Model metadata may explicitly use `release_date: null`
+with `release_date_note` when no release date has been verified; do not substitute
+the attempt date.
+
+Maintainer slots are the highest-declared-tier condition. The organizer places only
+such runs in `runs/<model>/attempt-N`; the builder labels them that way even when
+their sealed campaign was named without the `next-max-tier-` prefix, as it already
+does for standalone `spec.json` runs. The campaign file itself is never rewritten.
 
 ## Export, build, and serve
 

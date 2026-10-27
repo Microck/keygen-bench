@@ -88,26 +88,33 @@ def json_object(text):
 def parser():
     result = Parser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     commands = result.add_subparsers(dest="command", required=True, parser_class=Parser)
+    helps = {"login": "Log in through your installed CLIProxyAPI OAuth bridge (default for codex/openai/anthropic/xai) or save an API key with --method api-key; sends no inference",
+             "auth-status": "Show whether a local OAuth profile or saved API key exists, not remote validity",
+             "logout": "Remove a saved API key; does not revoke it. OAuth logout is not implemented: revoke access in the provider account",
+             "bridge-serve": "Run the local OAuth bridge from your login profile in the foreground"}
     for action in ("login", "auth-status", "logout", "bridge-serve"):
-        command = commands.add_parser(action, help={"login": "Configure a provider API key locally; no inference or subscription login", "auth-status": "Show local credential presence, not remote validity", "logout": "Remove a saved local key; does not revoke the provider key", "bridge-serve": "Run your configured OAuth bridge in the foreground"}[action])
+        command = commands.add_parser(action, help=helps[action])
         command.add_argument("provider", choices=auth.NAMES)
         command.add_argument("--auth-dir", type=Path, default=DEFAULT_AUTH_DIR)
         command.add_argument("--no-input", action="store_true")
-        command.add_argument("--base-url", help="Exact public HTTPS endpoint for custom API-key login")
-        command.add_argument("--method", choices=["api-key", "oauth"], help="Defaults to OAuth for codex/openai/anthropic/xai, API key for other providers")
+        if action == "bridge-serve":
+            command.set_defaults(method="oauth", base_url=None)
+        else:
+            command.add_argument("--base-url", help="Exact public HTTPS endpoint of a custom API-key credential")
+            command.add_argument("--method", choices=["api-key", "oauth"], help="Defaults to OAuth for codex/openai/anthropic/xai, API key for other providers")
         if action == "login":
             command.add_argument("--bridge-binary", type=Path, help="Explicit installed CLIProxyAPI v8 executable")
-            command.add_argument("--bridge-port", type=int, help="Loopback inference port, not OAuth callback port")
+            command.add_argument("--bridge-port", type=int, help="Loopback inference port for a new OAuth profile, not the OAuth callback port")
             command.add_argument("--no-browser", action="store_true")
             command.add_argument("--accept-community-auth", action="store_true", help="Acknowledge community integration/provider restrictions, not official endorsement")
-            command.add_argument("--save", action="store_true", help="Explicitly allow owner-only plaintext key storage outside the checkout")
-            command.add_argument("--replace", action="store_true", help="Replace this provider's saved key")
-    setup = commands.add_parser("setup", help="Install pinned packages and build both Docker targets and trusted renderer")
-    setup.add_argument("--home", type=Path, default=DEFAULT_HOME, help="Private directory outside checkout for the virtual environment")
+            command.add_argument("--save", action="store_true", help="Explicitly allow owner-only plaintext API-key storage outside the checkout")
+            command.add_argument("--replace", action="store_true", help="Replace this provider's saved API key")
+    setup = commands.add_parser("setup", help="Install pinned controller and listener packages, build both Docker targets and the trusted renderer; no model requests")
+    setup.add_argument("--home", type=Path, default=DEFAULT_HOME, help="Private directory outside checkout for the controller and listener virtual environments")
     setup.add_argument("--no-input", action="store_true", help="Never prompt; setup already needs no input")
     configure = commands.add_parser("configure", help="Save owner-only nonsecret model settings outside checkout")
     configure.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
-    configure.add_argument("--auth-dir", type=Path, default=DEFAULT_AUTH_DIR)
+    configure.add_argument("--auth-dir", type=Path, default=DEFAULT_AUTH_DIR, help="Unused; configure never reads or stores credentials")
     configure.add_argument("--no-input", action="store_true")
     configure.add_argument("--replace", action="store_true", help="Replace an existing private configuration")
     configure.add_argument("--provider", choices=sorted(set(PROVIDERS) | set(auth.NAMES)))
@@ -129,7 +136,7 @@ def parser():
     doctor.add_argument("--xm", type=Path, help="Explicit synthetic XM for --sandbox")
     doctor.add_argument("--work", type=Path, help="New absolute private directory for --sandbox evidence")
     doctor.add_argument("--no-input", action="store_true", help="Doctor never prompts")
-    verify = commands.add_parser("verify", help="Check an OAuth bridge catalog and exact model identity without inference")
+    verify = commands.add_parser("verify", help="Check that the OAuth bridge catalog advertises the exact configured model; no inference")
     verify.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
     verify.add_argument("--auth-dir", type=Path, default=DEFAULT_AUTH_DIR)
     for name, description in (("smoke", "Spend on one bounded native-readiness pilot and smoke attempt; never eligible for submission"),
@@ -141,7 +148,7 @@ def parser():
         if name == "run":
             command.add_argument("--out", type=Path, required=True, help="New bundle directory; review before publishing")
         command.add_argument("--yes", action="store_true", help="Explicitly authorize model spending")
-        command.add_argument("--no-input", action="store_true", help="Never prompt; requires --yes and credential in environment")
+        command.add_argument("--no-input", action="store_true", help="Never prompt; requires --yes and a credential from the environment, a saved API key or the OAuth profile")
     return result
 
 
@@ -287,7 +294,10 @@ def configure(args):
     # Never serialize any environment value or hidden-prompt credential.
     save_config(args.config, values, replace=args.replace)
     print(f"Saved private configuration to {args.config}. No credential was saved.")
-    print("Run login PROVIDER to save a private API key, or set KEYGEN_CONTRIB_API_KEY in your controller environment, then run doctor. Login never spends or changes these model settings.")
+    if args.provider in oauth_bridge.ROUTES.values():
+        print("Smoke, run and verify use the local bearer from your OAuth login profile. Start bridge-serve, then run verify and doctor. Login never spends or changes these model settings.")
+    else:
+        print("Run login PROVIDER --method api-key to save a private API key, or set KEYGEN_CONTRIB_API_KEY in your controller environment, then run doctor. Login never spends or changes these model settings.")
 
 
 def prerequisite_errors(*, build=True):
@@ -622,7 +632,7 @@ def doctor(args):
             if bridge_digest:
                 print(f"Authorized bridge executable SHA-256: {bridge_digest}; TCP listener is reachable. Upstream authentication is unverified.")
             if not os.environ.get("KEYGEN_CONTRIB_API_KEY") and not saved_credential(config, args.auth_dir):
-                errors.append("No credential configured; run login PROVIDER or set KEYGEN_CONTRIB_API_KEY privately before a funded run")
+                errors.append("No credential configured; run login PROVIDER (with --method api-key for an API-key route) or set KEYGEN_CONTRIB_API_KEY privately before a funded run")
         except Exception as exc:
             errors.append(safe_error(exc))
     docker = None

@@ -2,7 +2,9 @@
 
 Run one exact model three times and submit every outcome to
 [Microck/keygen-bench](https://github.com/Microck/keygen-bench).
-Community results stay separate from ranked results.
+A merged submission is kept as evidence. After maintainer review and a trusted
+re-render and re-score, it can be published as an unranked `community-submitted`
+exhibition, separate from the ranked results; see [After review](#after-review).
 
 
 ## Using an AI agent
@@ -181,10 +183,10 @@ reads the key without echo. Keys are plaintext owner-only files (0600 under a
 0700 private directory), never inside model configuration or the checkout.
 A custom key is bound to its exact endpoint; keys are never automatically sent
 to another host or bridge. No provider request is sent during key setup.
-Use `--auth-dir` consistently for login, configure, doctor, smoke and run to
-select another private directory. API `auth-status` and `logout` also require
-`--method api-key` for OAuth-default providers; custom keys require the same
-`--base-url`. Local logout does not revoke a provider API key.
+Use the same `--auth-dir` for login, auth-status, logout, bridge-serve, verify,
+doctor, smoke and run to select another private directory. API `auth-status`
+and `logout` also require `--method api-key` for OAuth-default providers; custom
+keys require the same `--base-url`. Local logout does not revoke a provider API key.
 
 For automation, supply the provider environment variable privately, then use
 `login PROVIDER --method api-key --no-input --save` only if local storage is
@@ -361,23 +363,46 @@ python benchmark/contrib/validate_bundle.py submissions/qwen3.8-flash/DATE-YOUR-
 
 ## Open the PR
 
-Create a branch in your fork. Add only your submission directory, commit it,
-push it to your fork, and open a ready-for-review PR against Microck/keygen-bench.
-Choose the run-submission template. For GitHub CLI:
+Create a branch in your fork. Add only your submission directory and commit it.
+Check that the commit contains nothing else:
 
 ```sh
 git switch -c run/qwen3.8-flash
 git add submissions/qwen3.8-flash/DATE-YOUR-HANDLE
 git commit -m 'Add community qwen3.8-flash run'
-git push -u origin run/qwen3.8-flash
-gh pr create --repo Microck/keygen-bench --base main \
-  --title 'Community run: qwen3.8-flash' \
-  --body-file .github/PULL_REQUEST_TEMPLATE/run-submission.md
+git show --stat HEAD
 ```
 
-Fill in the PR body before requesting review. If a file exceeds GitHub's regular
-Git size limit, ask the maintainers for an agreed artifact transfer before opening
-the PR. Do not silently omit it or replace it with a Git LFS pointer.
+Write the PR description before anything leaves your machine. Copy the
+run-submission template to a private file outside the checkout, fill in every
+field, and tick only the boxes that are true:
+
+```sh
+BODY="$(mktemp)"
+cp .github/PULL_REQUEST_TEMPLATE/run-submission.md "$BODY"
+"${EDITOR:-vi}" "$BODY"
+```
+
+`mktemp` creates an owner-only file in your temporary directory, outside the
+checkout. Never copy the description into the checkout or `git add` it. Read the
+finished description and the bundle once more: both become public.
+
+Pushing and opening the PR publish your bundle. Do them only with separate
+permission to publish; passing validation or having provider access does not
+give it. Then push to your fork (`origin` here) and open a ready-for-review PR
+against Microck/keygen-bench with the filled-in description:
+
+```sh
+git push -u origin run/qwen3.8-flash
+gh pr create --repo Microck/keygen-bench --base main \
+  --title 'Community run: qwen3.8-flash' --body-file "$BODY"
+rm -- "$BODY"
+```
+
+Do not add `--draft`. If you use the GitHub website instead, paste the same
+filled-in description. If a file exceeds GitHub's regular Git size limit, ask
+the maintainers for an agreed artifact transfer before opening the PR. Do not
+silently omit it or replace it with a Git LFS pointer.
 
 ## What becomes public
 
@@ -413,7 +438,23 @@ data; passing validation does not mean it is safe to publish without review.
 The PR workflow uses read-only permissions, no provider credentials, and
 validator code from the trusted base commit. Maintainers check provenance and
 re-render `tune.xm` with a separately selected trusted image. Submitted scores
-never establish a trusted result. See `submissions/README.md`.
+never establish a trusted result.
+
+## After review
+
+Merging your PR keeps the bundle in `submissions/` as evidence; it does not
+publish a result. After maintainer review and a trusted re-render and re-score,
+the maintainer may publish it as `community-submitted` in its own cohort, under
+`runs/<model>/community/<YYYY-MM-DD>-<handle>/`, beside and never replacing the
+maintainer's ranked attempts. It is playable, and all three attempts and any
+failures stay visible. It is an unranked exhibition, even after review: it never
+gets a comparative rank, podium place or average rank, and is never merged into
+the ranked results.
+
+Neither the validator nor maintainer review proves which model produced a file,
+that the declared route received the stated settings, or that no undisclosed
+attempts happened. See [maintainer verification](submissions/README.md#maintainer-verification)
+and [reviewed community publication](web/classic/README.md#reviewed-community-publication).
 
 
 ## Muse Wonder Full: experimental subscription transport

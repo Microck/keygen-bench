@@ -27,7 +27,7 @@ start with [contributing runs](CONTRIBUTING-RUNS.md). the guided CLI builds the 
 
 model requests can cost money. credentials stay outside the model's sandbox and must never be committed. keep your working runs outside the repository and publish only reviewed bundles.
 
-community submissions stay labelled separately until the maintainer verifies their provenance and re-renders and re-scores the module. the bundle validator can't prove which model produced a file or that no undisclosed attempts happened.
+a merged community submission under `submissions/` is kept as evidence, not published as a result. after maintainer review and a trusted re-render and re-score, it is published as `community-submitted` in its own cohort: playable, with all three attempts and any failures visible. it is an unranked exhibition, even after review: it never gets a rank, podium place or average rank and is never merged into the maintainer's ranked results. neither the bundle validator nor maintainer review proves which model produced a file, that the declared route received the stated settings, or that no undisclosed attempts happened. see [maintainer verification](submissions/README.md#maintainer-verification).
 
 for campaign configuration, evaluation and reporting, see [the benchmark guide](benchmark/README.md).
 
@@ -59,6 +59,7 @@ every attempt behind the published results is in [`runs/`](runs/README.md), one 
 runs/<model>/
   attempt-1/ attempt-2/ attempt-3/   the three ranked attempts
   other/                             failed, retried, quota and older runs, other services
+  community/<date>-<handle>/         reviewed community publications (attempt-1/ to attempt-3/), unranked
 ```
 
 each attempt keeps the full model conversation, the submitted `tune.xm`, the trusted render and its scores. videos are left out and audio is stored as lossless FLAC (`flac -d --keep-foreign-metadata` restores the exact WAV).
@@ -71,10 +72,10 @@ each attempt keeps the full model conversation, the submitted `tune.xm`, the tru
 | `benchmark/contrib/` | community-run packaging and validation |
 | `benchmark/tests/`, `tests/` | offline regression tests and synthetic fixtures |
 | `scripts/`, `tools/` | pinned FT2 builds and native acceptance checks |
-| `runs/` | every recorded attempt of the maintainer campaigns, by model |
+| `runs/` | every recorded attempt of the maintainer campaigns and reviewed community publications, by model |
 | `data/` | scoring calibration metadata, without archived music |
 | `web/classic/` | results website and publication tools |
-| `submissions/` | reviewed community bundles |
+| `submissions/` | community submission bundles, kept as evidence |
 
 ## development
 
@@ -96,7 +97,7 @@ runs are paid out of pocket. if you want more models tested, you can chip in thr
 
 ## license and attribution
 
-the code and docs are [MIT](LICENSE). third-party material keeps its own terms: the FT2 fonts and graphics are CC BY-NC-SA 4.0 and the FT2 build pins `8bitbubsy/ft2-clone` via a fork. see [NOTICE.md](NOTICE.md) for the full list and [the public-launch checklist](PUBLIC-LAUNCH.md) before publishing a formerly private checkout.
+the code and docs are [MIT](LICENSE). third-party material keeps its own terms: the FT2 fonts and graphics are CC BY-NC-SA 4.0 and the FT2 build pins `8bitbubsy/ft2-clone` via a fork. see [NOTICE.md](NOTICE.md) for the full list and [the publication review](docs/publication-review.md) before publishing runs, bundles or deployments.
 
 to cite keygen bench, use [CITATION.cff](CITATION.cff) with the commit your experiment used.
 

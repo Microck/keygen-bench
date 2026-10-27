@@ -20,6 +20,7 @@ from benchmark.score import benchmark_score
 from collect_public import response_usage, sha256
 from build import estimate_request_cost
 from check_runs_parity import compare
+from benchmark.tests.test_contrib import make_bundle
 
 
 class RunsBuilderTests(unittest.TestCase):
@@ -67,17 +68,19 @@ class RunsBuilderTests(unittest.TestCase):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(value, indent=2) + "\n")
 
-    def make_attempt(self, ordinal, enjoyment):
-        directory = self.runs / "test-model" / f"attempt-{ordinal}"
+    def make_attempt(self, ordinal, enjoyment, *, directory=None, status=None, identity=None, xm=None):
+        """Write one scored slot: a maintainer campaign slot of test-model unless `identity` is given."""
+        directory = directory or self.runs / "test-model" / f"attempt-{ordinal}"
         directory.mkdir(parents=True)
-        attempt_id = f"test-model-rep-{ordinal}"
+        attempt_id = (status or {}).get("attempt_id", f"test-model-rep-{ordinal}")
         status = {"attempt_id": attempt_id, "repetition": ordinal, "model": self.model,
                   "status": "RENDERED_UNSCORED", "render": "ok", "eligible": True, "failure_category": None,
                   "totals": {"requests": 2, "prompt_tokens": 100, "completion_tokens": 200},
-                  "wall_seconds": 90, "module": {"name": f"Synthetic {ordinal}", "channels": 4}}
+                  "wall_seconds": 90, "module": {"name": f"Synthetic {ordinal}", "channels": 4}, **(status or {})}
         self.dump(directory / "status.json", status)
-        self.dump(directory / "ATTEMPT.json", {"attempt_id": attempt_id, "slot": directory.name})
-        self.dump(directory / "campaign.json", {"campaign": self.config, "sha256": digest(self.config)})
+        self.dump(directory / "ATTEMPT.json", identity or {"attempt_id": attempt_id, "slot": directory.name})
+        if identity is None:
+            self.dump(directory / "campaign.json", {"campaign": self.config, "sha256": digest(self.config)})
         wav = directory / "canonical/canonical.wav"
         wav.parent.mkdir()
         with wave.open(str(wav), "wb") as stream:
@@ -85,9 +88,13 @@ class RunsBuilderTests(unittest.TestCase):
             stream.setsampwidth(2)
             stream.setframerate(44100)
             stream.writeframes(b"\x01\x00\x01\x00" * 4410)
-        xm = directory / "submission/tune.xm"
-        xm.parent.mkdir()
-        xm.write_bytes(b"synthetic xm " + str(ordinal).encode())
+        target = directory / "submission/tune.xm"
+        target.parent.mkdir()
+        if xm:
+            shutil.copyfile(xm, target)
+        else:
+            target.write_bytes(f"synthetic xm {directory.parent.name} {ordinal}".encode())
+        xm = target
         structure = {"arrangement_score": 1.0, "sequence_coverage": 1.0, "used_longest_sample_seconds": 1.0,
                      "used_sample_seconds_total": 5.0, "instruments_used": 4, "channels_used": 4, "note_ons": 600}
         audio = {"duration_seconds": 0.1, "clip_fraction": 0.0, "dc_offset": 0.0, "true_peak_dbtp": -2.0,
@@ -98,7 +105,7 @@ class RunsBuilderTests(unittest.TestCase):
         craft = benchmark_score(structure, audio, loop, {"ratings": {"content_enjoyment": enjoyment,
             "production_quality": 7.0, "content_usefulness": 6.0, "production_complexity": 5.0}, "analyzed_seconds": 0.1})
         profile = {"score_version": "listener-v1", "evaluation_schema": 2, "eligible": True,
-            "evaluation_status": "evaluated", "cacheable": True, "model": "test-model", "status": status["status"],
+            "evaluation_status": "evaluated", "cacheable": True, "model": self.model["model"], "status": status["status"],
             "craft": craft, "audio": audio, "structure": structure, "loop": loop, "flags": [], "process": {},
             "mix": {"clarity_score": 1.0, "masking_fraction": 0.0}, "inputs": {"artifacts": {
                 "status.json": sha256(directory / "status.json"), "submission/tune.xm": sha256(xm),
@@ -106,23 +113,62 @@ class RunsBuilderTests(unittest.TestCase):
         self.dump(directory / "profile.json", profile)
         self.evidence.append({"eligible": True, "xm_sha256": sha256(xm), "canonical_wav_sha256": sha256(wav),
                               "new_score": craft["craft_score"], "craft": craft, "spectral": audio["spectral"]})
-        self.identities[sha256(xm)] = {"slug": f"historic-attempt-{ordinal}", "model_key": "test-model",
-                                      "name": f"test-model (max-tier, attempt {ordinal})", "attempt_ordinal": ordinal}
+        if identity is None:
+            self.identities[sha256(xm)] = {"slug": f"historic-attempt-{ordinal}", "model_key": self.model["model"],
+                                          "name": f"{self.model['model']} (max-tier, attempt {ordinal})", "attempt_ordinal": ordinal}
         return directory
 
     def write_site(self):
         self.dump(self.scores, {"score_version": "listener-v1", "attempts": self.evidence, "listener": {"model": "fake"}})
-        self.dump(self.site / "model-metadata.json", {"test-model": {"release_date": "2026-01-01"}})
-        self.dump(self.site / "prices.json", {"models": [{"id": "test-model", "maker": "Test maker",
+        models = {"test-model", self.model["model"]}
+        self.dump(self.site / "model-metadata.json", {model: {"release_date": "2026-01-01"} for model in models})
+        self.dump(self.site / "prices.json", {"models": [{"id": model, "maker": "Test maker",
             "input_usd_per_m": 1, "cached_input_usd_per_m": 0, "output_usd_per_m": 2,
-            "source_url": "https://openai.com/pricing"}]})
+            "source_url": "https://openai.com/pricing"} for model in sorted(models)]})
         self.dump(self.site / "spend.json", {"total_usd": 0})
         self.dump(self.site / "published-identities.json", self.identities)
         self.dump(self.site / "publication-policy.json", {"excluded_models": {}})
 
-    def build(self, **kwargs):
-        return builder.build_from_runs(self.runs, self.root / "publication", self.scores,
-                                       site=self.site, cards=False, **kwargs)
+    def build(self, out="publication", **kwargs):
+        return builder.build_from_runs(self.runs, self.root / out, self.scores,
+                                       site=self.site, cards=False, submissions=self.root / "submissions", **kwargs)
+
+    def make_community(self, model_dir, name="2026-01-02-fixture"):
+        """Seal a synthetic bundle and retain reviewed slots as validate_bundle --publication-out does."""
+        bundle = self.root / "submissions" / model_dir / name
+        bundle.parent.mkdir(parents=True, exist_ok=True)
+        make_bundle(bundle)
+        environment = json.loads((bundle / "manifest.json").read_text())["environment"]
+        frozen = environment["contract"]
+        self.model = environment["model"]
+        spec = {"model": self.model, "config": {"schema": "keygen-native-campaign-3", "models": [self.model],
+                "image": environment["images"]["agent"], "visualizer_image": environment["images"]["visualizer"],
+                "prompts": frozen["prompt"], "limits": frozen["limits"], "native": frozen["native"],
+                "policies": {"attempt_selection": frozen["attempt_selection"]}}}
+        bundle_sha256 = sha256(bundle / "manifest.json")
+        publication = {"kind": "community-submitted", "bundle_sha256": bundle_sha256,
+                       "note": "Community-submitted; maintainer re-scored. Not comparatively ranked."}
+        for ordinal in range(1, 4):
+            source, directory = bundle / f"attempt-{ordinal}", self.runs / model_dir / "community" / name / f"attempt-{ordinal}"
+            status = json.loads((source / "status.json").read_text())
+            identity = {"attempt_id": status["attempt_id"], "slot": directory.name,
+                        "campaign_id": "community-" + bundle_sha256, "publication": publication}
+            if (source / "tune.xm").is_file():
+                # The synthetic bundle repeats one module, so its listener evidence must agree.
+                self.make_attempt(ordinal, 6.0, directory=directory, status=status, identity=identity, xm=source / "tune.xm")
+            else:
+                self.dump(directory / "status.json", status)
+                self.dump(directory / "ATTEMPT.json", identity)
+                self.dump(directory / "profile.json", {"score_version": "listener-v1", "evaluation_schema": 2,
+                    "eligible": False, "evaluation_status": "ineligible", "cacheable": True, "status": status["status"],
+                    "model": self.model["model"], "craft": {"craft_score": None}, "inputs": {"artifacts": {
+                        "status.json": sha256(directory / "status.json"), "submission/tune.xm": None,
+                        "canonical/canonical.wav": None}}})
+            self.dump(directory / "spec.json", spec)
+            for filename in ("trajectory.json", "transport.jsonl"):
+                shutil.copyfile(source / filename, directory / filename)
+        self.write_site()
+        return bundle
 
     def test_best_of_three_links_and_other_ignored(self):
         self.dump(self.runs / "test-model/other/bad/status.json", {"unexpected": "never read"})
@@ -260,16 +306,88 @@ class RunsBuilderTests(unittest.TestCase):
         metadata = json.loads((self.root / "publication/dist/model-metadata.json").read_text())
         self.assertIsNone(metadata["test-model"]["release_date"])
 
-    def test_community_receipt_rejects_missing_source(self):
-        directory = self.runs / "test-model/attempt-1"
-        identity = json.loads((directory / "ATTEMPT.json").read_text())
-        identity["publication"] = {"kind": "community-submitted", "bundle_sha256": "0" * 64,
-                                   "note": "Historical route, not comparatively ranked."}
-        self.dump(directory / "ATTEMPT.json", identity)
-        report = self.root / "report"
-        report.mkdir()
+    def maintainer_slots(self, model_dir, ordinals=(1, 2), enjoyment=8.0):
+        """Unregistered maintainer slots, so their slugs come from the builder's own formula."""
+        for ordinal in ordinals:
+            directory = self.make_attempt(ordinal, enjoyment + ordinal, directory=self.runs / model_dir / f"attempt-{ordinal}",
+                                          status={"attempt_id": f"{model_dir}-rep-{ordinal}"})
+            self.identities.pop(sha256(directory / "submission/tune.xm"))
+        self.write_site()
+
+    def test_community_set_publishes_beside_existing_maintainer_slots(self):
+        bundle = self.make_community("synthetic-fixture")
+        self.config = dict(self.config, models=[self.model])
+        self.maintainer_slots("synthetic-fixture")
+        community = self.runs / "synthetic-fixture/community"
+        shutil.move(community, self.root / "held")
+        before = {run["slug"]: run["rank"] for run in self.build("before", no_media=True)["runs"]}
+        shutil.move(self.root / "held", community)
+        data = self.build("after", no_media=True)
+        groups = {group["model_key"]: group for group in data["repetition_groups"]}
+        community_key = "synthetic-fixture-community-2026-01-02-fixture"
+        self.assertEqual(set(groups), {"test-model", "synthetic-fixture", community_key})
+        maintainer, community = groups["synthetic-fixture"], groups[community_key]
+        # Maintainer slots keep their public URLs and ranks and stay in the ranked condition.
+        self.assertEqual({run["slug"]: run["rank"] for run in data["runs"] if not run["exhibition"]}, before)
+        self.assertEqual(maintainer["best_ordinal"], 2)
+        self.assertEqual(maintainer["cohort_key"], "highest-declared-tier/prompt-v2")
+        # Every contributor attempt stays visible in its own unranked cohort, including the failure.
+        self.assertEqual([a["ordinal"] for a in community["attempts"]], [1, 2, 3])
+        self.assertEqual([a["eligible"] for a in community["attempts"]], [True, True, False])
+        self.assertEqual(community["attempts"][2]["failure_category"], "INFRA")
+        self.assertEqual(community["cohort_key"], "community/" + sha256(bundle / "manifest.json"))
+        runs = [run for run in data["runs"] if run["model_key"] == community_key]
+        self.assertEqual(len(runs), 2)
+        for run in runs:
+            self.assertTrue(run["exhibition"])
+            self.assertIsNone(run["rank"])
+            self.assertFalse(run["ranked"])
+            self.assertEqual(run["release_date"], "2026-01-01")
+            self.assertEqual(run["provenance"]["kind"], "community-submitted")
+        self.assertEqual(sorted(run["rank"] for run in data["runs"] if run["rank"]), [1, 2])
+        self.assertEqual(data["ranked_results"], 2)
+        self.assertTrue(all(run["slug"].startswith("synthetic-fixture-community-2026-01-02-fixture-a") for run in runs))
+
+    def test_community_set_may_be_the_only_set_of_a_model(self):
+        self.make_community("synthetic-fixture")
+        data = self.build(no_media=True)
+        self.assertEqual({group["model_key"] for group in data["repetition_groups"]},
+                         {"test-model", "synthetic-fixture-community-2026-01-02-fixture"})
+        self.assertEqual(data["ranked_results"], 1)
+
+    def test_community_receipts_only_publish_from_their_submission_directory(self):
+        self.make_community("synthetic-fixture")
+        community = self.runs / "synthetic-fixture/community/2026-01-02-fixture"
+        # A receipt in a maintainer slot would replace maintainer evidence and is rejected.
+        shutil.move(community / "attempt-1", self.runs / "synthetic-fixture/attempt-1")
+        with self.assertRaisesRegex(ValueError, "community receipts belong only under"):
+            self.build(no_media=True)
+        shutil.move(self.runs / "synthetic-fixture/attempt-1", community / "attempt-1")
+        # A receipt must name the submission directory it was reviewed from.
+        community.rename(community.with_name("2026-01-03-fixture"))
         with self.assertRaisesRegex(ValueError, "missing reviewed community bundle"):
-            builder.load_attempt(directory, report, {})
+            self.build(no_media=True)
+
+    def test_maintainer_slots_ignore_campaign_naming(self):
+        """A maintainer campaign named without the max-tier prefix stays in the ranked condition."""
+        self.config = dict(self.config, campaign_id="terra-like-20261026")
+        for ordinal in (1, 2):
+            directory = self.runs / "test-model" / f"attempt-{ordinal}"
+            self.dump(directory / "campaign.json", {"campaign": self.config, "sha256": digest(self.config)})
+        data = self.build(no_media=True)
+        self.assertEqual({run["cohort"]["key"] for run in data["runs"]}, {"highest-declared-tier/prompt-v2"})
+        self.assertEqual([run["rank"] for run in data["runs"] if run["rank"]], [1])
+        self.assertFalse(any(run["exhibition"] for run in data["runs"]))
+
+    def test_publication_out_must_be_a_community_directory(self):
+        bundle = make_bundle(self.root / "2026-01-02-fixture")
+        for target in (self.runs / "test-model", self.runs / "test-model/community/other-name"):
+            completed = subprocess.run([sys.executable, str(ROOT / "benchmark/contrib/validate_bundle.py"), str(bundle),
+                "--rescore", "--trusted-agent-image", "unused", "--rescore-out", str(self.root / "review"),
+                "--publication-out", str(target)], capture_output=True, text=True)
+            self.assertEqual(completed.returncode, 2)
+            self.assertIn("runs/<model>/community/<bundle directory name>", completed.stderr)
+        self.assertEqual(sorted(path.name for path in (self.runs / "test-model").iterdir()), ["attempt-1", "attempt-2"])
 
     @unittest.skipUnless(shutil.which("flac"), "requires lossless encoder")
     def test_public_review_preserves_hashes_and_removes_home_prefixes(self):

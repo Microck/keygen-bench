@@ -4,6 +4,14 @@
 
 ### Fixed
 
+- Restore GPT-6.1 Terra as the maintainer's Codex OAuth run from its original campaign, ranked in the highest-declared-tier condition like earlier Codex runs. Attempts, scores, music, hashes and public slugs are unchanged; the requested 128k output cap stays unverified upstream, as on those runs. The contributor bundle stays in `submissions/` as evidence and is no longer published as a separate exhibition.
+- Publish reviewed community runs under `runs/<model>/community/<date>-<handle>/`, beside maintainer slots, so a model that already has maintainer runs can receive contributions without overwriting attempts, ordinals or URLs. Receipts in maintainer slots are rejected.
+- Label maintainer slots as the highest-declared-tier condition even when their sealed campaign was named without the `next-max-tier-` prefix, as standalone slots already were.
+- Describe merged community submissions as retained evidence, published after maintainer review only as unranked `community-submitted` exhibitions, without claiming validation proves model provenance or settings delivery.
+- Have contributors fill in the run-submission PR description in a private file outside the checkout before opening a ready-for-review PR.
+- Replace links to the deleted public-launch checklist with a publication review guide that keeps its still-applicable history, secret-scan and privacy checks.
+- Correct contributor CLI help: login defaults to OAuth for Codex/OpenAI, Anthropic and xAI. bridge-serve no longer accepts ignored `--method`/`--base-url` options.
+
 - Put Terra in release-date order, add official API prices, and calculate complete Responses usage from per-request cache receipts.
 - Keep detailed publication disclosures in provenance rather than the score sidebar.
 

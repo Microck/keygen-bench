@@ -394,7 +394,9 @@ def main():
     parser.add_argument("--rescore", action="store_true")
     parser.add_argument("--trusted-agent-image", help="Maintainer-built image required for rescore")
     parser.add_argument("--rescore-out", type=Path, help="New directory for trusted evaluation")
-    parser.add_argument("--publication-out", type=Path, help="New canonical runs/<model> directory for the reviewed publication")
+    parser.add_argument("--publication-out", type=Path,
+                        help="New runs/<model>/community/<bundle directory name> for the reviewed publication; "
+                             "maintainer slots in runs/<model>/attempt-N are never touched")
     parser.add_argument("--publication-note", help="Public review and route-limit disclosure for rescored results")
     parser.add_argument("--source-url", help="Public HTTPS URL of the reviewed submission")
     args = parser.parse_args()
@@ -406,6 +408,9 @@ def main():
         parser.error("Rescore requires one bundle, --trusted-agent-image and --rescore-out")
     if not args.rescore and (args.trusted_agent_image or args.rescore_out):
         parser.error("Trusted evaluation options require --rescore")
+    if args.publication_out and (args.publication_out.parent.name != "community"
+                                 or args.publication_out.name != args.bundles[0].resolve().name):
+        parser.error("--publication-out must be runs/<model>/community/<bundle directory name>")
     try:
         for root in args.bundles:
             validate(root)

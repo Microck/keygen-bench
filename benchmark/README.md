@@ -95,7 +95,7 @@ and official sources are in the [contributor guide](../CONTRIBUTING-RUNS.md#auth
 
 ## Configure a campaign
 
-Keep working configuration, credentials and run artifacts outside this checkout. `config/campaign.example.json` shows the selection structure; it is not a ready-to-run campaign. Fill in actual immutable image IDs, model configuration and verified readiness evidence.
+Keep working configuration, credentials and run artifacts outside this checkout. `benchmark/config/campaign.example.json` shows the selection structure; it is not a ready-to-run campaign. Fill in actual immutable image IDs, model configuration and verified readiness evidence.
 
 A real multi-turn native readiness pilot must execute tool calls and validate the returned model identity. The guided contributor commands run one automatically before every smoke or three-attempt run, using the exact configured route and settings. This pilot makes provider requests and may incur cost; its proof stays in the private work directory, and a failed pilot starts no benchmark attempt. Each invocation runs a fresh pilot. The maintainer campaign compiler still requires an explicit inventory, selection and tier specification; the repository contains no private account inventory. `native_readiness.py --help` describes pilot inputs.
 

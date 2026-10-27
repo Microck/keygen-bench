@@ -1,8 +1,11 @@
-"""Build a publication from the repository's predetermined ranked attempt slots.
+"""Build a publication from the repository's predetermined attempt slots.
 
-No campaign discovery, provider calls or private server paths are used. --no-media
-runs the same integrity checks and builds metadata/cards without media derivatives;
-it is useful for pull-request validation, but its output is not deployable.
+Maintainer slots are runs/<model>/attempt-1..3. Reviewed community publications
+are runs/<model>/community/<YYYY-MM-DD>-<handle>/attempt-1..3, beside the
+maintainer slots and never in them. No campaign discovery, provider calls or
+private server paths are used. --no-media runs the same integrity checks and
+builds metadata/cards without media derivatives; it is useful for pull-request
+validation, but its output is not deployable.
 """
 from __future__ import annotations
 
@@ -23,7 +26,8 @@ import time
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
 sys.path[:0] = [str(ROOT), str(ROOT / "benchmark"), str(HERE)]
-from benchmark.report import attempt_row, campaign_cohort, condition_fingerprint, counts, digest, read_cohort
+from benchmark.report import (MAX_TIER_PREFIX, attempt_row, campaign_cohort, condition_fingerprint, counts, digest,
+                              read_cohort, tier_label)
 from build import FLAG_RULES, copy_frontend, estimate_cost, price_id, public_maker, public_price, slug
 from collect_public import public_run, sha256, verified_media, write_json
 
@@ -48,8 +52,13 @@ def checked_path(directory: Path, relative: str) -> Path:
     return path
 
 
-def load_attempt(directory: Path, report_root: Path, bundles: dict | None = None) -> tuple[dict, dict, str]:
+def load_attempt(directory: Path, report_root: Path, bundles: dict | None = None,
+                 community: str | None = None) -> tuple[dict, dict, str]:
+    """Load one slot. `community` is the submission directory name for community slots, else None."""
     identity = read_json(checked_path(directory, "ATTEMPT.json"))
+    publication = identity.get("publication")
+    if bool(publication) != bool(community):
+        raise ValueError(f"{directory}: community receipts belong only under runs/<model>/community/<submission>/")
     attempt_id = identity["attempt_id"]
     if not re.fullmatch(r"[A-Za-z0-9_.:-]+", attempt_id):
         raise ValueError(f"{directory}: invalid attempt identity")
@@ -68,7 +77,7 @@ def load_attempt(directory: Path, report_root: Path, bundles: dict | None = None
             raise ValueError(f"{directory}: standalone model differs from sealed spec")
         config = {**spec["config"], "models": [spec["model"]],
                   "schema": "keygen-native-campaign-3",
-                  "campaign_id": identity["campaign_id"] if identity.get("publication") else
+                  "campaign_id": identity["campaign_id"] if publication else
                   "next-max-tier-" + identity["campaign_id"]}
         campaign_hash, fingerprint = digest(config), digest(config)
         link.mkdir()
@@ -85,14 +94,20 @@ def load_attempt(directory: Path, report_root: Path, bundles: dict | None = None
             shutil.rmtree(link)
     if row["error"] and status.get("status") == "RENDERED_UNSCORED":
         raise ValueError(f"{directory}: {row['error']}")
+    if not publication and not config["campaign_id"].startswith(MAX_TIER_PREFIX):
+        # The organizer places only highest-declared-tier maintainer runs in attempt slots,
+        # as the standalone adapter above already assumes. A campaign named without the
+        # prefix keeps its sealed file; only its publication condition label is derived here.
+        row["cohort"] = campaign_cohort({**config, "campaign_id": MAX_TIER_PREFIX + config["campaign_id"]})
+        row["tier"] = tier_label(status["model"], row["cohort"]["condition"])
     row["source_campaign_sha256"] = campaign_hash
     row["source_campaign_id"] = f"campaign-{campaign_hash}"
     row["condition_fingerprint"] = condition_fingerprint(config, status["model"])
     row["repetition"] = int(directory.name.removeprefix("attempt-"))
-    publication = identity.get("publication")
     if publication:
         bundle = (bundles or {}).get(publication["bundle_sha256"])
-        if not bundle or publication["kind"] != "community-submitted" or not publication.get("note"):
+        if (not bundle or bundle.name != community or publication["kind"] != "community-submitted"
+                or not publication.get("note")):
             raise ValueError(f"{directory}: missing reviewed community bundle or disclosure")
         manifest = read_json(bundle / "manifest.json")
         frozen = manifest["environment"]["contract"]
@@ -187,12 +202,23 @@ def build_from_runs(runs_root: Path, output: Path, listener_scores: Path,
     if models and set(models) != {path.name for path in selected}:
         raise ValueError("Requested model directories are missing")
     selected = [path for path in selected if path.name not in exclusions]
+    # Maintainer slots and each reviewed community submission are separate attempt sets of a model.
+    sets = []
+    for model in selected:
+        sets.append((model.name, None, sorted(model.glob("attempt-*"))))
+        community = model / "community"
+        if community.is_symlink() or (community.exists() and not community.is_dir()):
+            raise ValueError(f"{community}: invalid community directory")
+        for source in sorted(community.iterdir()) if community.is_dir() else []:
+            if source.is_symlink() or not source.is_dir() or not re.fullmatch(r"\d{4}-\d{2}-\d{2}-[A-Za-z0-9-]+", source.name):
+                raise ValueError(f"{source}: community publications are <YYYY-MM-DD>-<handle> directories")
+            sets.append((f"{model.name}/community/{source.name}", source.name, sorted(source.glob("attempt-*"))))
     # Validate only referenced bundles, once each. Unreviewed submissions are not publication inputs.
     from benchmark.contrib.validate_bundle import validate
     required = set()
-    for model in selected:
-        for path in model.glob("attempt-*/ATTEMPT.json"):
-            publication = read_json(path).get("publication")
+    for _, community, directories in sets:
+        for directory in directories if community else []:
+            publication = read_json(checked_path(directory, "ATTEMPT.json")).get("publication")
             if publication:
                 required.add(publication["bundle_sha256"])
     bundles = {}
@@ -208,43 +234,45 @@ def build_from_runs(runs_root: Path, output: Path, listener_scores: Path,
         work = Path(temporary)
         report_root = work / "report"
         report_root.mkdir()
-        for model in selected:
-            directories = sorted(model.glob("attempt-*"))
+        for set_id, community, directories in sets:
             for directory in directories:
                 if directory.is_symlink() or not directory.is_dir() or not re.fullmatch(r"attempt-[123]", directory.name):
                     raise ValueError(f"{directory}: invalid ranked slot")
-                row, config, campaign_hash = load_attempt(directory, report_root, bundles)
+                row, config, campaign_hash = load_attempt(directory, report_root, bundles, community)
                 row["retained_profile_sha256"] = sha256(directory / "profile.json") if (directory / "profile.json").is_file() else None
                 row["retained_status_sha256"] = sha256(directory / "status.json")
                 row.pop("profile", None)
                 selection = config.get("policies", {}).get("attempt_selection")
-                loaded.append((model.name, directory, row, selection, campaign_hash))
+                loaded.append((set_id, community, directory, row, selection, campaign_hash))
                 if row["eligible"]:
                     xm_hash = sha256(checked_path(directory, "submission/tune.xm"))
                     if xm_hash not in evidence:
-                        missing.append(f"{model.name}/{directory.name}")
+                        missing.append(f"{set_id}/{directory.name}")
         if missing and not os.environ.get("KEYGEN_LISTENER_PYTHON"):
             raise ValueError("Missing listener-v1 evidence; set KEYGEN_LISTENER_PYTHON to rate: " + ", ".join(missing))
-        if not any(row["eligible"] for _, _, row, _, _ in loaded):
+        if not any(row["eligible"] for _, _, _, row, _, _ in loaded):
             raise ValueError("No eligible ranked attempts")
         output.mkdir(parents=True, exist_ok=True)
         dist = output / "dist"
         dist.mkdir()
         published, groups, campaign_rows = [], {}, {}
-        for model, directory, row, selection, campaign_hash in loaded:
+        for set_id, community, directory, row, selection, campaign_hash in loaded:
             ordinal = row["repetition"]
             cohort = row["cohort"]
             key = display_name(price_id(row["model"]))
-            group = groups.setdefault(model, {"cohort_key": cohort["key"], "model_key": key,
+            # The public key is the model route (/tracker/<key>); a community set gets its own.
+            public_key = f"{key}-community-{community.lower()}" if community else key
+            model = set_id.split("/", 1)[0]
+            group = groups.setdefault(set_id, {"cohort_key": cohort["key"], "model_key": public_key,
                 "name": display_name(model) + " (max-tier)", "tier": row["tier"],
                 "maker": public_maker(display_name(model), {}),
                 "campaign_id": f"campaign-{campaign_hash}", "campaign_sha256": campaign_hash,
                 "condition_fingerprint": row["condition_fingerprint"],
                 "declared": 3, "attempts": [], "ranking_policy": "best of 3", "outside_condition": []})
             if group["cohort_key"] != cohort["key"]:
-                raise ValueError(f"{model}: ranked slots cross cohorts")
-            if group["model_key"] != key:
-                raise ValueError(f"{model}: ranked slots mix model identities")
+                raise ValueError(f"{set_id}: ranked slots cross cohorts")
+            if group["model_key"] != public_key:
+                raise ValueError(f"{set_id}: ranked slots mix model identities")
             summary = {"ordinal": ordinal, "status": row["status"], "outcome": row["outcome"],
                 "eligible": row["eligible"], "attempted": row["attempted"], "failure_category": row["failure_category"],
                 "model_failure": row["model_failure"], "source_campaign_sha256": campaign_hash,
@@ -258,7 +286,7 @@ def build_from_runs(runs_root: Path, output: Path, listener_scores: Path,
             profile, verification = scored_profile(row, directory, evidence, stage)
             xm_hash = verification["input_sha256"]["submission/tune.xm"]
             identity = identities.get(xm_hash, {})
-            if identity and (identity["attempt_ordinal"] != ordinal or identity["model_key"] != key):
+            if identity and (identity["attempt_ordinal"] != ordinal or identity["model_key"] != public_key):
                 identity = {}
             if key not in metadata:
                 raise ValueError(f"Unknown model metadata: {key}")
@@ -267,7 +295,7 @@ def build_from_runs(runs_root: Path, output: Path, listener_scores: Path,
                                and bool(metadata[key].get("release_date_note")))
             if not unknown_release and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", release or ""):
                 raise ValueError(f"Missing release_date: {key}")
-            run_slug = identity.get("slug", f"{slug(key)}-a{ordinal}-{xm_hash[:12]}")
+            run_slug = identity.get("slug", f"{slug(public_key)}-a{ordinal}-{xm_hash[:12]}")
             if not re.fullmatch(r"[a-z0-9][a-z0-9-]*", run_slug):
                 raise ValueError(f"Invalid public slug: {run_slug}")
             source_evaluation = {key: row[key] for key in ("score_version", "evaluation_fingerprint")}
@@ -285,12 +313,14 @@ def build_from_runs(runs_root: Path, output: Path, listener_scores: Path,
             collector_stage = dist / ".verified" / run_slug
             collector_stage.parent.mkdir(exist_ok=True)
             shutil.move(stage, collector_stage)
-            run = public_run(row, {"attempted_count": sum(r["attempted"] for m, _, r, _, _ in loaded if m == model)},
+            run = public_run(row, {"attempted_count": sum(r["attempted"] for s, _, _, r, _, _ in loaded if s == set_id)},
                              directory, dist, {"campaign_sha256": campaign_hash,
                              "attempt_selection": selection},
                              "repetitions", {price_id(row["model"]): prices.get(key, {})}, run_slug=run_slug,
                              no_media=no_media, verification=verification, lossless="flac")
-            run.update(model_key=key, name=identity.get("name", f"{key} (max-tier, attempt {ordinal})"), ranked=False)
+            default_name = f"{key} community {community} (attempt {ordinal})" if community else f"{key} (max-tier, attempt {ordinal})"
+            # Community routes differ from the model key, so carry the model's release date on the run.
+            run.update(model_key=public_key, name=identity.get("name", default_name), ranked=False, release_date=release)
             run["provenance"].update(selected_by="best eligible score among three predetermined ordinals; ties use the lowest ordinal",
                 evaluation_kind="listener-evidence" if xm_hash in evidence else "listener-local",
                 listener=listener_identity, source_evaluation=source_evaluation,
@@ -308,7 +338,7 @@ def build_from_runs(runs_root: Path, output: Path, listener_scores: Path,
             summary.update(slug=run_slug, score=run["score"])
             group_name = re.sub(r", attempt \d+\)$", ")", run["name"])
             group_name = re.sub(r" \(attempt \d+\)$", "", group_name)
-            group.update(model_key=key, name=group_name, maker=run["maker"])
+            group.update(model_key=public_key, name=group_name, maker=run["maker"])
             published.append(run)
             shutil.rmtree(collector_stage)
             row.pop("profile")

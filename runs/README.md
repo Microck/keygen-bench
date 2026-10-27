@@ -1,12 +1,17 @@
 # Benchmark runs
 
-Every attempt of every model, one folder per model:
+Every attempt of every maintainer model, one folder per model, plus reviewed community publications:
 
 ```text
-<model>/attempt-1/ attempt-2/ attempt-3/   the three attempts the leaderboard ranks (best of 3)
+<model>/attempt-1/ attempt-2/ attempt-3/   the maintainer's three attempts the leaderboard ranks (best of 3)
 <model>/other/<date>-<attempt>/             everything else: failed, retried, quota, older runs, other services
-index.json                                  every attempt: slot, status, score, route, source
+<model>/community/<date>-<handle>/attempt-N one reviewed community submission, published unranked
+index.json                                  maintainer attempts: slot, status, score, route, source
 ```
+
+Maintainer slots are the highest-declared-tier condition. A community directory is written by
+`validate_bundle.py --publication-out` after review, sits beside the maintainer slots and never
+replaces them; see [maintainer verification](../submissions/README.md#maintainer-verification).
 
 Each attempt folder holds what the harness recorded: `status.json`, `trajectory.json` and `transport.jsonl`
 (the full model conversation), `submission/` (the model's `tune.xm` and files), `canonical/` (the trusted
