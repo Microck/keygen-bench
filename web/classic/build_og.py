@@ -116,11 +116,10 @@ def models(data):
     return ranked + sorted((m for m in out if m["exhibition"]), key=lambda m: m["key"])
 
 
-def home(ms, path, date):
+def home(ms, path):
     img, d = canvas()
     raised(d, [K, 32 * K, W - K - 1, H - K - 1])
     text(d, (6 * K, 37 * K), f"TOP 5 OF {len(ms)}", SMALL, PAL["white"], PAL["dsktop2"])
-    text(d, (W - 6 * K, 37 * K), f"snapshot {date}", SMALL, PAL["dim"], anchor="ra")
     text(d, (W - 6 * K, 12 * K), SITE, font(1, 20), PAL["dim"], anchor="ra")
     sunken(d, [5 * K, 50 * K, W - 5 * K - 1, H - 6 * K - 1])
     row = 29 * K
@@ -185,9 +184,8 @@ def main():
     ms = models(data)
     og = args.dist / "og"
     og.mkdir(exist_ok=True)
-    date = str(data.get("generated", ""))[:10]
     ranked = [m for m in ms if not m["exhibition"]]
-    home(ranked, og / "home.png", date)
+    home(ranked, og / "home.png")
     top = ", ".join(f"{m['label']} {m['best']['score']:.1f}" for m in ranked[:3])
     desc = f"{len(ranked)} ranked AI models write keygen tunes in FastTracker II, scored from the audio. Top: {top}."
     meta = {}

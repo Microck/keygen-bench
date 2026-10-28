@@ -64,6 +64,8 @@
 
 ### Changed
 
+- Remove the snapshot date label from the home Open Graph image.
+
 - Fetch independent optional website metadata in parallel while preserving missing-file defaults and failure reporting.
 
 - Score tunes with an AI listener (listener-v1): 10 x the content-enjoyment rating of Meta Audiobox Aesthetics on the canonical render, with the silent and baked-sample caps. The listener runs in its own pinned environment (`benchmark/requirements-listener.txt`, `KEYGEN_LISTENER_PYTHON`) on the CPU with verified weights; contributor setup installs it and doctor checks it. Pitched clarity, development, dynamics, signal integrity and loop continuity remain as craft diagnostics; a voice with one onset in a passage no longer counts as development there. The site shows the four listener ratings (enjoyment scored, the other three marked unscored), explains how the listener model works on the Scoring page, and no longer shows or exports the old craft measurements.

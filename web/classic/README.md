@@ -345,7 +345,7 @@ commit so it works before that PR merges. A private repository requires GitHub
 access to open it; do not advertise the link as public until the repository is
 public.
 
-Open Graph generation writes `dist/og/home.png`, one image per model, and `dist/og/meta.json`. The server uses that metadata to inject route-specific titles and preview tags. Without OG generation, the site still works but has no generated link-preview cards. Rerun OG generation whenever the results change.
+Open Graph generation writes `dist/og/home.png` without a snapshot date label, one image per model, and `dist/og/meta.json`. The server uses that metadata to inject route-specific titles and preview tags. Without OG generation, the site still works but has no generated link-preview cards. Rerun OG generation whenever the results change.
 
 The server supports `/tracker`, `/rankings`, `/scoring`, `/support`, and model/attempt URLs, plus byte ranges for audio seeking and downloads. JSON, JavaScript, CSS and XM files are sent gzip-compressed to browsers that accept it (a pretty-printed 6.3 MB `data.json` becomes about 0.76 MB); range requests and audio are always sent uncompressed. It rejects dotfiles, symlinks, and directory listings. Serve only the dedicated publication directory, never the repository or a campaign directory. For public deployment, put this local server behind a proxy with HTTPS; configure the proxy to set trustworthy `Host` or `X-Forwarded-Host` and `X-Forwarded-Proto` headers for preview URLs. No deployment-specific service files are included.
 
