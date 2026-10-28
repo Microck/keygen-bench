@@ -99,13 +99,13 @@ OBSERVATION = (
     "{{ ([0, (wall_time_limit_seconds - elapsed_seconds) / 60] | max) | int }} min"
     "</time_left>{% endif %}"
 )
-# native.retries: LiteLLM transport-only retries per HTTP request (transport_retry_policy).
+# native.retries: controller transport-only retries per HTTP request, with bounded backoff.
 # mini-swe-agent's own query retry is always off, so a failed request never re-enters the agent.
-MAX_TRANSPORT_RETRIES = 2
-# Retried error classes after LiteLLM 1.102.1 exception mapping: timeouts, 500 (connection
+TRANSPORT_RETRY_DELAYS_SECONDS = (15, 30)
+MAX_TRANSPORT_RETRIES = len(TRANSPORT_RETRY_DELAYS_SECONDS)
+# Retried error classes after the pinned LiteLLM exception mapping: timeouts, 500 (connection
 # resets/drops map here) and 503. 4xx classes and unmapped errors (502 BadGateway, generic
-# APIError such as funds failures) get 0. LiteLLM gates entry into its retry loop on the
-# first error's class; inside the loop it re-sends up to the bound whatever fails next.
+# APIError such as funds failures) are not retried. Each error is classified independently.
 RETRIED_ERRORS = ("TimeoutErrorRetries", "InternalServerErrorRetries", "ServiceUnavailableErrorRetries")
 NEVER_RETRIED_ERRORS = ("BadRequestErrorRetries", "AuthenticationErrorRetries", "RateLimitErrorRetries",
                         "ContentPolicyViolationErrorRetries", "DefaultRetries")
@@ -542,6 +542,12 @@ def _map_generation(model: dict, value: dict) -> dict:
     return mapped
 
 
+def responses_options(model: dict) -> dict:
+    """Fixed native Responses transport settings, shared by proof and execution."""
+    return {"store": False, "stream": True,
+            **({"include": ["reasoning.encrypted_content"]} if model["provider"] == "codex_oauth" else {})}
+
+
 def validate_model(config: dict, model: dict) -> dict:
     """Return auditable effective settings without resolving any credential."""
     native = _native(config)
@@ -579,16 +585,14 @@ def validate_model(config: dict, model: dict) -> dict:
     # retry_policy is LiteLLM's own per-exception retry configuration (a LiteLLM-only
     # parameter, never sent on the wire); the OpenAI client's max_retries stays 0.
     kwargs = {"api_base": base, "timeout": native["timeout_seconds"], "max_retries": 0,
-              "retry_policy": transport_retry_policy(native["retries"]),
+              "retry_policy": transport_retry_policy(0),
               "drop_params": False, **model["generation"], **sdk_controls(model)}
     if api == "messages":
-        # LiteLLM 1.102.1 appends /v1/messages, not /messages, to api_base.
+        # the pinned LiteLLM appends /v1/messages, not /messages, to api_base.
         # Keep the declared route canonical (/v1), but pass its origin to the SDK.
         kwargs["api_base"] = base.removesuffix("/v1")
     if api == "responses":
-        kwargs["store"] = False
-        if provider == "codex_oauth":
-            kwargs["include"] = ["reasoning.encrypted_content"]
+        kwargs.update(responses_options(model))
     if provider == "google":
         # LiteLLM's Gemini provider builds the generateContent URL itself from GOOGLE_BASE;
         # a custom api_base would change its URL construction, so none is passed.
@@ -607,7 +611,7 @@ def validate_model(config: dict, model: dict) -> dict:
     transmitted_generation = {key: wire_parameters[key] for key in WIRE_GENERATION_FIELDS
                               if key in wire_parameters}
     effective = {
-        "model_class": "LitellmResponseModel" if api == "responses" else "LitellmModel",
+        "model_class": "StreamingOpenAIResponseModel" if api == "responses" else "LitellmModel",
         "model_name": f"{prefix}/{model['model']}", "model_kwargs": kwargs,
         "requested_generation": model["generation"],
         "declared_tier": model["tier"]["level"],
@@ -622,13 +626,14 @@ def validate_model(config: dict, model: dict) -> dict:
                               ("max_output_tokens", "max_completion_tokens", "max_tokens")
                               if k in transmitted_generation), None),
         "output_limit_enforced": None,  # Provider delivery requires the real payload gate.
-        "retry_policy": {"mini_attempts": 1, "sdk_transport_retries": native["retries"],
+        "retry_policy": {"mini_attempts": 1, "sdk_transport_retries": 0, "controller_transport_retries": native["retries"],
+                         "retry_delays_seconds": list(TRANSPORT_RETRY_DELAYS_SECONDS[:native["retries"]]),
                          "retried": "timeouts, HTTP 500 (incl. connection resets), HTTP 503",
-                         "never_retried": "HTTP 4xx incl. 429 quota/rate limits, 502 and other unmapped errors",
+                         "never_retried": "HTTP 4xx incl. 429, recognized quota/funds failures, 502 and other unmapped errors",
                          **({"upstream_outage": "OpenCode Go 'Endpoint is unavailable' (429/502): re-sent "
                                                 "every 15 s, up to 40 times per request (run.UPSTREAM_WAITS)"}
                             if provider == "go" else {}),
-                         "caveat": "LiteLLM gates retries on the first error; a later re-send counts toward the same bound",
+                         "caveat": "Each error is classified before retrying; waits count toward attempt wall time",
                          "recorded_as": "status totals.transport_retries"},
         "cost_policy": "native estimate when positive; zero/missing is unknown, not free",
         "observation_time_left": "every tool result, rendered by original native formatter",
@@ -704,7 +709,7 @@ def _response_audit(raw: dict, model: dict) -> dict:
     returned = raw.get("model") if "model" in raw else raw.get("modelVersion")
     if not isinstance(returned, str):
         returned = None
-    if error is not None or raw.get("type") == "error" or raw.get("status") == "failed":
+    if error is not None or raw.get("type") == "error" or raw.get("status") in {"failed", "cancelled"}:
         status = "gateway_error"
     elif not returned:
         status = "identity_unverified"
@@ -744,6 +749,7 @@ def classify_error(error: Exception, run_dir: Path | None = None) -> str:
     # 5xx "server_error"); only the category is returned, the body is never persisted.
     text = str(error).lower()
     if (name in {"RateLimitError", "BudgetExceededError"} or getattr(error, "status_code", None) == 429
+            or getattr(error, "code", None) in {"rate_limit_exceeded", "insufficient_quota"}
             or any(marker in text for marker in QUOTA_MARKERS)):
         return "quota_or_rate_limit"
     if run_dir is not None:
@@ -753,6 +759,8 @@ def classify_error(error: Exception, run_dir: Path | None = None) -> str:
                 record = json.loads(line)
                 if record.get("event") == "request":
                     break  # A newer request failed before a raw response was available.
+                if record.get("event") == "stream_error":
+                    return "gateway_error"
                 if record.get("event") == "response":
                     if record.get("identity_status") == "gateway_error":
                         return "gateway_error"
@@ -760,7 +768,8 @@ def classify_error(error: Exception, run_dir: Path | None = None) -> str:
     if name in {"AuthenticationError", "PermissionDeniedError"}:
         return "authentication_error"
     if name in {"Timeout", "APITimeoutError", "TimeoutError", "APIConnectionError",
-                "ServiceUnavailableError", "InternalServerError"}:
+                "ServiceUnavailableError", "InternalServerError", "ReadError", "RemoteProtocolError",
+                "ReadTimeout", "ConnectTimeout", "WriteTimeout", "PoolTimeout"}:
         return "transport_error"
     if name in {"UnsupportedParamsError", "BadRequestError", "NotFoundError"}:
         return "provider_request_error"
@@ -800,7 +809,7 @@ def _construct_model(config: dict, model: dict, run_dir: Path, effective: dict):
     if not os.environ.get(target):
         raise RuntimeError("Native worker lacks its isolated provider credential")
     if os.environ.get("MSWEA_MODEL_RETRY_STOP_AFTER_ATTEMPT") != "1":
-        raise RuntimeError("Native worker must disable mini-level retries; transport retries are the SDK's")
+        raise RuntimeError("Native worker must disable mini-level retries; transport retries are controlled by the runner")
     llm = _litellm()
     from litellm.integrations.custom_logger import CustomLogger
     from minisweagent.models.litellm_model import LitellmModel
@@ -822,6 +831,9 @@ def _construct_model(config: dict, model: dict, run_dir: Path, effective: dict):
         def log_pre_api_call(self, model, messages, kwargs):
             # LiteLLM calls this synchronously right before sending, so the wait delays the request itself.
             payload = kwargs.get("additional_args", {}).get("complete_input_dict")
+            self.request(payload, model)
+
+        def request(self, payload, requested_model):
             if pacing is not None:
                 wait_for_request_slot(pacing, len(json.dumps(payload, default=str)) if isinstance(payload, dict) else 0)
             if not isinstance(payload, dict):
@@ -832,15 +844,17 @@ def _construct_model(config: dict, model: dict, run_dir: Path, effective: dict):
             body = payload | extra if isinstance(extra, dict) else payload
             config = payload.get("generationConfig")
             body = body | config if isinstance(config, dict) else body
-            settings = {k: body[k] for k in WIRE_GENERATION_FIELDS + ("store", "include")
+            settings = {k: body[k] for k in WIRE_GENERATION_FIELDS + ("store", "include", "stream")
                         if k in body}
-            self._write({"event": "request", "model": payload.get("model", model), "settings": settings,
+            self._write({"event": "request", "model": payload.get("model", requested_model), "settings": settings,
                          "input_sha256": digest(payload.get("messages", payload.get("input", payload.get("contents")))),
                          "tools_sha256": digest(payload.get("tools")),
                          "payload_scope": "controller_to_endpoint",
                          "provider_received_verified": False})
 
         def log_post_api_call(self, kwargs, response_obj, start_time, end_time):
+            if model["api"] == "responses":
+                return  # Its synchronous terminal-event audit owns the one response record.
             raw = kwargs.get("original_response")
             if isinstance(raw, str):
                 try:
@@ -849,24 +863,107 @@ def _construct_model(config: dict, model: dict, run_dir: Path, effective: dict):
                     return
             if not isinstance(raw, dict):
                 return
-            record = _response_audit(raw, model)
-            record["event"] = "response"
-            if start_time is not None and end_time is not None:
-                seconds = (end_time - start_time).total_seconds()
-                if math.isfinite(seconds) and seconds >= 0:
-                    record["latency_seconds"] = seconds
+            seconds = (end_time - start_time).total_seconds() if start_time is not None and end_time is not None else None
+            self.response(raw, seconds)
+
+        def response(self, raw, seconds):
+            record = {**_response_audit(raw, model), "event": "response"}
+            if model["api"] == "responses":
+                record["provider_receipt"] = {key: raw[key] for key in ("usage", "provider_metadata") if key in raw}
+            if seconds is not None and math.isfinite(seconds) and seconds >= 0:
+                record["latency_seconds"] = seconds
             self._write(record)
 
     # A worker hosts one model. No external callbacks, telemetry or mini registry file; an
     # approved capability override was registered by validate_model in this process.
     llm.callbacks = []
-    llm.input_callback = [NativeAudit()]
+    audit = NativeAudit()
+    llm.input_callback = [audit]
     llm.success_callback = []
     llm.failure_callback = []
     kwargs = effective["model_kwargs"]
     if model["provider"] == "go":
         kwargs["extra_headers"]["x-opencode-session"] = digest(str(run_dir.resolve()))
-    cls = LitellmResponseModel if model["api"] == "responses" else LitellmModel
+    class StreamingOpenAIResponseModel(LitellmResponseModel):
+        """Native OpenAI SSE; mini owns unchanged history, tools, parsing and costs."""
+
+        @staticmethod
+        def _serialize_response(response):
+            # Preserve API names and wire presence with the SDK's canonical serializer.
+            # Explicit nulls and unknown provider fields remain part of the history.
+            return response.to_dict(mode="json")
+
+        def query(self, messages, **kwargs):
+            """Native single-attempt query with lossless SDK history serialization."""
+            from minisweagent.exceptions import FormatError
+            from minisweagent.models import GLOBAL_MODEL_STATS
+
+            response = self._query(self._prepare_messages_for_api(messages), **kwargs)
+            raw = self._serialize_response(response)
+            cost_output = self._calculate_cost(response)
+            GLOBAL_MODEL_STATS.add(cost_output["cost"])
+            try:
+                actions = self._parse_actions(response)
+            except FormatError as exc:
+                exc.messages[0]["extra"].update(cost_output, response=raw)
+                raise
+            return {**raw, "extra": {"actions": actions, **cost_output, "timestamp": time.time()}}
+
+        def _query(self, messages, **overrides):
+            import httpx
+            import openai
+            from minisweagent.models.utils.actions_toolcall_response import BASH_TOOL_RESPONSE_API
+
+            def record_request(request):
+                # HTTP hook sees the SDK's serialized body, not an intended payload.
+                audit.request(json.loads(request.content), model["model"])
+
+            settings = {**model["generation"], **overrides, **responses_options(model)}
+            started = time.monotonic()
+            received = 0
+            stream_opened, terminal_response = False, None
+            try:
+                with openai.OpenAI(api_key=os.environ[target], base_url=model["base_url"],
+                                   timeout=config["native"]["timeout_seconds"], max_retries=0,
+                                   default_headers=self.config.model_kwargs.get("extra_headers"),
+                                   http_client=httpx.Client(event_hooks={"request": [record_request]})) as client:
+                    with client.responses.create(model=model["model"], input=messages,
+                                                 tools=[BASH_TOOL_RESPONSE_API], **settings) as stream:
+                        stream_opened = True
+                        if stream.response.headers.get("content-type", "").split(";")[0].strip().lower() != "text/event-stream":
+                            audit._write({"event": "stream_error", "reason": "not_event_stream", "usage_unknown": True})
+                            raise ValueError("Native Responses transport requires text/event-stream")
+                        for event in stream:
+                            received += 1
+                            if event.type in {"response.completed", "response.incomplete", "response.failed"}:
+                                response = terminal_response = event.response
+                                audit.response(self._serialize_response(response), time.monotonic() - started)
+                                if response.status not in {"completed", "incomplete"}:
+                                    error = response.error
+                                    raise openai.APIError(message=error.message if error else "Responses stream ended in a non-success state",
+                                                          request=stream.response.request,
+                                                          body=error.model_dump() if error else {})
+                                return response
+                            if event.type == "error":
+                                raise openai.APIError(message=event.message, request=stream.response.request,
+                                                      body=event.model_dump())
+                        raise httpx.RemoteProtocolError("Responses stream ended before a terminal response",
+                                                        request=stream.response.request)
+            except (openai.APIConnectionError, httpx.ReadError, httpx.RemoteProtocolError, httpx.TimeoutException) as exc:
+                audit._write({"event": "stream_interrupted", "reason": type(exc).__name__,
+                              "events_received": received, "usage_unknown": True})
+                raise
+            except openai.APIError:
+                if stream_opened and terminal_response is None:
+                    audit._write({"event": "stream_error", "reason": "provider_error", "usage_unknown": True})
+                raise
+            except (KeyboardInterrupt, SystemExit):
+                audit._write({"event": "stream_interrupted", "reason": "cancelled",
+                              "events_received": received, "usage_unknown": True})
+                raise
+
+    StreamingOpenAIResponseModel.__module__ = "native_models"
+    cls = StreamingOpenAIResponseModel if model["api"] == "responses" else LitellmModel
     removal = effective.get("history_key_removal")
     if removal is not None and "keys" in removal:
         if HISTORY_KEY_DROPS.get(urlsplit(model.get("base_url") or "").hostname) is None:
