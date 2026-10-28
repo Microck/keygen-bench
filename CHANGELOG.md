@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- Add the maintainer organizer, `scripts/organize_runs.py`, which writes a finished private campaign into `runs/<model>/` slots without overwriting attempts; AGENTS.md now names it.
 - Restore GPT-6.1 Terra as the maintainer's Codex OAuth run from its original campaign, ranked in the highest-declared-tier condition like earlier Codex runs. Attempts, scores, music, hashes and public slugs are unchanged; the requested 128k output cap stays unverified upstream, as on those runs. The contributor bundle stays in `submissions/` as evidence and is no longer published as a separate exhibition.
 - Publish reviewed community runs under `runs/<model>/community/<date>-<handle>/`, beside maintainer slots, so a model that already has maintainer runs can receive contributions without overwriting attempts, ordinals or URLs. Receipts in maintainer slots are rejected.
 - Label maintainer slots as the highest-declared-tier condition even when their sealed campaign was named without the `next-max-tier-` prefix, as standalone slots already were.

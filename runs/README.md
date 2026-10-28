@@ -9,7 +9,8 @@ Every attempt of every maintainer model, one folder per model, plus reviewed com
 index.json                                  maintainer attempts: slot, status, score, route, source
 ```
 
-Maintainer slots are the highest-declared-tier condition. A community directory is written by
+Maintainer slots are the highest-declared-tier condition, written from the private campaign by
+`scripts/organize_runs.py`. A community directory is written by
 `validate_bundle.py --publication-out` after review, sits beside the maintainer slots and never
 replaces them; see [maintainer verification](../submissions/README.md#maintainer-verification).
 
