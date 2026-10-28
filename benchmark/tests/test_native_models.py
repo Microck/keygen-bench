@@ -113,9 +113,19 @@ def peer(api, error=False, failures=(), truncated=False, refused=0, response_mod
                             "tool_choice": "auto", "tools": payload["tools"]}
             if response_model is not None and "model" in response:
                 response["model"] = response_model
-            raw = json.dumps(response).encode()
+            streaming = api == "responses" and payload.get("stream") is True
+            if streaming:
+                if error:
+                    response = {"id": "resp-error", "created_at": 1, "object": "response", "output": [],
+                                "status": "failed", "model": None,
+                                "error": {"code": "server_error", "message": "BENCHMARK_SYNTHETIC_SECRET"}}
+                event_type = "response.failed" if error else "response.completed"
+                raw = ("data: " + json.dumps({"type": event_type, "sequence_number": 0, "response": response})
+                       + "\n\ndata: [DONE]\n\n").encode()
+            else:
+                raw = json.dumps(response).encode()
             self.send_response(200)
-            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Type", "text/event-stream" if streaming else "application/json")
             self.send_header("Content-Length", str(len(raw)))
             self.end_headers()
             self.wfile.write(raw)
@@ -403,6 +413,8 @@ class NativeProtocolTests(unittest.TestCase):
                 spec["model"] = spec["response_model"] = "kimi-k3"
             with patch.object(native, "validate_url", return_value=base), worker_env(root, spec):
                 model = native.build_probe_model(config, spec, root)
+                self.retry_waits = []
+                model = run.backoff_transport_errors(model, config, sleep=self.retry_waits.append)
                 if bound:
                     model = run.bound_content_filter(model, spec, root)
                 try:
@@ -507,9 +519,63 @@ class NativeProtocolTests(unittest.TestCase):
                 self.assertIsInstance(outcome, dict)
                 self.assertEqual(len(seen), 3)
                 self.assertEqual(events, ["request", "request", "request", "response"])
+                self.assertEqual(self.retry_waits, [15, 30])
+                self.assertEqual(self.totals["transport_retries"], 2)
+                self.assertEqual(len({json.dumps(payload, sort_keys=True) for _, payload in seen}), 1)
                 outcome, seen, _ = self.query_once(RETRYING, [(500, "down")] * 3, api=api)
                 self.assertEqual(native.classify_error(outcome), "transport_error")
                 self.assertEqual(len(seen), 1 + native.MAX_TRANSPORT_RETRIES)
+                self.assertEqual(self.retry_waits, [15, 30])
+
+    def test_transport_backoff_has_bounded_delays(self):
+        import litellm
+
+        with peer("responses", failures=[(503, "unavailable"), (500, "reset")]) as (base, seen):
+            class SyntheticNative:
+                def _query(self, messages, **kwargs):
+                    return litellm.responses(model="openai/gpt-5.5", input=messages, api_base=base,
+                                             api_key="synthetic-only", tools=[], max_retries=0,
+                                             retry_policy=native.transport_retry_policy(0))
+
+            waits = []
+            model = run.backoff_transport_errors(SyntheticNative(), RETRYING, sleep=waits.append)
+            self.assertIsNotNone(model._query([{"role": "user", "content": "Use bash"}]))
+            self.assertEqual(len(seen), 3)
+            self.assertEqual(waits, [15, 30])
+
+        # A later quota error must stop immediately, even after a retryable failure.
+        with peer("responses", failures=[(503, "unavailable"), (429, "quota")]) as (base, seen):
+            waits = []
+            model = run.backoff_transport_errors(SyntheticNative(), RETRYING, sleep=waits.append)
+            with self.assertRaises(litellm.RateLimitError):
+                model._query([{"role": "user", "content": "Use bash"}])
+            self.assertEqual(len(seen), 2)
+            self.assertEqual(waits, [15])
+
+    def test_semantic_quota_in_server_errors_stops_before_or_after_a_retry(self):
+        from minisweagent.models.litellm_model import LitellmModel
+        from minisweagent.models.litellm_response_model import LitellmResponseModel
+
+        quota = "Upstream request failed: Insufficient account funds"
+        for api in ("chat", "messages", "responses"):
+            for status in (500, 503):
+                for prefix in ([], [(503, "temporarily unavailable")]):
+                    with self.subTest(api=api, status=status, prefix=bool(prefix)), \
+                            peer(api, failures=[*prefix, (status, quota)]) as (base, seen):
+                        cls = LitellmResponseModel if api == "responses" else LitellmModel
+                        model_name = "anthropic/claude-sonnet-4-5" if api == "messages" else "openai/gpt-5.5"
+                        model = cls(model_name=model_name, model_kwargs={
+                            "api_base": base.removesuffix("/v1") if api == "messages" else base,
+                            "api_key": "synthetic-only", "timeout": 5, "max_retries": 0,
+                            "retry_policy": native.transport_retry_policy(0)},
+                            litellm_model_registry=None, set_cache_control=None)
+                        waits = []
+                        model = run.backoff_transport_errors(model, RETRYING, sleep=waits.append)
+                        with self.assertRaises(Exception) as raised:
+                            model._query([{"role": "user", "content": "Use bash"}])
+                        self.assertEqual(native.classify_error(raised.exception), "quota_or_rate_limit")
+                        self.assertEqual(len(seen), len(prefix) + 1)
+                        self.assertEqual(waits, [15] if prefix else [])
 
     def test_client_errors_and_quota_are_never_retried(self):
         for status, message, category in ((400, "context too long", "provider_request_error"),
