@@ -59,12 +59,22 @@ test('changelog keeps a large undated roster reachable on a phone', async ({app,
  });
  await app.open('/changelog');
  await expect(screen.getByRole('button','Test model 84',{exact:true})).toBeVisible();
- expect(await browser.evaluate(() => {
-  const shell = document.querySelector('.vb');
-  const last = [...document.querySelectorAll('.change-models button')].at(-1);
-  return !!shell && !!last && shell.scrollHeight > shell.clientHeight &&
-   document.documentElement.scrollWidth <= innerWidth;
- })).toBe(true);
+ const metrics = await browser.evaluate(async () => {
+  const deadline = Date.now() + 10000;
+  while (document.getElementById('intro') && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 50));
+  const last = [...document.querySelectorAll('.change-models button')].at(-1) as HTMLElement | undefined;
+  last?.scrollIntoView({block:'end'});
+  await new Promise(resolve => requestAnimationFrame(() => resolve(undefined)));
+  const rect = last?.getBoundingClientRect();
+  return {introGone: !document.getElementById('intro'), count: document.querySelectorAll('.change-models button').length,
+   lastTop: rect?.top, lastBottom: rect?.bottom, height: innerHeight, width: innerWidth,
+   documentWidth: document.documentElement.scrollWidth};
+ });
+ console.log('mobile changelog metrics', JSON.stringify(metrics));
+ expect(metrics.introGone).toBe(true);
+ expect(metrics.count).toBe(85);
+ expect((metrics.lastTop ?? -1) >= 0 && (metrics.lastBottom ?? Infinity) <= metrics.height).toBe(true);
+ expect(metrics.documentWidth <= metrics.width).toBe(true);
 });
 test("synthetic local audio can play and pause",async({app,screen,browser})=>{
  await browser.addInitScript(() => {
