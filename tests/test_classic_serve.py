@@ -56,6 +56,11 @@ class ServeCompressionTest(unittest.TestCase):
         self.assertEqual(res.getheader("Vary"), "Accept-Encoding")
         self.assertEqual(body, self.data)
 
+    def test_changelog_is_an_app_route(self):
+        response, body = self.get("/changelog")
+        self.assertEqual(response.status, 200)
+        self.assertIn(b"Keygen Bench", body)
+
     def test_quality_values_decide_gzip(self):
         cases = {
             "gzip;q=0": None,

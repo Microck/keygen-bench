@@ -1,6 +1,35 @@
 import { test } from "@e2e-dev/web";
 import { expect } from "e2e";
 for (const width of [390,1280]) {
+ test(`dated changelog entry links its model at ${width}px`, async ({app,browser,screen}) => {
+  await browser.setViewport({width,height:844});
+  await browser.addInitScript(() => {
+   const original = window.fetch;
+   window.fetch = async (input, init) => {
+    const response = await original(input, init);
+    const url = new URL(input instanceof Request ? input.url : String(input), location.href);
+    if (!url.pathname.endsWith('/dist/data.json')) return response;
+    const data = await response.json();
+    data.runs[0] = {...data.runs[0], slug:'dated-test', model_key:'kimi-k3.1-pro', name:'Dated test model'};
+    return new Response(JSON.stringify(data), {status:200, headers:{'Content-Type':'application/json'}});
+   };
+  });
+  await app.open('/changelog');
+  await expect(screen.getByText('2026-10-28',{exact:true})).toBeVisible();
+  expect(await browser.evaluate(() => document.querySelectorAll('.change-entry a.change-source').length)).toBe(0);
+  await screen.getByRole('button','Dated test model',{exact:true}).click();
+  await expect(browser).toHaveURL(/\/tracker\/kimi-k3\.1-pro$/);
+ });
+ test(`changelog opens directly and links an undated model at ${width}px`, async ({app,browser,screen}) => {
+  await browser.setViewport({width,height:844});
+  await app.open('/changelog');
+  await expect(screen.getByText('MODEL CHANGELOG',{exact:true})).toBeVisible();
+  await expect(screen.getByText('Addition date unverified',{exact:true})).toBeVisible();
+  await screen.getByRole('button','Synthetic',{exact:true}).click();
+  await expect(browser).toHaveURL(/\/tracker\/synthetic/);
+  await screen.getByRole('button','Changelog',{exact:true}).click();
+  await expect(browser).toHaveURL(/\/changelog/);
+ });
  test(`ranking modes and information navigation at ${width}px`, async ({app,browser,screen}) => {
   await browser.setViewport({width,height:844});
   await app.open("/rankings");
@@ -32,6 +61,43 @@ for (const width of [390,1280]) {
   await expect(browser).toHaveURL(/mode=average/);
  });
 }
+test('changelog keeps a large undated roster reachable on a phone', async ({app,browser,screen}) => {
+ await browser.setViewport({width:390,height:844});
+ await browser.addInitScript(() => {
+  const original = window.fetch;
+  window.fetch = async (input, init) => {
+   const response = await original(input, init);
+   const url = new URL(input instanceof Request ? input.url : String(input), location.href);
+   if (!url.pathname.endsWith('/dist/data.json')) return response;
+   const data = await response.json();
+   const template = data.runs[0];
+   data.runs = Array.from({length:85}, (_, i) => ({...template, slug:`test-${i}`, model_key:`test-${i}`,
+    name:`Test model ${String(i).padStart(2,'0')}`, provenance:{attempt_ordinal:1}}));
+   return new Response(JSON.stringify(data), {status:200, headers:{'Content-Type':'application/json'}});
+  };
+ });
+ await app.open('/changelog');
+ await expect(screen.getByRole('button','Test model 84',{exact:true})).toBeVisible();
+ const metrics = await browser.evaluate(async () => {
+  const deadline = Date.now() + 10000;
+  while (document.getElementById('intro') && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 50));
+  const last = [...document.querySelectorAll('.change-models button')].at(-1) as HTMLElement | undefined;
+  last?.scrollIntoView({block:'end'});
+  await new Promise(resolve => requestAnimationFrame(() => resolve(undefined)));
+  const rect = last?.getBoundingClientRect();
+  return {introGone: !document.getElementById('intro'), count: document.querySelectorAll('.change-models button').length,
+   lastTop: rect?.top, lastBottom: rect?.bottom, height: innerHeight, width: innerWidth,
+   documentWidth: document.documentElement.scrollWidth};
+ });
+ console.log('mobile changelog metrics', JSON.stringify(metrics));
+ expect(metrics.introGone).toBe(true);
+ expect(metrics.count).toBe(85);
+ expect((metrics.lastTop ?? -1) >= 0 && (metrics.lastBottom ?? Infinity) <= metrics.height).toBe(true);
+ expect(metrics.documentWidth <= metrics.width).toBe(true);
+ await screen.getByRole('button','Test model 84',{exact:true}).click();
+ await expect(browser).toHaveURL(/\/tracker\/test-84/);
+ expect(await browser.evaluate(() => document.querySelector('.vb')?.scrollTop)).toBe(0);
+});
 test("synthetic local audio can play and pause",async({app,screen,browser})=>{
  await browser.addInitScript(() => {
   const OriginalAudio = window.Audio;

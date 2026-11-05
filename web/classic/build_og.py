@@ -190,7 +190,8 @@ def main():
     desc = f"{len(ranked)} ranked AI models write keygen tunes in FastTracker II, scored from the audio. Top: {top}."
     meta = {}
     for route, title in [("/", "Keygen Bench"), ("/tracker", "Keygen Bench: Tracker"), ("/rankings", "Keygen Bench: Rankings"),
-                         ("/scoring", "Keygen Bench: How scoring works"), ("/support", "Keygen Bench: Support")]:
+                         ("/scoring", "Keygen Bench: How scoring works"), ("/changelog", "Keygen Bench: Model changelog"),
+                         ("/support", "Keygen Bench: Support")]:
         meta[route] = {"title": title, "description": desc, "image": "/dist/og/home.png"}
     for m in ms:
         model_card(m, len(ranked), og / f"{m['key']}.png")

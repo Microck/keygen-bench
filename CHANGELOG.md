@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Added
+
+- Add a model changelog tab showing source-backed history dates and an undated group for models without historical evidence.
+
 ### Fixed
 
 - Use native Responses streaming while retaining the complete response, tool history and usage evidence.

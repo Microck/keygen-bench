@@ -13,6 +13,7 @@ export const PAGES = [
   { id: "viewer", label: "Tracker", key: "F1" },
   { id: "ranking", label: "Rankings", key: "F2" },
   { id: "scoring", label: "Scoring", key: "F3" },
+  { id: "changelog", label: "Changelog", key: "F5" },
   { id: "support", label: "Support", key: "F4" },
 ];
 

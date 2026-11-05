@@ -1,6 +1,11 @@
 # FT2 website
 
-This is the canonical frontend. It keeps the FT2 tracker, audio playback and looping, rankings with best/first/all-attempt views, scoring explanation, and support page. There is no JavaScript build step and no checked-in result dataset.
+This is the canonical frontend. It keeps the FT2 tracker, audio playback and looping, rankings with best/first/all-attempt views, scoring explanation, model changelog, and support page. There is no JavaScript build step and no checked-in result dataset.
+
+The Changelog lists models in the loaded publication. Dates in `core/changelog.js`
+record source PR merges, snapshots, or repository archive evidence. Snapshot and
+archive dates establish presence, not first website addition. Unknown models
+remain in the undated group. Keep evidence and tests current when editing history.
 
 ## Design and historical results
 

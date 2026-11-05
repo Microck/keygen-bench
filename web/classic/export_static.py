@@ -99,7 +99,7 @@ def seo_body(route: str, info: dict, board: list[dict]) -> str:
     full = route in ("/", "/rankings") or route.startswith(("/rankings", "/tracker"))
     return (f"<noscript><main><h1>{escape(info['title'])}</h1><p>{escape(info['description'])}</p><p>{escape(SITE_SUMMARY)}</p>"
             f"{ranking if full else ''}<p><a href=\"/rankings\">Rankings</a> | <a href=\"/tracker\">Tracker</a> | "
-            f"<a href=\"/scoring\">Scoring</a> | <a href=\"/support\">Support</a></p></main></noscript>\n")
+            f"<a href=\"/scoring\">Scoring</a> | <a href=\"/changelog\">Changelog</a> | <a href=\"/support\">Support</a></p></main></noscript>\n")
 
 
 def site_files(out: Path, site_url: str, meta: dict, board: list[dict], generated: str) -> None:
@@ -112,7 +112,7 @@ def site_files(out: Path, site_url: str, meta: dict, board: list[dict], generate
              f"Results snapshot: {day}. Full data: {site_url}/dist/data.json. Source and every run: https://github.com/Microck/keygen-bench", "",
              "## Pages", "", f"- [Rankings]({site_url}/rankings): best-of-3 ranking with every attempt",
              f"- [Tracker]({site_url}/tracker): play each module in an FT2-style pattern view",
-             f"- [Scoring]({site_url}/scoring): how the AI listener scores each tune", f"- [Support]({site_url}/support): costs and how to fund or contribute runs", "",
+             f"- [Scoring]({site_url}/scoring): how the AI listener scores each tune", f"- [Changelog]({site_url}/changelog): recorded model result additions", f"- [Support]({site_url}/support): costs and how to fund or contribute runs", "",
              "## Ranking (best of 3)", "", "| Rank | Model | Maker | Best | Attempts |", "| --- | --- | --- | --- | --- |"]
     # Model pages are keyed by model (see build_og.py); their card title starts with the model's label.
     pages = {meta[route]["title"].split(":")[0]: route for route in meta if route.startswith("/tracker/") and route.count("/") == 2}
