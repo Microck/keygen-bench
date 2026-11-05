@@ -18,7 +18,7 @@ for (const width of [390,1280]) {
   await expect(screen.getByText('2026-10-28',{exact:true})).toBeVisible();
   expect(await browser.evaluate(() => document.querySelectorAll('.change-entry a.change-source').length)).toBe(0);
   await screen.getByRole('button','Dated test model',{exact:true}).click();
-  await expect(browser).toHaveURL(/\/tracker\/dated-test/);
+  await expect(browser).toHaveURL(/\/tracker\/kimi-k3\.1-pro$/);
  });
  test(`changelog opens directly and links an undated model at ${width}px`, async ({app,browser,screen}) => {
   await browser.setViewport({width,height:844});
