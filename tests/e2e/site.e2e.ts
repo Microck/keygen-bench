@@ -1,6 +1,26 @@
 import { test } from "@e2e-dev/web";
 import { expect } from "e2e";
 for (const width of [390,1280]) {
+ test(`dated changelog entry links its evidence and model at ${width}px`, async ({app,browser,screen}) => {
+  await browser.setViewport({width,height:844});
+  await browser.addInitScript(() => {
+   const original = window.fetch;
+   window.fetch = async (input, init) => {
+    const response = await original(input, init);
+    const url = new URL(input instanceof Request ? input.url : String(input), location.href);
+    if (!url.pathname.endsWith('/dist/data.json')) return response;
+    const data = await response.json();
+    data.runs[0] = {...data.runs[0], slug:'dated-test', model_key:'kimi-k3.1-pro', name:'Dated test model'};
+    return new Response(JSON.stringify(data), {status:200, headers:{'Content-Type':'application/json'}});
+   };
+  });
+  await app.open('/changelog');
+  await expect(screen.getByText('2026-10-28',{exact:true})).toBeVisible();
+  expect(await browser.evaluate(() => document.querySelector('.change-entry a.change-source')?.getAttribute('href')))
+   .toBe('https://github.com/Microck/keygen-bench/pull/124');
+  await screen.getByRole('button','Dated test model',{exact:true}).click();
+  await expect(browser).toHaveURL(/\/tracker\/dated-test/);
+ });
  test(`changelog opens directly and links an undated model at ${width}px`, async ({app,browser,screen}) => {
   await browser.setViewport({width,height:844});
   await app.open('/changelog');
@@ -75,6 +95,9 @@ test('changelog keeps a large undated roster reachable on a phone', async ({app,
  expect(metrics.count).toBe(85);
  expect((metrics.lastTop ?? -1) >= 0 && (metrics.lastBottom ?? Infinity) <= metrics.height).toBe(true);
  expect(metrics.documentWidth <= metrics.width).toBe(true);
+ await screen.getByRole('button','Test model 84',{exact:true}).click();
+ await expect(browser).toHaveURL(/\/tracker\/test-84/);
+ expect(await browser.evaluate(() => document.querySelector('.vb')?.scrollTop)).toBe(0);
 });
 test("synthetic local audio can play and pause",async({app,screen,browser})=>{
  await browser.addInitScript(() => {

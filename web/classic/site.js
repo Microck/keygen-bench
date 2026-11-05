@@ -917,7 +917,7 @@ export async function mount(root, ctx) {
     update(p) {
       const pageChanged = p.page !== page, runChanged = p.run !== slug, modeChanged = p.mode !== S.mode;
       page = p.page; slug = p.run; S.mode = p.mode ?? "best";
-      if (pageChanged) transition();
+      if (pageChanged) { shell.scrollTop = 0; transition(); }
       else if (runChanged && page === "viewer") loadRun(slug);
       else if (runChanged || modeChanged) renderPage();
     },
