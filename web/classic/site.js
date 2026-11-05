@@ -850,15 +850,11 @@ export async function mount(root, ctx) {
     main.replaceChildren(h("section", { class: "panel raised" },
       h("h2", {}, "MODEL CHANGELOG"),
       h("div", { class: "well sunken ft2-scroll changelog-list" },
-        h("p", {}, "Dated additions use UTC source-PR merge dates. Snapshot entries show presence, not the first addition. Neither is a model release date or exact website deployment time."),
         ...dated.map((entry) => h("article", { class: "change-entry" },
-          h("time", { datetime: entry.date }, entry.kind === "snapshot" ? `${entry.date} snapshot` : entry.date),
-          h("a", { class: "change-source", href: `${SITE.repo}/pull/${entry.pr}`, target: "_blank", rel: "noopener" }, `Source #${entry.pr}`),
-          entry.note ? h("div", { class: "muted" }, entry.note) : null,
+          h("time", { datetime: entry.date }, entry.date),
           modelButtons(entry.models))),
         undated.length ? h("article", { class: "change-entry" },
           h("h3", {}, "Addition date unverified"),
-          h("p", {}, "These models are in this publication, but their original addition dates have not been verified."),
           modelButtons(undated)) : null,
         !dated.length && !undated.length ? h("p", {}, "No models in this publication yet.") : null)));
   }

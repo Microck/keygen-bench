@@ -9,7 +9,7 @@ test('history uses verified UTC dates and has no repeated model keys', () => {
   assert.equal(new Set(keys).size, keys.length);
   for (const entry of MODEL_HISTORY) {
     assert.match(entry.date, /^\d{4}-\d{2}-\d{2}$/);
-    assert.ok(Number.isInteger(entry.pr) && entry.pr > 0);
+    assert.ok((Number.isInteger(entry.pr) && entry.pr > 0) || (entry.kind === 'repository' && entry.commits.length > 0));
   }
   assert.deepEqual(MODEL_HISTORY.map((entry) => entry.date), [...MODEL_HISTORY.map((entry) => entry.date)].sort().reverse());
 });
@@ -38,4 +38,10 @@ test('historical snapshot presence is distinct from a first-addition date', () =
   assert.equal(result.dated[0].date, '2026-10-01');
   assert.equal(result.dated[0].kind, 'snapshot');
   assert.match(result.dated[0].note, /first addition dates are unverified/);
+});
+
+test('repository milestones retain their archive evidence', () => {
+  const result = modelChangelog({ 'swe-2': model('swe-2'), 'north-mini-code': model('north-mini-code') });
+  assert.deepEqual(result.dated.map((entry) => [entry.date, entry.kind]), [['2026-10-06', 'repository'], ['2026-10-05', 'repository']]);
+  assert.deepEqual(result.undated, []);
 });

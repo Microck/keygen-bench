@@ -2,14 +2,10 @@
 
 This is the canonical frontend. It keeps the FT2 tracker, audio playback and looping, rankings with best/first/all-attempt views, scoring explanation, model changelog, and support page. There is no JavaScript build step and no checked-in result dataset.
 
-The Changelog lists model results present in the loaded publication. Its reviewed
-history is maintained in `core/changelog.js`: addition entries use UTC merge dates,
-while explicitly labeled snapshots show only documented presence, not first
-addition. Neither is a model release date or an exact deployment time. Models
-without a verified milestone remain visible in the undated group. Add an entry
-only with evidence;
-renames and replacements should be identified explicitly. Update the unit and
-browser tests when changing the history or its presentation.
+The Changelog lists models in the loaded publication. Dates in `core/changelog.js`
+record source PR merges, snapshots, or repository archive evidence. Snapshot and
+archive dates establish presence, not first website addition. Unknown models
+remain in the undated group. Keep evidence and tests current when editing history.
 
 ## Design and historical results
 

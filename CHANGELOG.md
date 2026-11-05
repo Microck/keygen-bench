@@ -4,7 +4,7 @@
 
 ### Added
 
-- Add a model changelog tab showing source-backed result-inclusion dates and an explicit undated group when earlier dates cannot be verified.
+- Add a model changelog tab showing source-backed history dates and an undated group for models without historical evidence.
 
 ### Fixed
 

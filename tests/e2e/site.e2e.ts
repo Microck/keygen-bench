@@ -1,7 +1,7 @@
 import { test } from "@e2e-dev/web";
 import { expect } from "e2e";
 for (const width of [390,1280]) {
- test(`dated changelog entry links its evidence and model at ${width}px`, async ({app,browser,screen}) => {
+ test(`dated changelog entry links its model at ${width}px`, async ({app,browser,screen}) => {
   await browser.setViewport({width,height:844});
   await browser.addInitScript(() => {
    const original = window.fetch;
@@ -16,8 +16,7 @@ for (const width of [390,1280]) {
   });
   await app.open('/changelog');
   await expect(screen.getByText('2026-10-28',{exact:true})).toBeVisible();
-  expect(await browser.evaluate(() => document.querySelector('.change-entry a.change-source')?.getAttribute('href')))
-   .toBe('https://github.com/Microck/keygen-bench/pull/124');
+  expect(await browser.evaluate(() => document.querySelectorAll('.change-entry a.change-source').length)).toBe(0);
   await screen.getByRole('button','Dated test model',{exact:true}).click();
   await expect(browser).toHaveURL(/\/tracker\/dated-test/);
  });

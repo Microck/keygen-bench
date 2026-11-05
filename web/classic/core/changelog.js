@@ -1,6 +1,6 @@
-// Reviewed history. PR dates are UTC merge dates, not model release dates or
-// verified website deployment times. A snapshot date indicates presence in that
-// snapshot, not the first addition. Undocumented models stay in the undated group.
+// Dates mark source PR merges, historical snapshots, or the latest date by
+// which a run was archived. They are not model release dates or verified first
+// website addition dates. Unknown models remain in the undated group.
 export const MODEL_HISTORY = [
   { date: "2026-10-28", pr: 124, keys: ["kimi-k3.1-pro"] },
   { date: "2026-10-26", pr: 121, keys: ["gpt-6.1-terra"], note: "Publication-ready results added" },
@@ -11,6 +11,8 @@ export const MODEL_HISTORY = [
   { date: "2026-10-12", pr: 92, keys: ["grok-4.20-0309-non-reasoning", "grok-4.20-0309-reasoning", "grok-4.3", "grok-build", "grok-build-0.1", "grok-composer-2.5-fast"] },
   { date: "2026-10-08", pr: 74, keys: ["claude-haiku-4-5-20251001", "claude-haiku-5-5"] },
   { date: "2026-10-07", pr: 67, keys: ["gpt-oss-20b", "hermes-4-405b", "qwen3.5-397b-a17b", "qwen3.8-27b"] },
+  { date: "2026-10-06", kind: "repository", commits: ["75eb0823c894", "96594a429751", "d4d3e137125a", "a1220c33899c", "f8936910b2ea", "798f640b1113"], keys: ["command-a-plus-05-2026", "command-a-reasoning-08-2025", "mistral-large-4", "muse-glimmer-30b", "nemotron-3.5-lightning", "north-mini-code"] },
+  { date: "2026-10-05", kind: "repository", commits: ["1fd64409c697", "465621850aed", "4ea80a049b19", "bbc82547c810"], keys: ["claude-opus-5-5", "deepseek-v4-flash", "glm-5-3", "glm-5-3-flash", "glm-5.2", "grok-4-5", "grok-4-7", "hy4-preview", "kimi-k2-6", "kimi-k2-7", "kimi-k3", "mimo-v2.6-pro", "minimax-m2.7", "minimax-m3", "nemotron-3-super-120b-a12b", "nemotron-3-ultra", "step-3.7-flash", "swe-1-6", "swe-1-7-lightning", "swe-2"] },
   { date: "2026-10-01", pr: 22, kind: "snapshot", note: "Documented in October 1 snapshots, including pilot entries; first addition dates are unverified", keys: [
     "claude-fable-5", "claude-fable-5-1", "claude-opus-4-5-20251101", "claude-opus-4-6", "claude-opus-4-7", "claude-opus-4-8", "claude-opus-5", "claude-sonnet-4-6", "claude-sonnet-5", "claude-sonnet-5-5",
     "deepseek-v4-1-flash", "deepseek-v4-pro", "gemini-3-flash-preview", "gemini-3.1-pro-preview", "gemini-3.5-flash", "gemini-3.6-flash", "gemini-3.7-flash", "gemini-3.8-flash",
