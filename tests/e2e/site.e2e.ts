@@ -1,6 +1,16 @@
 import { test } from "@e2e-dev/web";
 import { expect } from "e2e";
 for (const width of [390,1280]) {
+ test(`changelog opens directly and links an undated model at ${width}px`, async ({app,browser,screen}) => {
+  await browser.setViewport({width,height:844});
+  await app.open('/changelog');
+  await expect(screen.getByText('MODEL CHANGELOG',{exact:true})).toBeVisible();
+  await expect(screen.getByText('Addition date unverified',{exact:true})).toBeVisible();
+  await screen.getByRole('button','Synthetic',{exact:true}).click();
+  await expect(browser).toHaveURL(/\/tracker\/synthetic/);
+  await screen.getByRole('button','Changelog',{exact:true}).click();
+  await expect(browser).toHaveURL(/\/changelog/);
+ });
  test(`ranking modes and information navigation at ${width}px`, async ({app,browser,screen}) => {
   await browser.setViewport({width,height:844});
   await app.open("/rankings");

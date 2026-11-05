@@ -1,5 +1,5 @@
 // Router. Clean paths:
-//   /tracker[/<model>[/<attempt>]]   /rankings[/<model>[/<attempt>]]   /scoring   /support
+//   /tracker[/<model>[/<attempt>]]   /rankings[/<model>[/<attempt>]]   /scoring   /changelog   /support
 // <model> is the model key (e.g. gpt-5.5); without <attempt> it means the model's best attempt. "/" is the tracker.
 import { loadData } from "./core/data.js";
 import { loadFonts } from "./core/fb.js";
@@ -9,7 +9,7 @@ import { modelItems } from "./core/ui.js";
 const app = document.getElementById("app");
 let data, site = null;
 
-const SEG = { viewer: "tracker", ranking: "rankings", scoring: "scoring", support: "support" };
+const SEG = { viewer: "tracker", ranking: "rankings", scoring: "scoring", changelog: "changelog", support: "support" };
 const PAGE = Object.fromEntries(Object.entries(SEG).map(([k, v]) => [v, k]));
 
 function params() {
@@ -19,7 +19,7 @@ function params() {
   const mode = new URLSearchParams(location.search).get("mode") === "average" ? "average" : "best";
   const leader = mode === "average" && page === "ranking" ? Object.values(data.byModel).find((model) => model.averageRank === 1)?.best : null;
   // Information pages keep their originating attempt in this history entry.
-  const remembered = page === "scoring" || page === "support" ? data.bySlug[history.state?.run] : null;
+  const remembered = ["scoring", "changelog", "support"].includes(page) ? data.bySlug[history.state?.run] : null;
   // The bare tracker opens the first entry of its own menus: the top company and its newest model.
   const firstMaker = data.makers[0];
   const opening = page === "viewer" && firstMaker ? data.bySlug[modelItems(data, firstMaker.name, null)[0]?.value] : null;

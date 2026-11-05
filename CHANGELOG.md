@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Added
+
+- Add a model changelog tab showing source-backed result-inclusion dates and an explicit undated group when earlier dates cannot be verified.
+
 ### Fixed
 
 - Use native Responses streaming while retaining the complete response, tool history and usage evidence.

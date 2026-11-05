@@ -16,7 +16,7 @@ from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
 
-APP_ROUTES = {"tracker", "rankings", "scoring", "support"}
+APP_ROUTES = {"tracker", "rankings", "scoring", "changelog", "support"}
 # Fetched whole by the app, never by byte range, and much smaller compressed: data.json is mostly repeated
 # keys and playback traces, and XM pattern data is sparse. MP3/WAV stay identity so audio seeking keeps ranges.
 COMPRESSIBLE = {".json", ".js", ".css", ".xm"}
