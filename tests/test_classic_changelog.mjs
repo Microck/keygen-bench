@@ -32,3 +32,10 @@ test('duplicate or absent history entries never duplicate a displayed model', ()
   assert.deepEqual(result.dated[0].models, [byModel.x]);
   assert.deepEqual(result.undated, []);
 });
+
+test('historical snapshot presence is distinct from a first-addition date', () => {
+  const result = modelChangelog({ 'gpt-5.5': model('gpt-5.5') });
+  assert.equal(result.dated[0].date, '2026-10-01');
+  assert.equal(result.dated[0].kind, 'snapshot');
+  assert.match(result.dated[0].note, /first addition dates are unverified/);
+});
