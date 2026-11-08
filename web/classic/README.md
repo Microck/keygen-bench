@@ -46,6 +46,8 @@ FLAC media, writes per-attempt evaluation summaries and builds OG cards.
 Only one canonical WAV is decoded at a time. FLAC loop sources contain the
 full canonical audio, not the short evaluator loop preview.
 
+For Responses runs with a declared nonstandard reasoning mode, the frozen model ID is the public identity; the provider model remains unchanged in the run provenance. This keeps distinct modes separate from their underlying model.
+
 `data/site/` contains the reviewed release dates, price catalog, historical
 spend ledger, reviewed publication exclusions and XM/ordinal-keyed
 published-link registry. Every playable published model needs a release date.

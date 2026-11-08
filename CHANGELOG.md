@@ -4,9 +4,14 @@
 
 ### Added
 
+- Add three GPT-6 Astra Pro mode runs at max reasoning as a separate ranked GPT-6 Pro entry.
+- Support explicit OpenAI Responses reasoning mode alongside effort, preserving both in route validation and audit evidence.
+
 - Add a model changelog tab showing source-backed history dates and an undated group for models without historical evidence.
 
 ### Fixed
+
+- Keep separately named Responses reasoning modes distinct in published model identities.
 
 - Use native Responses streaming while retaining the complete response, tool history and usage evidence.
 - Space transient transport retries and stop on recognized quota failures. Preserve failed sends in readiness audits.

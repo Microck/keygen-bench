@@ -44,6 +44,14 @@ def display_name(name: str) -> str:
     return re.sub(r"-free(?=$| )", "", name.replace(":free", ""))
 
 
+def publication_model_key(row: dict) -> str:
+    """Keep a named execution mode distinct while retaining the upstream model in provenance."""
+    settings = row.get("effective_settings") or {}
+    reasoning = (settings.get("requested_generation") or {}).get("reasoning") or {}
+    model = row["model_id"] if reasoning.get("mode") not in (None, "standard") else row["model"]
+    return display_name(price_id(model))
+
+
 def checked_path(directory: Path, relative: str) -> Path:
     path = directory / relative
     if (Path(relative).is_absolute() or ".." in Path(relative).parts or path.is_symlink()
@@ -259,7 +267,7 @@ def build_from_runs(runs_root: Path, output: Path, listener_scores: Path,
         for set_id, community, directory, row, selection, campaign_hash in loaded:
             ordinal = row["repetition"]
             cohort = row["cohort"]
-            key = display_name(price_id(row["model"]))
+            key = publication_model_key(row)
             # The public key is the model route (/tracker/<key>); a community set gets its own.
             public_key = f"{key}-community-{community.lower()}" if community else key
             model = set_id.split("/", 1)[0]

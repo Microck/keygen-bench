@@ -177,6 +177,21 @@ class NativeStreamingTests(unittest.TestCase):
     def records(self, root):
         return [json.loads(line) for line in (root / "transport.jsonl").read_text().splitlines()]
 
+    def test_openai_pro_mode_and_max_effort_reach_wire(self):
+        import openai
+        reasoning = {"effort": "max", "mode": "pro"}
+        spec = {"api": "responses", "provider": "openai", "model": "gpt-6-astra",
+                "generation": {"max_output_tokens": 4096, "reasoning": reasoning},
+                "tier": {"level": "max", "reasoning": {"reasoning": reasoning}, "spec_sha256": "0" * 64}}
+        settings = native._generation(spec)
+        with endpoint(["complete"]) as (base, seen, _):
+            with openai.OpenAI(api_key="fixture-credential", base_url=base, max_retries=0) as client:
+                with client.responses.create(model="gpt-6-astra", input=MESSAGES, tools=[],
+                                             stream=True, **settings) as stream:
+                    list(stream)
+            self.assertEqual(seen[0]["reasoning"], reasoning)
+            self.assertEqual(seen[0]["model"], "gpt-6-astra")
+
     def test_all_responses_routes_share_fixed_native_transport(self):
         bases = {"go": "https://opencode.ai/zen/go/v1", "vercel": "https://ai-gateway.vercel.sh/v1",
                  "openai": "https://api.openai.com/v1", "custom": "https://api.example.com/v1",
