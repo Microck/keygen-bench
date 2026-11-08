@@ -41,6 +41,15 @@ class RunsBuilderTests(unittest.TestCase):
         self.make_attempt(2, 8.0)
         self.write_site()
 
+    def test_reasoning_modes_keep_distinct_public_identities(self):
+        row = {"model": "gpt-6-astra", "model_id": "gpt-6-pro",
+               "effective_settings": {"requested_generation": {"reasoning": {"mode": "pro", "effort": "max"}}}}
+        self.assertEqual(builder.publication_model_key(row), "gpt-6-pro")
+        row["effective_settings"]["requested_generation"]["reasoning"]["mode"] = "standard"
+        self.assertEqual(builder.publication_model_key(row), "gpt-6-astra")
+        row["effective_settings"] = None
+        self.assertEqual(builder.publication_model_key(row), "gpt-6-astra")
+
     def test_response_receipts_recover_cached_usage_and_price_each_context(self):
         directory = self.root / "receipts"
         directory.mkdir()

@@ -382,9 +382,12 @@ def _generation(model: dict) -> dict:
         raise ValueError("Unsupported reasoning_effort")
     if "reasoning" in value:
         reasoning = value["reasoning"]
-        if (not isinstance(reasoning, dict) or set(reasoning) != {"effort"}
-                or not isinstance(reasoning["effort"], str) or reasoning["effort"] not in EFFORTS):
-            raise ValueError("reasoning must contain one supported effort")
+        if (not isinstance(reasoning, dict) or set(reasoning) - {"effort", "mode"}
+                or not isinstance(reasoning.get("effort"), str) or reasoning["effort"] not in EFFORTS):
+            raise ValueError("reasoning must contain one supported effort and an optional mode")
+        if "mode" in reasoning and (model.get("provider") != "openai"
+                                    or reasoning["mode"] not in ("standard", "pro")):
+            raise ValueError("reasoning mode is supported only on direct OpenAI Responses routes")
     if "output_config" in value:
         _check_output_config(value["output_config"])
     if "thinking" in value:

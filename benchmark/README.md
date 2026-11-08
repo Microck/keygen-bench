@@ -56,6 +56,8 @@ The system prompt documents output truncation and submission handling. The task 
 
 Provider protocols, exact model identity, generation settings, reasoning tier, image IDs and dependency provenance are recorded. A declared highest reasoning tier means the highest documented control on that route, not equal compute across providers. Configuration must not silently substitute another checkpoint or route.
 
+OpenAI Responses routes can declare `generation.reasoning` with an `effort` and an optional `mode` (`standard` or `pro`). Both fields are part of the frozen tier and must survive SDK mapping. Pro mode is distinct from effort: for GPT-6 Astra at its highest documented setting use `{"effort": "max", "mode": "pro"}`. Verify provider access and actual delivery with a readiness pilot before a run.
+
 ## Provider routes
 
 Use the [guided contributor CLI](../CONTRIBUTING-RUNS.md#guided-setup-and-run) for setup and private model configuration.

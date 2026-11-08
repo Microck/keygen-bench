@@ -600,6 +600,24 @@ class NativeProtocolTests(unittest.TestCase):
         self.assertIn("No tool calls found", outcome.messages[0]["content"])
 
 
+class OpenAIReasoningModeTests(unittest.TestCase):
+    def test_pro_and_max_are_preserved_by_native_mapping(self):
+        spec = tiered(model_spec("responses", "openai", "https://api.openai.com/v1"),
+                      "max", reasoning={"effort": "max", "mode": "pro"})
+        spec["model"] = spec["response_model"] = "gpt-6-astra"
+        mapped = native._generation(spec)
+        self.assertEqual(mapped["reasoning"], {"effort": "max", "mode": "pro"})
+        self.assertEqual(native.transmitted_reasoning(spec)["reasoning"], mapped["reasoning"])
+
+    def test_invalid_modes_and_non_openai_routes_fail_closed(self):
+        for provider, mode in (("openai", "invalid"), ("openai", None), ("custom", "pro")):
+            with self.subTest(provider=provider, mode=mode):
+                spec = tiered(model_spec("responses", provider), "max",
+                              reasoning={"effort": "max", "mode": mode})
+                with self.assertRaises(ValueError):
+                    native._generation(spec)
+
+
 class NativePolicyTests(unittest.TestCase):
     def test_direct_provider_route_and_protocol_restrictions(self):
         routes = (("openai", "https://api.openai.com/v1", {"chat", "responses"}),
