@@ -11,6 +11,8 @@
 
 ### Fixed
 
+- Add a third media repository so new audio fits within GitHub Pages limits.
+
 - Keep separately named Responses reasoning modes distinct in published model identities.
 
 - Use native Responses streaming while retaining the complete response, tool history and usage evidence.

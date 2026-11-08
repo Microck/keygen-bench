@@ -127,16 +127,18 @@ jobs:
           SITE_KEY: ${{ secrets.KEYGEN_SITE_DEPLOY_KEY }}
           MEDIA_KEY: ${{ secrets.KEYGEN_MEDIA_DEPLOY_KEY }}
           MEDIA2_KEY: ${{ secrets.KEYGEN_MEDIA2_DEPLOY_KEY }}
+          MEDIA3_KEY: ${{ secrets.KEYGEN_MEDIA3_DEPLOY_KEY }}
           KEYGEN_SITE_DEPLOY_KEY_FILE: ${{ runner.temp }}/keygen-ssh/site
           KEYGEN_MEDIA_DEPLOY_KEY_FILE: ${{ runner.temp }}/keygen-ssh/media
           KEYGEN_MEDIA2_DEPLOY_KEY_FILE: ${{ runner.temp }}/keygen-ssh/media2
+          KEYGEN_MEDIA3_DEPLOY_KEY_FILE: ${{ runner.temp }}/keygen-ssh/media3
           KEYGEN_KNOWN_HOSTS_FILE: ${{ runner.temp }}/keygen-ssh/known_hosts
         run: |
           python - <<'PY'
           import json, os, pathlib, urllib.request
           directory = pathlib.Path(os.environ['KEYGEN_SITE_DEPLOY_KEY_FILE']).parent
           directory.mkdir(mode=0o700)
-          for name in ('SITE', 'MEDIA', 'MEDIA2'):
+          for name in ('SITE', 'MEDIA', 'MEDIA2', 'MEDIA3'):
               value = os.environ[name + '_KEY']
               if not value.strip():
                   raise SystemExit('Missing KEYGEN_' + name + '_DEPLOY_KEY secret')
