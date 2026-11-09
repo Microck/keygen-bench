@@ -4,6 +4,8 @@
 
 ### Added
 
+- Add GPT-5 Pro benchmark attempts and preserve the rate-limited attempt and separate retry.
+
 - Add three GPT-6 Astra Pro mode runs at max reasoning as a separate ranked GPT-6 Pro entry.
 - Support explicit OpenAI Responses reasoning mode alongside effort, preserving both in route validation and audit evidence.
 
