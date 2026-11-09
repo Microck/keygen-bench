@@ -4,6 +4,8 @@
 
 ### Added
 
+- Add gpt-5-nano benchmark attempts and their recorded usage.
+
 - Add GPT-5 Pro benchmark attempts and preserve the rate-limited attempt and separate retry.
 
 - Add three GPT-6 Astra Pro mode runs at max reasoning as a separate ranked GPT-6 Pro entry.
