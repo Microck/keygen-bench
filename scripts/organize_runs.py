@@ -44,7 +44,15 @@ def sha256(path: Path) -> str:
 def compress_wav(wav: Path) -> None:
     """Replace a WAV with FLAC that decodes to the identical bytes, or fail."""
     flac = wav.with_name(wav.name + ".flac")
-    subprocess.run(["flac", "--silent", "--best", "--keep-foreign-metadata", "-o", str(flac), str(wav)], check=True)
+    encoded = subprocess.run(["flac", "--silent", "--best", "--keep-foreign-metadata", "-o", str(flac), str(wav)],
+                             capture_output=True, text=True)
+    if encoded.returncode:
+        # A model may leave a broken intermediate WAV in its submission. Preserve
+        # those original bytes; the canonical render must still compress exactly.
+        if "submission" in wav.parts and "invalid WAVE file" in encoded.stderr:
+            flac.unlink(missing_ok=True)
+            return
+        raise subprocess.CalledProcessError(encoded.returncode, encoded.args, stderr=encoded.stderr)
     with tempfile.TemporaryDirectory() as temporary:
         decoded = Path(temporary) / "check.wav"
         subprocess.run(["flac", "-d", "--silent", "--keep-foreign-metadata", "-o", str(decoded), str(flac)], check=True)

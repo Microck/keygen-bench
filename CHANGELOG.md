@@ -14,6 +14,7 @@
 ### Fixed
 
 - Verify linked-campaign infrastructure retries before publishing their original ordinals.
+- Preserve malformed model-generated intermediate WAVs unchanged in submission archives.
 
 - Include verified retry artifacts in the site deployment checkout.
 

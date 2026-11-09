@@ -40,6 +40,16 @@ class OrganizeRunsTests(unittest.TestCase):
             stream.writeframes(bytes(range(256)) * 40)
         return directory
 
+    def test_keeps_model_generated_invalid_wav_bytes(self):
+        slots = {n: self.attempt(f"m-rep-{n}", 50 + n) for n in (1, 2, 3)}
+        submission = slots[1] / "submission"
+        submission.mkdir()
+        invalid = b"RIFF\x04\x00\x00\x00WAVE"
+        (submission / "broken.wav").write_bytes(invalid)
+        organize_runs.organize(self.runs, "m", "openai", slots, [], "paris:c/runs")
+        self.assertEqual((self.runs / "m/attempt-1/submission/broken.wav").read_bytes(), invalid)
+        self.assertFalse((self.runs / "m/attempt-1/submission/broken.wav.flac").exists())
+
     def test_retains_verified_retry_record_without_replacing_the_failed_slot(self):
         slots = {n: self.attempt(f"m-rep-{n}", 50 + n) for n in (1, 2)}
         slots[3] = self.attempt("m-rep-3", None, "QUOTA_ERROR")

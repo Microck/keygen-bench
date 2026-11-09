@@ -37,8 +37,9 @@ linked recovery campaign, the builder also checks the frozen origin status hash,
 campaign identity and unchanged model condition. The failed original stays in its slot and in provenance; a scored result
 is never replaced. It verifies frozen campaign identities, retained
 profiles, submitted XM checksums, playback traces and byte-exact decoded
-canonical WAVs. Standalone contribution attempts use their sealed `spec.json`
-configuration when no campaign envelope exists.
+canonical WAVs. Model-generated invalid intermediate WAVs remain byte-exact in the submission;
+canonical WAVs still require verified lossless FLAC. Standalone contribution
+attempts use their sealed `spec.json` configuration when no campaign envelope exists.
 
 ```sh
 python3 web/classic/build_from_runs.py --runs runs --out /absolute/publication
