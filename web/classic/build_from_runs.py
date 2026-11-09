@@ -171,12 +171,31 @@ def resolve_infrastructure_retry(directory: Path, row: dict, config: dict, campa
             if not record.exists():
                 continue  # Historical other/ entries without a retained retry record are not promoted.
             proof = read_json(checked_path(model_root, record.name))
-            if proof != {"campaign_sha256": campaign_hash, "retry_of": row["attempt_id"], "attempt_id": attempt_id}:
-                raise ValueError(f"{candidate}: retry record does not match the frozen campaign")
             retry, retry_config, retry_hash = load_attempt(candidate, report_root, retry_ordinal=ordinal)
-            if (retry_hash != campaign_hash or retry_config != config or status.get("repetition") != ordinal
-                    or status.get("model") != row["status_model"] or retry["retry_of"] != row["attempt_id"]
-                    or attempt_id in seen):
+            same_campaign = proof == {"campaign_sha256": campaign_hash, "retry_of": row["attempt_id"],
+                                      "attempt_id": attempt_id} and retry_hash == campaign_hash and retry_config == config
+            if not same_campaign:
+                policies = retry_config.get("policies") or {}
+                model_id = status.get("model", {}).get("id")
+                expected = {"campaign_sha256": retry_hash, "attempt_id": attempt_id, "model_id": model_id,
+                            "repetition": ordinal, "kind": "retry", "retry_of": row["attempt_id"],
+                            "retry_of_campaign_id": config.get("campaign_id")}
+                entries = [entry for entry in (policies.get("plan") or {}).get(model_id, [])
+                           if entry.get("repetition") == ordinal]
+                links = ([entries[0].get("origin")] + entries[0].get("reruns", [])) if len(entries) == 1 else []
+                last = links[-1] if links else None
+                linked = [item for item in policies.get("linked_campaigns", [])
+                          if item.get("campaign_id") == config.get("campaign_id")]
+                actual = read_json(checked_path(directory, "status.json"))
+                required = {"campaign_id": config.get("campaign_id"), "attempt_id": row["attempt_id"],
+                            "status": actual.get("status"), "status_sha256": sha256(checked_path(directory, "status.json")),
+                            "outcome": row.get("outcome"), "failure_category": row.get("failure_category")}
+                if (proof != expected or policies.get("attempt_selection") != "independent_repetitions_infrastructure_reruns"
+                        or last != required or len(linked) != 1 or linked[0].get("config_sha256") != campaign_hash
+                        or condition_fingerprint(retry_config, status.get("model")) != condition_fingerprint(config, row["status_model"])):
+                    raise ValueError(f"{candidate}: retry record invalid or retry differs from linked frozen condition")
+            if (status.get("repetition") != ordinal or status.get("model") != row["status_model"]
+                    or retry["retry_of"] != row["attempt_id"] or attempt_id in seen):
                 raise ValueError(f"{candidate}: retry differs from the original frozen condition")
             candidates.append((candidate, retry, retry_config, retry_hash))
         if len(candidates) > 1:

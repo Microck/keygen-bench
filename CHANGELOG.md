@@ -13,6 +13,8 @@
 
 ### Fixed
 
+- Verify linked-campaign infrastructure retries before publishing their original ordinals.
+
 - Include verified retry artifacts in the site deployment checkout.
 
 - Include recorded GPT-5 Pro and GPT-6 Pro run and readiness usage in estimated spend.

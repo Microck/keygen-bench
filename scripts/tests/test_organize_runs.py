@@ -58,6 +58,24 @@ class OrganizeRunsTests(unittest.TestCase):
         self.assertEqual(json.loads((self.runs / "m/attempt-3/status.json").read_text())["status"], "QUOTA_ERROR")
         self.assertTrue((self.runs / "m/other/2026-09-21-m-rep-3-retry-1").is_dir())
 
+    def test_retains_linked_queue_retry_record_without_replacing_slot(self):
+        slots = {n: self.attempt(f"m-rep-{n}", 50 + n) for n in (1, 2)}
+        slots[3] = self.attempt("m-rep-3", None, "INFRA_ERROR")
+        retry = self.attempt("m-rep-3-retry-1", 40)
+        status = json.loads((retry / "status.json").read_text())
+        status.update(retry_of="m-rep-3", repetition=3)
+        (retry / "status.json").write_text(json.dumps(status))
+        campaign_hash = "b" * 64
+        (retry / "campaign.json").write_text(json.dumps({"snapshot": {
+            "campaign": {"campaign_id": "queue"}, "config_sha256": campaign_hash}}))
+        record = retry.parent / f"retry-{retry.name}.json"
+        record.write_text(json.dumps({"campaign_sha256": campaign_hash, "attempt_id": retry.name,
+            "model_id": "m", "repetition": 3, "kind": "retry", "retry_of": "m-rep-3",
+            "retry_of_campaign_id": "camp-1"}))
+        organize_runs.organize(self.runs, "m", "openai", slots, [retry], "paris:c/runs")
+        self.assertEqual((self.runs / "m" / record.name).read_bytes(), record.read_bytes())
+        self.assertEqual(json.loads((self.runs / "m/attempt-3/status.json").read_text())["status"], "INFRA_ERROR")
+
     def test_rejects_retry_record_for_wrong_campaign_before_writing_slots(self):
         slots = {n: self.attempt(f"m-rep-{n}", 50 + n) for n in (1, 2, 3)}
         retry = self.attempt("m-rep-3-retry-1", 40)
