@@ -13,6 +13,8 @@
 
 ### Fixed
 
+- Include verified retry artifacts in the site deployment checkout.
+
 - Include recorded GPT-5 Pro and GPT-6 Pro run and readiness usage in estimated spend.
 
 - Publish verified infrastructure retries as their original ordinal without hiding the failed attempt.
