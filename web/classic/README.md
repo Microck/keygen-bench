@@ -90,6 +90,15 @@ reading `other/`, so the builder does not claim to reproduce those histories.
 The spend ledger retains reviewed historical totals independently of this
 ranked-only export.
 
+The GPT-5 Pro and GPT-6 Pro additions in `data/site/spend.json` use the
+per-request records in `data/site/gpt-pro-spend-usage.json`, priced with
+`data/site/prices.json`. They include readiness pilots and the interrupted
+GPT-5 Pro attempt as distinct started runs. The interrupted request has
+unknown usage. The earlier aggregate remains the reviewed snapshot from
+commit `547ddb3f`; its original per-attempt input is not included here.
+Rebuild the additions with `build_spend.py` and add their recorded bounds to
+the historical bounds, without treating the snapshot as raw attempt records.
+
 Pricing uses the canonical builder's cache-write and context-tier rules. Complete
 Responses transport receipts are reconciled with request/input/output totals
 before using their cache counts and per-request context tiers. These take
