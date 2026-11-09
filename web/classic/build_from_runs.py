@@ -27,7 +27,7 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
 sys.path[:0] = [str(ROOT), str(ROOT / "benchmark"), str(HERE)]
 from benchmark.report import (MAX_TIER_PREFIX, attempt_row, campaign_cohort, condition_fingerprint, counts, digest,
-                              read_cohort, tier_label)
+                              read_cohort, rerunnable, tier_label)
 from build import FLAG_RULES, copy_frontend, estimate_cost, price_id, public_maker, public_price, slug
 from collect_public import public_run, sha256, verified_media, write_json
 
@@ -61,7 +61,7 @@ def checked_path(directory: Path, relative: str) -> Path:
 
 
 def load_attempt(directory: Path, report_root: Path, bundles: dict | None = None,
-                 community: str | None = None) -> tuple[dict, dict, str]:
+                 community: str | None = None, retry_ordinal: int | None = None) -> tuple[dict, dict, str]:
     """Load one slot. `community` is the submission directory name for community slots, else None."""
     identity = read_json(checked_path(directory, "ATTEMPT.json"))
     publication = identity.get("publication")
@@ -71,7 +71,9 @@ def load_attempt(directory: Path, report_root: Path, bundles: dict | None = None
     if not re.fullmatch(r"[A-Za-z0-9_.:-]+", attempt_id):
         raise ValueError(f"{directory}: invalid attempt identity")
     status = read_json(checked_path(directory, "status.json"))
-    if status.get("attempt_id") != attempt_id or identity["slot"] != directory.name:
+    slot = "other" if retry_ordinal is not None else directory.name
+    if (status.get("attempt_id") != attempt_id or identity["slot"] != slot
+            or (retry_ordinal is not None and identity.get("path") != f"other/{directory.name}")):
         raise ValueError(f"{directory}: organizer identity mismatch")
     link = report_root / attempt_id
     if (directory / "campaign.json").exists():
@@ -108,10 +110,11 @@ def load_attempt(directory: Path, report_root: Path, bundles: dict | None = None
         # prefix keeps its sealed file; only its publication condition label is derived here.
         row["cohort"] = campaign_cohort({**config, "campaign_id": MAX_TIER_PREFIX + config["campaign_id"]})
         row["tier"] = tier_label(status["model"], row["cohort"]["condition"])
+    row["status_model"] = status.get("model")
     row["source_campaign_sha256"] = campaign_hash
     row["source_campaign_id"] = f"campaign-{campaign_hash}"
     row["condition_fingerprint"] = condition_fingerprint(config, status["model"])
-    row["repetition"] = int(directory.name.removeprefix("attempt-"))
+    row["repetition"] = retry_ordinal if retry_ordinal is not None else int(directory.name.removeprefix("attempt-"))
     if publication:
         bundle = (bundles or {}).get(publication["bundle_sha256"])
         if (not bundle or bundle.name != community or publication["kind"] != "community-submitted"
@@ -139,6 +142,53 @@ def load_attempt(directory: Path, report_root: Path, bundles: dict | None = None
                          "condition": "community-submitted", "prompt_version": config["prompts"]["version"],
                          "label": "Community-submitted, maintainer re-scored; not comparatively ranked"}
     return row, config, campaign_hash
+
+
+def resolve_infrastructure_retry(directory: Path, row: dict, config: dict, campaign_hash: str,
+                                 report_root: Path) -> tuple[Path, dict, dict, str]:
+    """Follow verified same-campaign infrastructure retries without moving original slots."""
+    model_root = directory.parent
+    other = model_root / "other"
+    if other.is_symlink() or (other.exists() and not other.is_dir()):
+        raise ValueError(f"{other}: invalid retry directory")
+    history, seen = [], {row["attempt_id"]}
+    ordinal = row["repetition"]
+    while rerunnable(row) and row.get("model_failure") is not True and other.is_dir():
+        candidates = []
+        for candidate in sorted(other.iterdir()):
+            if candidate.is_symlink() or not candidate.is_dir():
+                raise ValueError(f"{candidate}: invalid retry directory")
+            candidate_status = candidate / "status.json"
+            if not candidate_status.is_file():
+                continue
+            status = read_json(checked_path(candidate, "status.json"))
+            if status.get("retry_of") != row["attempt_id"]:
+                continue
+            attempt_id = status.get("attempt_id")
+            if not isinstance(attempt_id, str) or not re.fullmatch(r"[A-Za-z0-9_.:-]+", attempt_id):
+                raise ValueError(f"{candidate}: invalid retry identity")
+            record = model_root / f"retry-{attempt_id}.json"
+            if not record.exists():
+                continue  # Historical other/ entries without a retained retry record are not promoted.
+            proof = read_json(checked_path(model_root, record.name))
+            if proof != {"campaign_sha256": campaign_hash, "retry_of": row["attempt_id"], "attempt_id": attempt_id}:
+                raise ValueError(f"{candidate}: retry record does not match the frozen campaign")
+            retry, retry_config, retry_hash = load_attempt(candidate, report_root, retry_ordinal=ordinal)
+            if (retry_hash != campaign_hash or retry_config != config or status.get("repetition") != ordinal
+                    or status.get("model") != row["status_model"] or retry["retry_of"] != row["attempt_id"]
+                    or attempt_id in seen):
+                raise ValueError(f"{candidate}: retry differs from the original frozen condition")
+            candidates.append((candidate, retry, retry_config, retry_hash))
+        if len(candidates) > 1:
+            raise ValueError(f"{directory}: multiple retries follow the same attempt")
+        if not candidates:
+            break
+        history.append({key: row.get(key) for key in ("attempt_id", "status", "outcome", "failure_category")})
+        directory, row, config, campaign_hash = candidates[0]
+        seen.add(row["attempt_id"])
+    if history:
+        row["superseded_attempts"] = history
+    return directory, row, config, campaign_hash
 
 
 def scored_profile(row: dict, directory: Path, evidence: dict, stage: Path) -> tuple[dict, dict]:
@@ -247,6 +297,9 @@ def build_from_runs(runs_root: Path, output: Path, listener_scores: Path,
                 if directory.is_symlink() or not directory.is_dir() or not re.fullmatch(r"attempt-[123]", directory.name):
                     raise ValueError(f"{directory}: invalid ranked slot")
                 row, config, campaign_hash = load_attempt(directory, report_root, bundles, community)
+                if not community:
+                    directory, row, config, campaign_hash = resolve_infrastructure_retry(
+                        directory, row, config, campaign_hash, report_root)
                 row["retained_profile_sha256"] = sha256(directory / "profile.json") if (directory / "profile.json").is_file() else None
                 row["retained_status_sha256"] = sha256(directory / "status.json")
                 row.pop("profile", None)
@@ -285,7 +338,8 @@ def build_from_runs(runs_root: Path, output: Path, listener_scores: Path,
                 "eligible": row["eligible"], "attempted": row["attempted"], "failure_category": row["failure_category"],
                 "model_failure": row["model_failure"], "source_campaign_sha256": campaign_hash,
                 "source_campaign_id": f"campaign-{campaign_hash}", "source": "ranked attempt slot",
-                "stopped_by": None, "slug": None, "score": None, "ranked": False, "superseded": []}
+                "stopped_by": None, "slug": None, "score": None, "ranked": False,
+                "superseded": row.get("superseded_attempts", [])}
             group["attempts"].append(summary)
             campaign_rows.setdefault(campaign_hash, []).append(row)
             if not row["eligible"]:
@@ -333,6 +387,9 @@ def build_from_runs(runs_root: Path, output: Path, listener_scores: Path,
                 evaluation_kind="listener-evidence" if xm_hash in evidence else "listener-local",
                 listener=listener_identity, source_evaluation=source_evaluation,
                 configuration_source="campaign.json" if (directory / "campaign.json").is_file() else "sealed standalone spec.json")
+            if row.get("superseded_attempts"):
+                run["provenance"]["retry_of"] = row["retry_of"]
+                run["provenance"]["superseded_attempts"] = row["superseded_attempts"]
             if row.get("publication"):
                 run.update(exhibition=True, publication_note=row["publication"]["note"])
                 run["provenance"].update(row["publication"])
@@ -394,7 +451,7 @@ def build_from_runs(runs_root: Path, output: Path, listener_scores: Path,
             "selection_counts": {"main_model_roster": len(groups)}, "cohorts": cohorts,
             "limitations": ["Ranking uses the best eligible score among three predetermined ordinals; ties use the lowest ordinal.",
                 "Scores are 10 x Meta Audiobox Aesthetics content enjoyment, capped for silent or baked-sample artifacts.",
-                "Only runs/<model>/attempt-1 through attempt-3 are published. Other attempts and private rerun histories are not read.",
+                "Only predetermined ordinals are published; verified same-campaign infrastructure retries can supply a failed ordinal.",
                 "MP3 is a listening derivative; FLAC is the retained continuous loop source; XM is the original submission.",
                 "Costs are list-price estimates from recorded usage, not provider bills."],
             "campaigns": [{"campaign_id": f"campaign-{digest}", "campaign_sha256": digest,

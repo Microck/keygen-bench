@@ -4,12 +4,16 @@
 
 ### Added
 
+- Add GPT-5 Pro benchmark attempts and preserve the rate-limited attempt and separate retry.
+
 - Add three GPT-6 Astra Pro mode runs at max reasoning as a separate ranked GPT-6 Pro entry.
 - Support explicit OpenAI Responses reasoning mode alongside effort, preserving both in route validation and audit evidence.
 
 - Add a model changelog tab showing source-backed history dates and an undated group for models without historical evidence.
 
 ### Fixed
+
+- Publish verified infrastructure retries as their original ordinal without hiding the failed attempt.
 
 - Add a third media repository so new audio fits within GitHub Pages limits.
 

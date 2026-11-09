@@ -30,8 +30,11 @@ All commands below run from the repository root. Use your own local campaign and
 
 ## Build from repository runs
 
-The deployment builder reads only `runs/<model>/attempt-1/` through
-`attempt-3/`, never `other/`. It verifies frozen campaign identities, retained
+The deployment builder reads `runs/<model>/attempt-1/` through
+`attempt-3/`. A slot stopped by a non-model infrastructure failure may use a
+verified same-campaign retry retained in `other/`, linked by its immutable retry
+record. The failed original stays in its slot and in provenance; a scored result
+is never replaced. It verifies frozen campaign identities, retained
 profiles, submitted XM checksums, playback traces and byte-exact decoded
 canonical WAVs. Standalone contribution attempts use their sealed `spec.json`
 configuration when no campaign envelope exists.
