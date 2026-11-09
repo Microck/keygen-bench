@@ -40,7 +40,7 @@ class RetrySparseTests(unittest.TestCase):
             self.assertFalse((target / 'runs/example/other/2026-valid/ATTEMPT.json').exists())
             patterns = list(retry_patterns(target / 'runs'))
             self.assertTrue(patterns)
-            git('sparse-checkout', 'add', '--no-cone', '--stdin', cwd=target, data='\n'.join(patterns) + '\n')
+            git('sparse-checkout', 'add', '--stdin', cwd=target, data='\n'.join(patterns) + '\n')
             self.assertTrue((target / 'runs/example/other/2026-valid/ATTEMPT.json').is_file())
             self.assertTrue((target / 'runs/example/other/2026-valid/canonical/canonical.wav.flac').is_file())
             self.assertFalse((target / 'runs/example/other/2026-extra/ATTEMPT.json').exists())
