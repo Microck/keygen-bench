@@ -41,6 +41,115 @@ class RunsBuilderTests(unittest.TestCase):
         self.make_attempt(2, 8.0)
         self.write_site()
 
+    def add_infrastructure_retry(self, *, failure="QUOTA", original_success=False):
+        """Retain an original ordinal, its separate retry and the actual runner link."""
+        original_id = "test-model-rep-3"
+        if original_success:
+            self.make_attempt(3, 5.0)
+        else:
+            original = self.runs / "test-model" / "attempt-3"
+            self.dump(original / "ATTEMPT.json", {"attempt_id": original_id, "slot": "attempt-3"})
+            self.dump(original / "campaign.json", {"campaign": self.config, "sha256": digest(self.config)})
+            self.dump(original / "status.json", {"attempt_id": original_id, "repetition": 3,
+                "model": self.model, "status": "QUOTA_ERROR", "failure_category": failure,
+                "model_failure": failure == "MODEL", "retry_of": None})
+            self.dump(original / "profile.json", {"status": "QUOTA_ERROR", "model": self.model["model"],
+                "eligible": False, "evaluation_status": "ineligible", "run_failure_category": failure,
+                "model_failure": failure == "MODEL", "craft": {"craft_score": None},
+                "inputs": {"artifacts": {"status.json": sha256(original / "status.json")}}})
+        retry_id = original_id + "-retry-1"
+        directory = self.runs / "test-model" / "other" / "2026-01-01-retry"
+        self.make_attempt(3, 9.0, directory=directory,
+            status={"attempt_id": retry_id, "retry_of": original_id},
+            identity={"attempt_id": retry_id, "slot": "other", "path": "other/" + directory.name})
+        self.dump(directory / "campaign.json", {"campaign": self.config, "sha256": digest(self.config)})
+        proof = self.runs / "test-model" / f"retry-{retry_id}.json"
+        self.dump(proof, {"campaign_sha256": digest(self.config), "attempt_id": retry_id,
+                          "retry_of": original_id})
+        self.write_site()
+        return original_id, retry_id, directory, proof
+
+    def test_infrastructure_retry_is_the_third_sample_with_preserved_history(self):
+        original, retry, directory, proof = self.add_infrastructure_retry()
+        data = self.build()
+        third = next(item for item in data["runs"] if item["provenance"]["attempt_ordinal"] == 3)
+        self.assertEqual(third["score"], 90.0)
+        self.assertEqual(third["provenance"]["retry_of"], original)
+        self.assertEqual(third["provenance"]["superseded_attempts"][0]["status"], "QUOTA_ERROR")
+        self.assertEqual(data["repetition_groups"][0]["attempts"][2]["ordinal"], 3)
+        self.assertEqual(json.loads((self.runs / "test-model" / "attempt-3/status.json").read_text())["status"], "QUOTA_ERROR")
+        self.assertTrue(directory.is_dir())
+        self.assertTrue(proof.is_file())
+
+    def test_multiple_infrastructure_retries_follow_the_verified_chain(self):
+        original, first, directory, proof = self.add_infrastructure_retry()
+        status_path = directory / "status.json"
+        status = json.loads(status_path.read_text())
+        status.update(status="QUOTA_ERROR", eligible=False, failure_category="QUOTA")
+        self.dump(status_path, status)
+        profile_path = directory / "profile.json"
+        profile = json.loads(profile_path.read_text())
+        profile.update(status="QUOTA_ERROR", eligible=False, evaluation_status="ineligible", run_failure_category="QUOTA")
+        profile["inputs"]["artifacts"]["status.json"] = sha256(status_path)
+        self.dump(profile_path, profile)
+        last = original + "-retry-2"
+        other = self.runs / "test-model" / "other" / "2026-01-02-retry"
+        distinct_xm = self.root / "retry-2.xm"
+        distinct_xm.write_bytes(b"independent synthetic retry")
+        self.make_attempt(3, 9.5, directory=other, status={"attempt_id": last, "retry_of": first},
+            identity={"attempt_id": last, "slot": "other", "path": "other/" + other.name}, xm=distinct_xm)
+        self.dump(other / "campaign.json", {"campaign": self.config, "sha256": digest(self.config)})
+        self.dump(self.runs / "test-model" / f"retry-{last}.json",
+                  {"campaign_sha256": digest(self.config), "attempt_id": last, "retry_of": first})
+        self.write_site()
+        third = next(item for item in self.build()["runs"] if item["provenance"]["attempt_ordinal"] == 3)
+        self.assertEqual(third["score"], 95.0)
+        self.assertEqual(len(third["provenance"]["superseded_attempts"]), 2)
+
+    def test_retry_does_not_replace_a_scored_original(self):
+        self.add_infrastructure_retry(original_success=True)
+        data = self.build()
+        third = next(item for item in data["runs"] if item["provenance"]["attempt_ordinal"] == 3)
+        self.assertEqual(third["score"], 50.0)
+        self.assertNotIn("retry_of", third["provenance"])
+
+    def test_retry_without_retained_proof_is_not_published(self):
+        original, retry, directory, proof = self.add_infrastructure_retry()
+        proof.unlink()
+        data = self.build()
+        self.assertFalse(any(item["provenance"]["attempt_ordinal"] == 3 for item in data["runs"]))
+
+    def test_infrastructure_retry_requires_matching_runner_record_and_campaign(self):
+        original, retry, directory, proof = self.add_infrastructure_retry()
+        self.dump(proof, {"campaign_sha256": "wrong", "attempt_id": retry, "retry_of": original})
+        with self.assertRaisesRegex(ValueError, "retry record"):
+            self.build()
+        self.dump(proof, {"campaign_sha256": digest(self.config), "attempt_id": retry, "retry_of": original})
+        different = {**self.config, "campaign_id": "different"}
+        self.dump(directory / "campaign.json", {"campaign": different, "sha256": digest(different)})
+        with self.assertRaisesRegex(ValueError, "retry differs"):
+            self.build(out="other-publication")
+
+    def test_misclassified_model_failure_is_not_replaced(self):
+        self.add_infrastructure_retry()
+        directory = self.runs / "test-model" / "attempt-3"
+        status_path = directory / "status.json"
+        status = json.loads(status_path.read_text())
+        status["model_failure"] = True
+        self.dump(status_path, status)
+        profile_path = directory / "profile.json"
+        profile = json.loads(profile_path.read_text())
+        profile["model_failure"] = True
+        profile["inputs"]["artifacts"]["status.json"] = sha256(status_path)
+        self.dump(profile_path, profile)
+        data = self.build()
+        self.assertFalse(any(item["provenance"]["attempt_ordinal"] == 3 for item in data["runs"]))
+
+    def test_model_failure_is_not_replaced_by_retry(self):
+        self.add_infrastructure_retry(failure="MODEL")
+        data = self.build()
+        self.assertFalse(any(item["provenance"]["attempt_ordinal"] == 3 for item in data["runs"]))
+
     def test_reasoning_modes_keep_distinct_public_identities(self):
         row = {"model": "gpt-6-astra", "model_id": "gpt-6-pro",
                "effective_settings": {"requested_generation": {"reasoning": {"mode": "pro", "effort": "max"}}}}

@@ -1,6 +1,6 @@
 # GPT-5 Pro publication evidence
 
-Attempt 3 stopped on a temporary per-minute rate limit. Its retry is retained separately under `other/`; it does not replace the original slot.
+Attempt 3 stopped on a temporary per-minute rate limit. Its retry is retained separately under `other/` with the original runner retry record. The website uses that verified retry as the third score sample without altering or replacing the original slot.
 
 The failed attempt’s public status, trajectory and worker result replace the API organization identifier with `[REDACTED_ORGANIZATION_ID]`. The private originals remain unchanged. The failed attempt’s public evaluation was regenerated against the redacted files, so its input hashes match the published projection.
 

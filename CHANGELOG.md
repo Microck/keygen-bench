@@ -13,6 +13,8 @@
 
 ### Fixed
 
+- Publish verified infrastructure retries as their original ordinal without hiding the failed attempt.
+
 - Add a third media repository so new audio fits within GitHub Pages limits.
 
 - Keep separately named Responses reasoning modes distinct in published model identities.

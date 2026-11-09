@@ -10,7 +10,9 @@ index.json                                  maintainer attempts: slot, status, s
 ```
 
 Maintainer slots are the highest-declared-tier condition, written from the private campaign by
-`scripts/organize_runs.py`. A community directory is written by
+`scripts/organize_runs.py`. The original remains in its slot. An infrastructure-failed slot can
+use a verified same-campaign retry from `other/` as its score sample when the retained
+`retry-<attempt-id>.json` record links them. Scored originals are never replaced. A community directory is written by
 `validate_bundle.py --publication-out` after review, sits beside the maintainer slots and never
 replaces them; see [maintainer verification](../submissions/README.md#maintainer-verification).
 

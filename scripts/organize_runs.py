@@ -12,6 +12,7 @@ attempt's public projection unchanged, stores WAVs as byte-exact
 overwrites or re-slots an attempt: every target must be new. Slots are the
 campaign's three predetermined ordinals, not the best attempts; failed slots
 stay in their slot. Infrastructure retries and other attempts go to --other.
+Runner retry records are retained at the model root when available.
 It makes no provider requests and does not score anything.
 """
 from __future__ import annotations
@@ -21,6 +22,7 @@ from datetime import datetime, timezone
 import hashlib
 import json
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import tempfile
@@ -83,6 +85,30 @@ def organize(runs: Path, model: str, route: str, slots: dict[int, Path], others:
     root = runs / model
     if any((root / f"attempt-{n}").exists() for n in slots):
         raise ValueError(f"{root} already has maintainer slots; add new attempts with --other only")
+    retry_records = []
+    retry_names = set()
+    for source in others:
+        status = json.loads((source / "status.json").read_text())
+        attempt_id, previous = status["attempt_id"], status.get("retry_of")
+        if not previous:
+            continue
+        if not all(isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9_.:-]+", value)
+                   for value in (attempt_id, previous)):
+            raise ValueError("Invalid retry identity")
+        record = source.parent / f"retry-{attempt_id}.json"
+        if record.is_symlink():
+            raise ValueError(f"{record}: retry record cannot be a symlink")
+        if not record.is_file():
+            continue  # Older retained attempts may not have a runner retry record.
+        envelope = json.loads((source / "campaign.json").read_text())
+        campaign_hash = (envelope.get("snapshot") or {}).get("config_sha256", envelope.get("sha256"))
+        expected = {"campaign_sha256": campaign_hash, "attempt_id": attempt_id, "retry_of": previous}
+        if (not isinstance(campaign_hash, str) or not re.fullmatch(r"[a-f0-9]{64}", campaign_hash)
+                or json.loads(record.read_text()) != expected or (root / record.name).exists()
+                or record.name in retry_names):
+            raise ValueError(f"{record}: invalid or duplicate retry record")
+        retry_records.append(record)
+        retry_names.add(record.name)
     entries = []
     for ordinal, source in sorted(slots.items()):
         slot = f"attempt-{ordinal}"
@@ -94,6 +120,8 @@ def organize(runs: Path, model: str, route: str, slots: dict[int, Path], others:
         path = f"other/{day}-{source.name}"
         entries.append(project(source, root / path, {"slot": "other", "path": path, "route": route,
                                                      "source": f"{source_prefix}/{source.name}"}))
+    for record in retry_records:
+        shutil.copyfile(record, root / record.name)
     index_path = runs / "index.json"
     index = json.loads(index_path.read_text())
     previous = index["models"].get(model, {}).get("attempts", [])
