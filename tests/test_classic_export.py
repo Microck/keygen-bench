@@ -88,5 +88,20 @@ build_snapshots([Path(sys.argv[1])], Path(sys.argv[2]))
             self.assertEqual((source / "dist/traces/fixture.json").read_bytes(), trace)
 
 
+class DemoCostTest(unittest.TestCase):
+    def test_footer_uses_the_same_upper_bound_as_the_site(self):
+        import importlib.util
+
+        path = Path(__file__).resolve().parents[1] / "web/classic/make_demo.py"
+        spec = importlib.util.spec_from_file_location("make_demo", path)
+        demo = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(demo)
+        run = {"model_key": "test", "score": 1, "maker": "test", "attempt": 1}
+        self.assertIn("cost $23.66", demo.bar_html(720, 46, {**run, "cost_range_usd": {"min": 20.46, "max": 23.6576}}, 1))
+        self.assertIn("cost $1.25", demo.bar_html(720, 46, {**run, "cost_usd": 1.25}, 1))
+        self.assertIn("cost $0.00", demo.bar_html(720, 46, {**run, "cost_usd": 0}, 1))
+        self.assertIn("cost n/a", demo.bar_html(720, 46, run, 1))
+
+
 if __name__ == "__main__":
     unittest.main()
