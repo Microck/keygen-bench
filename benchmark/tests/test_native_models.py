@@ -469,6 +469,15 @@ class NativeProtocolTests(unittest.TestCase):
         self.assertEqual(mapped["thinkingConfig"], {"thinkingLevel": "high", "includeThoughts": True})
         self.assertEqual(mapped["max_output_tokens"], 65536)
 
+    def test_gemini_4_carbon_sends_high_thinking_and_output_cap(self):
+        spec = model_spec("chat", "google", native.GOOGLE_BASE)
+        spec["model"] = spec["response_model"] = "gemini-4-carbon"
+        spec["generation"] = {"max_tokens": 32768, "reasoning_effort": "high"}
+        spec["tier"] = {"level": "high", "reasoning": {"reasoning_effort": "high"}, "spec_sha256": "0" * 64}
+        mapped = native._map_generation(spec, spec["generation"])
+        self.assertEqual(mapped["thinkingConfig"], {"thinkingLevel": "high", "includeThoughts": True})
+        self.assertEqual(mapped["max_output_tokens"], 32768)
+
     def test_content_filter_block_is_resent_up_to_three_sends(self):
         blocked = (400, "Output blocked by content filtering policy")
         for form, kwargs, events in (
@@ -511,6 +520,35 @@ class NativeProtocolTests(unittest.TestCase):
                                            api="responses", bound=True)
         self.assertNotEqual(run.failure_category(outcome), "CONTENT_FILTER")
         self.assertEqual(len(seen), 1)
+
+    def test_litellm_connection_errors_retry_within_bound(self):
+        import litellm
+
+        class ConnectionFailures:
+            def __init__(self, failures):
+                self.failures = failures
+                self.sends = []
+
+            def _query(self, messages, **kwargs):
+                self.sends.append((messages, kwargs))
+                if len(self.sends) <= self.failures:
+                    raise litellm.APIConnectionError("incomplete chunked read", "gemini", "gemini-4-carbon")
+                return {"ok": True}
+
+        waits = []
+        model = ConnectionFailures(2)
+        run.backoff_transport_errors(model, RETRYING, sleep=waits.append)
+        self.assertEqual(model._query([{"role": "user", "content": "hello"}]), {"ok": True})
+        self.assertEqual(len(model.sends), 3)
+        self.assertEqual(model.sends[0], model.sends[1])
+        self.assertEqual(model.sends[1], model.sends[2])
+        self.assertEqual(waits, [15, 30])
+
+        exhausted = ConnectionFailures(3)
+        run.backoff_transport_errors(exhausted, RETRYING, sleep=lambda _: None)
+        with self.assertRaises(litellm.APIConnectionError):
+            exhausted._query([])
+        self.assertEqual(len(exhausted.sends), 3)
 
     def test_transport_failures_are_retried_within_bound_on_every_protocol(self):
         for api in ("chat", "messages", "responses"):
