@@ -510,7 +510,7 @@ def backoff_transport_errors(native, config: dict, sleep=time.sleep):
             try:
                 return send(messages, **kwargs)
             except retryable as exc:
-                # Native OpenAI classes are also bases of LiteLLM classes. Do not
+                # Native OpenAI classes are also bases of LiteLLM classes, so
                 # retry only explicitly allowed Chat/Messages mapped exceptions.
                 if (type(exc).__module__.startswith("litellm") and not isinstance(exc, legacy_retryable)
                         or isinstance(exc, openai.InternalServerError) and exc.status_code not in {500, 503}
