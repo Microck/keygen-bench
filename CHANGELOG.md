@@ -60,6 +60,8 @@
 
 ### Added
 
+- Opt-in experimental Cursor SDK bridge and mini model adapter with held Bash callbacks, strict transcript/control validation, credential-redacted diagnostics and offline integration tests. No frozen-provider eligibility or live fairness claim.
+
 - Opt-in Muse Code SDK/MCP transport for mini-owned Bash execution, with pinned host/catalog checks, explicit non-frozen provenance, separate Contributor consent and offline round-trip tests.
 
 - Request Muse Wonder Full without a budget or fundraising target, with access-only support-page rendering and a documented SDK/MCP feasibility investigation.
@@ -95,6 +97,7 @@
 ### Changed
 
 - Remove the snapshot date label from the home Open Graph image.
+- Add private full three-attempt Cursor/mini music experiments with canonical FT2 collection/rendering/scoring, explicit non-ranked results, fresh per-attempt sessions and offline pipeline regression coverage. The existing probe remains a diagnostic only.
 
 - Fetch independent optional website metadata in parallel while preserving missing-file defaults and failure reporting.
 
