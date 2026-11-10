@@ -34,5 +34,14 @@ class SpendSnapshotTest(unittest.TestCase):
         self.assertEqual(addition["unknown_usage_runs"], 0)
 
 
+    def test_gpt_5_receipts_match_published_row(self):
+        site = ROOT / "data/site"
+        addition = build_spend([site / "gpt-5-spend-usage.json"], site / "prices.json")
+        snapshot = json.loads((site / "spend.json").read_text())
+        row = next(row for row in snapshot["models"] if row["name"] == "gpt-5")
+        self.assertEqual(addition["models"], [row])
+        self.assertEqual(addition["unknown_usage_runs"], 0)
+
+
 if __name__ == "__main__":
     unittest.main()
