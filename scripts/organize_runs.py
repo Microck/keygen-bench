@@ -44,7 +44,15 @@ def sha256(path: Path) -> str:
 def compress_wav(wav: Path) -> None:
     """Replace a WAV with FLAC that decodes to the identical bytes, or fail."""
     flac = wav.with_name(wav.name + ".flac")
-    subprocess.run(["flac", "--silent", "--best", "--keep-foreign-metadata", "-o", str(flac), str(wav)], check=True)
+    encoded = subprocess.run(["flac", "--silent", "--best", "--keep-foreign-metadata", "-o", str(flac), str(wav)],
+                             capture_output=True, text=True)
+    if encoded.returncode:
+        # A model may leave a broken intermediate WAV in its submission. Preserve
+        # those original bytes; the canonical render must still compress exactly.
+        if "submission" in wav.parts and "invalid WAVE file" in encoded.stderr:
+            flac.unlink(missing_ok=True)
+            return
+        raise subprocess.CalledProcessError(encoded.returncode, encoded.args, stderr=encoded.stderr)
     with tempfile.TemporaryDirectory() as temporary:
         decoded = Path(temporary) / "check.wav"
         subprocess.run(["flac", "-d", "--silent", "--keep-foreign-metadata", "-o", str(decoded), str(flac)], check=True)
@@ -103,8 +111,16 @@ def organize(runs: Path, model: str, route: str, slots: dict[int, Path], others:
         envelope = json.loads((source / "campaign.json").read_text())
         campaign_hash = (envelope.get("snapshot") or {}).get("config_sha256", envelope.get("sha256"))
         expected = {"campaign_sha256": campaign_hash, "attempt_id": attempt_id, "retry_of": previous}
+        proof = json.loads(record.read_text())
+        queue_keys = {"campaign_sha256", "attempt_id", "model_id", "repetition", "kind",
+                      "retry_of", "retry_of_campaign_id"}
+        queue_proof = (isinstance(proof, dict) and set(proof) == queue_keys
+                       and all(proof.get(key) == value for key, value in expected.items())
+                       and proof.get("model_id") == model and proof.get("kind") == "retry"
+                       and proof.get("repetition") == status.get("repetition")
+                       and isinstance(proof.get("retry_of_campaign_id"), str))
         if (not isinstance(campaign_hash, str) or not re.fullmatch(r"[a-f0-9]{64}", campaign_hash)
-                or json.loads(record.read_text()) != expected or (root / record.name).exists()
+                or (proof != expected and not queue_proof) or (root / record.name).exists()
                 or record.name in retry_names):
             raise ValueError(f"{record}: invalid or duplicate retry record")
         retry_records.append(record)

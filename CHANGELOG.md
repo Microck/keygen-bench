@@ -17,6 +17,9 @@
 
 ### Fixed
 
+- Verify linked-campaign infrastructure retries before publishing their original ordinals.
+- Preserve malformed model-generated intermediate WAVs unchanged in submission archives.
+
 - Include verified retry artifacts in the site deployment checkout.
 
 - Include recorded GPT-5 Pro and GPT-6 Pro run and readiness usage in estimated spend.

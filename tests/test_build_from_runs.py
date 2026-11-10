@@ -130,6 +130,30 @@ class RunsBuilderTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "retry differs"):
             self.build(out="other-publication")
 
+    def test_linked_queue_retry_requires_frozen_origin_and_condition(self):
+        original, retry, directory, proof = self.add_infrastructure_retry()
+        original_status = self.runs / "test-model/attempt-3/status.json"
+        status = json.loads(original_status.read_text())
+        origin = {"campaign_id": self.config["campaign_id"], "attempt_id": original,
+                  "status": status["status"], "status_sha256": sha256(original_status),
+                  "outcome": "FAILURE", "failure_category": "QUOTA"}
+        queue = {**self.config, "campaign_id": "queue-campaign", "policies": {
+            "attempt_selection": "independent_repetitions_infrastructure_reruns",
+            "plan": {"test-model": [{"repetition": 3, "origin": origin}]},
+            "linked_campaigns": [{"campaign_id": self.config["campaign_id"],
+                                   "config_sha256": digest(self.config)}]}}
+        self.dump(directory / "campaign.json", {"campaign": queue, "sha256": digest(queue)})
+        self.dump(proof, {"campaign_sha256": digest(queue), "attempt_id": retry,
+                          "model_id": "test-model", "repetition": 3, "kind": "retry",
+                          "retry_of": original, "retry_of_campaign_id": self.config["campaign_id"]})
+        third = next(item for item in self.build()["runs"] if item["provenance"]["attempt_ordinal"] == 3)
+        self.assertEqual(third["score"], 90.0)
+        origin["status_sha256"] = "0" * 64
+        self.dump(directory / "campaign.json", {"campaign": queue, "sha256": digest(queue)})
+        record = json.loads(proof.read_text()); record["campaign_sha256"] = digest(queue); self.dump(proof, record)
+        with self.assertRaisesRegex(ValueError, "retry differs"):
+            self.build(out="tampered-origin")
+
     def test_misclassified_model_failure_is_not_replaced(self):
         self.add_infrastructure_retry()
         directory = self.runs / "test-model" / "attempt-3"

@@ -32,12 +32,14 @@ All commands below run from the repository root. Use your own local campaign and
 
 The deployment builder reads `runs/<model>/attempt-1/` through
 `attempt-3/`. A slot stopped by a non-model infrastructure failure may use a
-verified same-campaign retry retained in `other/`, linked by its immutable retry
-record. The failed original stays in its slot and in provenance; a scored result
+verified retry retained in `other/`, linked by its immutable retry record. For a
+linked recovery campaign, the builder also checks the frozen origin status hash,
+campaign identity and unchanged model condition. The failed original stays in its slot and in provenance; a scored result
 is never replaced. It verifies frozen campaign identities, retained
 profiles, submitted XM checksums, playback traces and byte-exact decoded
-canonical WAVs. Standalone contribution attempts use their sealed `spec.json`
-configuration when no campaign envelope exists.
+canonical WAVs. Model-generated invalid intermediate WAVs remain byte-exact in the submission;
+canonical WAVs still require verified lossless FLAC. Standalone contribution
+attempts use their sealed `spec.json` configuration when no campaign envelope exists.
 
 ```sh
 python3 web/classic/build_from_runs.py --runs runs --out /absolute/publication
