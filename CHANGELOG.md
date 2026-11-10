@@ -10,6 +10,7 @@
 - Add three Claude Fable 5.2 subscription OAuth benchmark attempts and their reviewed usage estimates.
 - Add gpt-5 benchmark attempts and their recorded usage.
 - Add gpt-5-mini benchmark attempts and their recorded usage.
+- Add gpt-5-nano benchmark attempts and their recorded usage.
 
 - Add GPT-5 Pro benchmark attempts and preserve the rate-limited attempt and separate retry.
 
