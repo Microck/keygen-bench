@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Show bounded cost estimates in benchmark video footers.
+
 ### Added
 
 - Add three Claude Fable 5.2 subscription OAuth benchmark attempts and their reviewed usage estimates.

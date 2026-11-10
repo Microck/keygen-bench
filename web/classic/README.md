@@ -389,7 +389,7 @@ The live site is published with `--host github-pages` to the public repository `
 
 ## Share a run as a video
 
-`make_demo.py` turns one run into a video for posting: the site's Tracker playing the tune, with a branded footer (model, score, rank, cost and the site URL), an end card and the run's own MP3 as the soundtrack. It also writes a draft post text. Output goes to `~/keygen-demos/` and is never part of the repository.
+`make_demo.py` turns one run into a video for posting: the site's Tracker playing the tune, with a branded footer (model, score, rank, cost and the site URL), an end card and the run's own MP3 as the soundtrack. For bounded costs, the footer shows the upper estimate rounded up to cents, matching the site. It also writes a draft post text. Output goes to `~/keygen-demos/` and is never part of the repository.
 
 ```sh
 python3 web/classic/make_demo.py --model qwen3.5-397b-a17b                 # 4:3, full loop (default)
