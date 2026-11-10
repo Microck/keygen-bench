@@ -178,20 +178,20 @@ export const SUPPORT = {
   },
   // Planning estimates = assumed token use x the listed price, rounded up to the next $5.
   // Prices checked 2026-10-06 against developers.openai.com/api/docs/pricing (Standard) and Anthropic's legacy price list.
-  // Run sizes: typical 1.03M input / 125k output, long 3.5M / 270k, heavy 6.9M / 333k.
+  // Other models: typical 1.03M input / 125k output, long 3.5M / 270k, heavy 6.9M / 333k.
   // Models with a cached-input price assume 94.5% cached input; Pro models assume full-price input.
   // Every figure covers three attempts; est uses the long-run assumption. Update prices before fundraising.
+  // GPT Pro planning sizes reflect the completed GPT-5 Pro attempts; other models retain the earlier assumptions.
   // raised: USD donated so far towards that model; update by hand.
   // tip: shows a hover asterisk with this note.
   wanted: [
     { model: "muse-wonder-full-1.0", maker: "Meta", accessOnly: true, price: "", tip: "Full is only available through a Muse Code subscription. I need access to test it. No run budget is set yet; any runs will be marked experimental." },
     { model: "claude-3-opus", maker: "Anthropic", price: "$15/$75", typical: 40, est: 85, heavy: 125, raised: 0, tip: "I also need access to this model: it's retired and only open to researchers. If you can lend me a hand getting API access, it would be really appreciated." },
     { model: "o1-pro", maker: "OpenAI", price: "$150/$600", typical: 690, est: 2065, heavy: 3705, raised: 0 },
-    { model: "gpt-5.5-pro", maker: "OpenAI", price: "$30/$180", typical: 165, est: 465, heavy: 805, raised: 0 },
-    { model: "gpt-5.4-pro", maker: "OpenAI", price: "$30/$180", typical: 165, est: 465, heavy: 805, raised: 0 },
-    { model: "gpt-5.2-pro", maker: "OpenAI", price: "$21/$168", typical: 130, est: 360, heavy: 605, raised: 0 },
+    { model: "gpt-5.5-pro", maker: "OpenAI", price: "$30/$180", typical: 20, est: 25, heavy: 40, raised: 0 },
+    { model: "gpt-5.4-pro", maker: "OpenAI", price: "$30/$180", typical: 20, est: 25, heavy: 40, raised: 0 },
+    { model: "gpt-5.2-pro", maker: "OpenAI", price: "$21/$168", typical: 15, est: 20, heavy: 35, raised: 0 },
     { model: "o3-pro", maker: "OpenAI", price: "$20/$80", typical: 95, est: 275, heavy: 495, raised: 0 },
-    { model: "gpt-5-pro", maker: "OpenAI", price: "$15/$120", typical: 95, est: 255, heavy: 435, raised: 0 },
   ],
   // Collapsible note under the wanted list.
   costHelp: {
@@ -201,7 +201,7 @@ export const SUPPORT = {
         "Access-only requests have no budget estimate or fundraising target. They need a verified execution route before a benchmark can be promised.",
         "Each estimate is what three longer-than-usual runs would cost at the model's public API price (shown as dollars per million tokens in/out).",
         "Runs vary a lot. The model decides how many turns it takes, from a dozen to several hundred, and every turn resends the whole conversation, so a long run costs far more than a short one.",
-        "The planning assumptions per run are 1.03 million input and 125,000 output tokens for typical, 3.5 million and 270,000 for long, and 6.9 million and 333,000 for heavy. These are estimates, not limits or measured usage for a new model.",
+        "For GPT Pro models, planning uses 80,000 input and 16,000 output tokens for a typical run, 130,000 and 22,400 for a long run, and 200,000 and 40,000 for a heavy run. The first two reflect completed GPT-5 Pro runs; the heavy case is a planning allowance. Other models retain the earlier larger assumptions. Actual usage can be higher, and GPT-5.4 Pro long-context rates can increase costs.",
         "Every model gets three attempts, so each figure is three runs of that size. The estimate is three long runs. Hover an estimate to see the other two.",
       ] },
       { title: "Chipping in", lines: [
