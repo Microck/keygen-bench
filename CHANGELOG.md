@@ -4,6 +4,8 @@
 
 ### Added
 
+- Add three Claude Fable 5.2 subscription OAuth benchmark attempts and their reviewed usage estimates.
+
 - Add GPT-5 Pro benchmark attempts and preserve the rate-limited attempt and separate retry.
 
 - Add three GPT-6 Astra Pro mode runs at max reasoning as a separate ranked GPT-6 Pro entry.

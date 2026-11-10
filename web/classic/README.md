@@ -90,6 +90,10 @@ reading `other/`, so the builder does not claim to reproduce those histories.
 The spend ledger retains reviewed historical totals independently of this
 ranked-only export.
 
+The Fable 5.2 campaign used Claude subscription OAuth through CLIProxyAPI 8.0.62 with a temporary Claude Code version-header override (2.1.293). Captured controller-to-bridge settings and model identity do not establish the exact prompt or settings received upstream. Historical OAuth runs also lack complete upstream prompt evidence, so differences in bridge-added instructions cannot be ruled out; this is not proof that they differed.
+
+The Fable 5.2 addition uses `data/site/fable52-spend-usage.json` for the three attempts and readiness pilot. Cache-write TTL is unavailable in the receipts, so the builder retains conservative bounds. Subscription usage is not an API bill.
+
 The GPT-5 Pro and GPT-6 Pro additions in `data/site/spend.json` use the
 per-request records in `data/site/gpt-pro-spend-usage.json`, priced with
 `data/site/prices.json`. They include readiness pilots and the interrupted
