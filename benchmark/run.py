@@ -500,7 +500,8 @@ def backoff_transport_errors(native, config: dict, sleep=time.sleep):
 
     send = native._query
     retries = config["native"]["retries"]
-    legacy_retryable = (litellm.Timeout, litellm.InternalServerError, litellm.ServiceUnavailableError)
+    legacy_retryable = (litellm.Timeout, litellm.APIConnectionError, litellm.InternalServerError,
+                        litellm.ServiceUnavailableError)
     retryable = (*legacy_retryable, openai.APIConnectionError, openai.InternalServerError, httpx.ReadError,
                  httpx.RemoteProtocolError, httpx.TimeoutException)
 
@@ -509,8 +510,8 @@ def backoff_transport_errors(native, config: dict, sleep=time.sleep):
             try:
                 return send(messages, **kwargs)
             except retryable as exc:
-                # Native OpenAI classes are also bases of LiteLLM classes. Do not
-                # broaden the existing Chat/Messages mapped-exception policy.
+                # Native OpenAI classes are also bases of LiteLLM classes, so
+                # retry only explicitly allowed Chat/Messages mapped exceptions.
                 if (type(exc).__module__.startswith("litellm") and not isinstance(exc, legacy_retryable)
                         or isinstance(exc, openai.InternalServerError) and exc.status_code not in {500, 503}
                         or classify_error(exc) == "quota_or_rate_limit" or attempt == retries):

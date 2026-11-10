@@ -6,6 +6,8 @@
 
 ### Added
 
+- Add Gemini 4 Carbon benchmark attempts and the separately retained infrastructure retry.
+
 - Add o3 benchmark attempts and their recorded usage.
 - Add three Claude Fable 5.2 subscription OAuth benchmark attempts and their reviewed usage estimates.
 - Add gpt-5 benchmark attempts and their recorded usage.
@@ -20,6 +22,8 @@
 - Add a model changelog tab showing source-backed history dates and an undated group for models without historical evidence.
 
 ### Fixed
+
+- Retry transient LiteLLM connection errors within the existing bounded policy.
 
 - Verify linked-campaign infrastructure retries before publishing their original ordinals.
 - Preserve malformed model-generated intermediate WAVs unchanged in submission archives.

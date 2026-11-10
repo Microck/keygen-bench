@@ -65,6 +65,8 @@ CAPABILITY_OVERRIDES = {
     ("go", "messages", "qwen3.8-max"): {"effort": "xhigh"},
     # Gemini 4 Argon (2026-10-13) supports thinkingLevel low/medium/high; the pinned SDK map predates it.
     ("google", "chat", "gemini-4-argon"): {"effort": "high"},
+    # Gemini 4 Carbon also supports thinkingLevel high; the pinned SDK predates it.
+    ("google", "chat", "gemini-4-carbon"): {"effort": "high"},
     ("devin", "chat", "devin/gpt-5-4"): {"effort": "xhigh"},
     ("devin", "chat", "devin/gpt-5-4-mini"): {"effort": "xhigh"},
     ("devin", "chat", "devin/gpt-5-3-codex"): {"effort": "xhigh"},
@@ -631,7 +633,7 @@ def validate_model(config: dict, model: dict) -> dict:
         "output_limit_enforced": None,  # Provider delivery requires the real payload gate.
         "retry_policy": {"mini_attempts": 1, "sdk_transport_retries": 0, "controller_transport_retries": native["retries"],
                          "retry_delays_seconds": list(TRANSPORT_RETRY_DELAYS_SECONDS[:native["retries"]]),
-                         "retried": "timeouts, HTTP 500 (incl. connection resets), HTTP 503",
+                         "retried": "timeouts, connection errors, HTTP 500 and HTTP 503",
                          "never_retried": "HTTP 4xx incl. 429, recognized quota/funds failures, 502 and other unmapped errors",
                          **({"upstream_outage": "OpenCode Go 'Endpoint is unavailable' (429/502): re-sent "
                                                 "every 15 s, up to 40 times per request (run.UPSTREAM_WAITS)"}
