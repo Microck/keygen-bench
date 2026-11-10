@@ -92,6 +92,10 @@ reading `other/`, so the builder does not claim to reproduce those histories.
 The spend ledger retains reviewed historical totals independently of this
 ranked-only export.
 
+The Fable 5.2 campaign used Claude subscription OAuth through CLIProxyAPI 8.0.62 with a temporary Claude Code version-header override (2.1.293). Captured controller-to-bridge settings and model identity do not establish the exact prompt or settings received upstream. Historical OAuth runs also lack complete upstream prompt evidence, so differences in bridge-added instructions cannot be ruled out; this is not proof that they differed.
+
+The Fable 5.2 addition uses `data/site/fable52-spend-usage.json` for the three attempts and readiness pilot. Cache-write TTL is unavailable in the receipts, so the builder retains conservative bounds. Subscription usage is not an API bill.
+
 The GPT-5 Pro and GPT-6 Pro additions in `data/site/spend.json` use the
 per-request records in `data/site/gpt-pro-spend-usage.json`, priced with
 `data/site/prices.json`. They include readiness pilots and the interrupted
@@ -387,7 +391,7 @@ The live site is published with `--host github-pages` to the public repository `
 
 ## Share a run as a video
 
-`make_demo.py` turns one run into a video for posting: the site's Tracker playing the tune, with a branded footer (model, score, rank, cost and the site URL), an end card and the run's own MP3 as the soundtrack. It also writes a draft post text. Output goes to `~/keygen-demos/` and is never part of the repository.
+`make_demo.py` turns one run into a video for posting: the site's Tracker playing the tune, with a branded footer (model, score, rank, cost and the site URL), an end card and the run's own MP3 as the soundtrack. For bounded costs, the footer shows the upper estimate rounded up to cents, matching the site. It also writes a draft post text. Output goes to `~/keygen-demos/` and is never part of the repository.
 
 ```sh
 python3 web/classic/make_demo.py --model qwen3.5-397b-a17b                 # 4:3, full loop (default)

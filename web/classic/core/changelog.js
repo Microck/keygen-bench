@@ -2,6 +2,10 @@
 // which a run was archived. They are not model release dates or verified first
 // website addition dates. Unknown models remain in the undated group.
 export const MODEL_HISTORY = [
+  { date: "2026-11-10", kind: "repository", commits: ["675d5cda8791"], keys: ["claude-fable-5-2"], note: "Run archive added; publication date may differ" },
+  { date: "2026-11-09", kind: "repository", commits: ["1085e05cecd6"], keys: ["o3"], note: "Run archive added; publication date may differ" },
+  { date: "2026-11-09", kind: "repository", commits: ["8abea8ebbd9e"], keys: ["gpt-5"], note: "Run archive added; publication date may differ" },
+  { date: "2026-11-09", kind: "repository", commits: ["992b284ab56b"], keys: ["gpt-5-mini"], note: "Run archive added; publication date may differ" },
   { date: "2026-11-09", kind: "repository", commits: ["30e43bdcf4cb"], keys: ["gpt-5-nano"], note: "Run archive added; publication date may differ" },
   { date: "2026-11-09", kind: "repository", commits: ["06cbabaf1253"], keys: ["gpt-5-pro"], note: "Run archive added; publication date may differ" },
   { date: "2026-11-08", kind: "repository", commits: ["c7605a0cde9c"], keys: ["gpt-6-pro"], note: "Run archive added; publication date may differ" },
