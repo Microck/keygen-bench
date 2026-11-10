@@ -72,26 +72,41 @@ def upstream_provenance(api: str) -> dict:
     package = importlib.metadata.distribution("mini-swe-agent")
     model = "LitellmResponseModel" if api == "responses" else "LitellmModel"
     filename = "litellm_response_model.py" if api == "responses" else "litellm_model.py"
-    return {"DefaultAgent": file_digest(Path(package.locate_file("minisweagent/agents/default.py"))),
-            model: file_digest(Path(package.locate_file("minisweagent/models/" + filename)))}
+    sources = {"DefaultAgent": file_digest(Path(package.locate_file("minisweagent/agents/default.py"))),
+               model: file_digest(Path(package.locate_file("minisweagent/models/" + filename)))}
+    if api == "responses":
+        sdk = importlib.metadata.distribution("openai")
+        sources["LitellmModel"] = file_digest(Path(package.locate_file("minisweagent/models/litellm_model.py")))
+        for name in ("_streaming.py", "_base_client.py", "_models.py", "resources/responses/responses.py", "types/responses/response.py"):
+            sources["openai/" + name] = file_digest(Path(sdk.locate_file("openai/" + name)))
+    return sources
 
 
 def unblocked_exchanges(records: list) -> list:
-    """Transport records without the sends a content-filter block or an upstream outage discarded.
+    """History exchanges without superseded unanswered sends or discarded replies.
 
     run.bound_content_filter appends a ``content_filter_block`` record after each blocked send
     (its request, plus its response when the block arrived as HTTP 200), and
     run.wait_out_upstream_outage an ``upstream_unavailable`` record after each outage reply; the
-    identical re-send follows.
+    identical re-send follows. An unanswered request followed by another request is a
+    transport retry, not another history turn. Keep a final unanswered request so pilot
+    verification still rejects incomplete audits. The original audit is never changed.
     """
     kept, start = [], None
     for record in records:
+        if record.get("event") == "stream_interrupted":
+            continue  # Keep its unanswered send until an identical retry supersedes it.
         if record.get("event") in {"content_filter_block", "upstream_unavailable"}:
             if start is not None:
                 del kept[start:]
             start = None
             continue
         if record.get("event") == "request":
+            if start is not None and len(kept) == start + 1:
+                if any(record.get(key) != kept[start].get(key)
+                       for key in ("model", "input_sha256", "tools_sha256", "settings")):
+                    raise ValueError("Unanswered native request changed before its retry")
+                del kept[start:]
             start = len(kept)
         kept.append(record)
     return kept
@@ -105,7 +120,7 @@ def validate_readiness(model: dict, effective: dict) -> None:
     payload = evidence.get("payload")
     if not isinstance(payload, dict) or evidence.get("payload_sha256") != digest(payload):
         raise ValueError("Native readiness requires the actual immutable recorded proof payload")
-    if (not isinstance(effective, dict) or effective.get("model_class") not in {"LitellmModel", "LitellmResponseModel"}
+    if (not isinstance(effective, dict) or effective.get("model_class") not in {"LitellmModel", "StreamingOpenAIResponseModel"}
             or not isinstance(effective.get("expected_transmitted_generation"), dict)):
         raise ValueError("Native readiness must declare valid effective SDK settings")
     route = {key: model[key] for key in ("provider", "api", "base_url", "model", "response_model", "backend_provenance")}
@@ -117,13 +132,13 @@ def validate_readiness(model: dict, effective: dict) -> None:
         raise ValueError("Native readiness does not verify this route, settings, backend and original executable source")
     trajectory = payload.get("trajectory") or {}
     info = trajectory.get("info", {}).get("config", {})
-    module = "litellm_response_model" if model["api"] == "responses" else "litellm_model"
     # A declared history key removal runs the original model through its one named subclass.
     removal = effective.get("history_key_removal")
-    model_type = removal["model_type"] if removal else f"minisweagent.models.{module}.{effective['model_class']}"
+    model_type = removal["model_type"] if removal else ("native_models.StreamingOpenAIResponseModel"
+                                                      if model["api"] == "responses" else "minisweagent.models.litellm_model.LitellmModel")
     if (info.get("agent_type") != "minisweagent.agents.default.DefaultAgent"
             or info.get("model_type") != model_type):
-        raise ValueError("Readiness trace was not produced by the original native model and DefaultAgent")
+        raise ValueError("Readiness trace was not produced by the declared native model and DefaultAgent")
     messages = trajectory.get("messages", [])
     turns = audit_messages(messages, model)
     if len(turns) < 2 or any(turn.get("identity_status") != "identity_match" for turn in turns):
@@ -139,7 +154,7 @@ def validate_readiness(model: dict, effective: dict) -> None:
         raise ValueError("Readiness requires an executed native tool result between the two model turns")
     records = payload.get("transport") or []
     sent = [record for record in records if record.get("event") == "request"]
-    # Exchanges that reached native history; content-filter-blocked sends are dropped here only.
+    # Only answered, unblocked sends reached history; all sends still need valid settings.
     kept = unblocked_exchanges(records)
     requests = [record for record in kept if record.get("event") == "request"]
     responses = [record for record in records if record.get("event") == "response"]
@@ -153,6 +168,8 @@ def validate_readiness(model: dict, effective: dict) -> None:
             or any(any((record.get("settings") or {}).get(key) != value
                        for key, value in effective["expected_transmitted_generation"].items()) for record in sent)):
         raise ValueError("Readiness requires two recorded native request/response exchanges with exact transmitted settings")
+    if model["api"] == "responses" and any(record.get("settings", {}).get("stream") is not True for record in sent):
+        raise ValueError("Readiness requires native SSE streaming on every Responses request")
     # A declared tier counts only if its reasoning control was actually sent on every request.
     required = transmitted_reasoning(model)
     if (effective.get("transmitted_reasoning") != required
@@ -364,7 +381,7 @@ def validate(config: dict, *, check_provenance=True) -> dict:
     if (not isinstance(native, dict) or set(native) != {"timeout_seconds", "retries"}
             or native["timeout_seconds"] != limits["request_seconds"]
             or type(native["retries"]) is not int or not 0 <= native["retries"] <= MAX_TRANSPORT_RETRIES):
-        raise ValueError(f"Native timeout must equal the frozen request budget; retries are 0..{MAX_TRANSPORT_RETRIES} SDK transport-only retries")
+        raise ValueError(f"Native timeout must equal the frozen request budget; retries are 0..{MAX_TRANSPORT_RETRIES} controller transport-only retries")
     if limits["command_seconds"] > limits["wall_seconds"]:
         raise ValueError("Command budget cannot exceed the attempt wall budget")
     concurrency = config["concurrency"]
@@ -423,7 +440,7 @@ def validate(config: dict, *, check_provenance=True) -> dict:
         row = entries.get(model["inventory_id"])
         if not row or PROVIDERS.get(row.get("provider")) != model["provider"] or row.get("status", "").startswith(("held", "blocked")):
             raise ValueError("Excluded, held or unmapped inventory route")
-        request_model = row.get("proxy_request_model") if model["provider"] == "devin" else row.get("upstream_model")
+        request_model = row.get("proxy_request_model")
         if model["model"] != request_model or model["response_model"] != row.get("upstream_model"):
             raise ValueError("Requested or response identity differs from the approved inventory mapping")
         backend = model["backend_provenance"]

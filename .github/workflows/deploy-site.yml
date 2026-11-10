@@ -53,9 +53,14 @@ jobs:
           !/*/
           /benchmark/**
           /data/**
+          /submissions/**
           /web/classic/**
+          /scripts/build-ft2-linux.sh
           /scripts/deploy_site.py
           /scripts/site-media-map.json
+          /scripts/site_retry_sparse.py
+          /runs/*/retry-*.json
+          /runs/*/other/*/status.json
           /runs/*/attempt-*/ATTEMPT.json
           /runs/*/attempt-*/status.json
           /runs/*/attempt-*/spec.json
@@ -68,9 +73,25 @@ jobs:
           /runs/*/attempt-*/evaluations/*/profile.json
           /runs/*/attempt-*/evaluations/*/playback/trace.jsonl.gz
           /runs/*/attempt-*/evaluations/*/playback/loop-preview.flac
+          /runs/*/community/*/attempt-*/ATTEMPT.json
+          /runs/*/community/*/attempt-*/status.json
+          /runs/*/community/*/attempt-*/spec.json
+          /runs/*/community/*/attempt-*/profile.json
+          /runs/*/community/*/attempt-*/transport.jsonl
+          /runs/*/community/*/attempt-*/trajectory.json
+          /runs/*/community/*/attempt-*/submission/tune.xm
+          /runs/*/community/*/attempt-*/canonical/canonical.wav.flac
+          /runs/*/community/*/attempt-*/evaluations/*/profile.json
+          /runs/*/community/*/attempt-*/evaluations/*/playback/trace.jsonl.gz
+          /runs/*/community/*/attempt-*/evaluations/*/playback/loop-preview.flac
           PATTERNS
           git fetch --depth=1 --filter=blob:none origin "$SOURCE_SHA"
           git checkout --detach "$SOURCE_SHA"
+          # Select only proof-matched retry candidates after their small proofs and statuses are present.
+          python3 scripts/site_retry_sparse.py > /tmp/site-retry-patterns
+          if [ -s /tmp/site-retry-patterns ]; then
+            git sparse-checkout add --stdin < /tmp/site-retry-patterns
+          fi
 
       - uses: actions/setup-python@v5
         with:
@@ -114,16 +135,18 @@ jobs:
           SITE_KEY: ${{ secrets.KEYGEN_SITE_DEPLOY_KEY }}
           MEDIA_KEY: ${{ secrets.KEYGEN_MEDIA_DEPLOY_KEY }}
           MEDIA2_KEY: ${{ secrets.KEYGEN_MEDIA2_DEPLOY_KEY }}
+          MEDIA3_KEY: ${{ secrets.KEYGEN_MEDIA3_DEPLOY_KEY }}
           KEYGEN_SITE_DEPLOY_KEY_FILE: ${{ runner.temp }}/keygen-ssh/site
           KEYGEN_MEDIA_DEPLOY_KEY_FILE: ${{ runner.temp }}/keygen-ssh/media
           KEYGEN_MEDIA2_DEPLOY_KEY_FILE: ${{ runner.temp }}/keygen-ssh/media2
+          KEYGEN_MEDIA3_DEPLOY_KEY_FILE: ${{ runner.temp }}/keygen-ssh/media3
           KEYGEN_KNOWN_HOSTS_FILE: ${{ runner.temp }}/keygen-ssh/known_hosts
         run: |
           python - <<'PY'
           import json, os, pathlib, urllib.request
           directory = pathlib.Path(os.environ['KEYGEN_SITE_DEPLOY_KEY_FILE']).parent
           directory.mkdir(mode=0o700)
-          for name in ('SITE', 'MEDIA', 'MEDIA2'):
+          for name in ('SITE', 'MEDIA', 'MEDIA2', 'MEDIA3'):
               value = os.environ[name + '_KEY']
               if not value.strip():
                   raise SystemExit('Missing KEYGEN_' + name + '_DEPLOY_KEY secret')

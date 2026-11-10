@@ -13,6 +13,11 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /*
+            !/runs/
+            !/submissions/
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
           python-version: '3.12'
@@ -23,3 +28,5 @@ jobs:
           LITELLM_LOCAL_MODEL_COST_MAP: 'True'
           LITELLM_MODE: PRODUCTION
       - run: python -m compileall -q benchmark/contrib
+      - name: Sparse retry checkout regression
+        run: python -m unittest discover -s scripts/tests -p test_site_retry_sparse.py

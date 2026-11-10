@@ -13,6 +13,7 @@ export const PAGES = [
   { id: "viewer", label: "Tracker", key: "F1" },
   { id: "ranking", label: "Rankings", key: "F2" },
   { id: "scoring", label: "Scoring", key: "F3" },
+  { id: "changelog", label: "Changelog", key: "F5" },
   { id: "support", label: "Support", key: "F4" },
 ];
 
@@ -191,9 +192,6 @@ export const SUPPORT = {
     { model: "gpt-5.2-pro", maker: "OpenAI", price: "$21/$168", typical: 130, est: 360, heavy: 605, raised: 0 },
     { model: "o3-pro", maker: "OpenAI", price: "$20/$80", typical: 95, est: 275, heavy: 495, raised: 0 },
     { model: "gpt-5-pro", maker: "OpenAI", price: "$15/$120", typical: 95, est: 255, heavy: 435, raised: 0 },
-    // "GPT-6 Pro" is ChatGPT's name; the API has no gpt-6-pro ID: it is gpt-6-astra with reasoning.mode "pro", billed at Astra's rates
-    // but doing several times the work. Tokens assumed 6x a normal run (gpt-5.5-pro's price is 6x gpt-5.5's).
-    { model: "gpt-6-pro", maker: "OpenAI", price: "$10/$50", typical: 145, est: 340, heavy: 490, raised: 0 },
   ],
   // Collapsible note under the wanted list.
   costHelp: {

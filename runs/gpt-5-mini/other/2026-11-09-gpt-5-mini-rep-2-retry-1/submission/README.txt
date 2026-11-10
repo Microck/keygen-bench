@@ -1,0 +1,1 @@
+This XM was generated automatically using ft2 CLI tools and Python scripts. Instruments: Kick, Snare, HiHat, Bass, Lead, Pad, ArpPluck. Tempo 150 BPM, speed 6. Order repeats patterns 0..3 twice to make 8 positions. Module loops at order 0.

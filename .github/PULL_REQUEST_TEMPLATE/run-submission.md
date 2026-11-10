@@ -13,4 +13,4 @@
 - [ ] I reviewed every file for credentials, home paths, private host details, and personal/company data.
 - [ ] I included only the public bundle, not the private controller work directory.
 - [ ] I have approval to publish this data and understand that it is public.
-- [ ] I understand this is community-submitted and requires trusted rerendering and review.
+- [ ] I understand that merging keeps this bundle as evidence only. If the maintainer publishes it after review and trusted re-rendering, it is labelled community-submitted and never ranked.

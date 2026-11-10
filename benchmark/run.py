@@ -31,7 +31,8 @@ import wave
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 from native_models import (build_model, audit_messages, redact_credentials, classify_error, validate_url,
-                           check_custom_destination, _native, PROVIDERS, PROTOCOLS, sdk_prefix, credential_target)
+                           check_custom_destination, _native, PROVIDERS, PROTOCOLS, sdk_prefix, credential_target,
+                           TRANSPORT_RETRY_DELAYS_SECONDS)
 import campaign
 
 MINI_VERSION = "2.4.6"
@@ -395,7 +396,7 @@ def worker_credentials(config: dict, model: dict, key_name: str | None = None) -
 
     A pooled route resolves only the one member key assigned to this attempt.
     """
-    _native(config)  # retries are bounded LiteLLM transport retries; mini never retries
+    _native(config)  # retries are bounded controller transport retries; mini never retries
     provider, api = model.get("provider"), model.get("api")
     if provider not in PROVIDERS or api not in PROTOCOLS[provider]:
         raise ValueError("Credential resolution requires an approved native provider/protocol")
@@ -491,6 +492,35 @@ def bound_content_filter(native, model: dict, run_dir: Path):
     return native
 
 
+def backoff_transport_errors(native, config: dict, sleep=time.sleep):
+    """Retry transient transport failures with bounded delays, preserving native request history."""
+    import litellm
+    import openai
+    import httpx
+
+    send = native._query
+    retries = config["native"]["retries"]
+    legacy_retryable = (litellm.Timeout, litellm.InternalServerError, litellm.ServiceUnavailableError)
+    retryable = (*legacy_retryable, openai.APIConnectionError, openai.InternalServerError, httpx.ReadError,
+                 httpx.RemoteProtocolError, httpx.TimeoutException)
+
+    def query(messages, **kwargs):
+        for attempt in range(retries + 1):
+            try:
+                return send(messages, **kwargs)
+            except retryable as exc:
+                # Native OpenAI classes are also bases of LiteLLM classes. Do not
+                # broaden the existing Chat/Messages mapped-exception policy.
+                if (type(exc).__module__.startswith("litellm") and not isinstance(exc, legacy_retryable)
+                        or isinstance(exc, openai.InternalServerError) and exc.status_code not in {500, 503}
+                        or classify_error(exc) == "quota_or_rate_limit" or attempt == retries):
+                    raise
+                sleep(TRANSPORT_RETRY_DELAYS_SECONDS[attempt])
+
+    native._query = query
+    return native
+
+
 def wait_out_upstream_outage(native, model: dict, run_dir: Path, sleep=time.sleep):
     """Re-send a request on this native model instance while its upstream endpoint is briefly unavailable.
     Each outage reply is audited as a transport.jsonl ``upstream_unavailable`` record after its send.
@@ -537,7 +567,8 @@ def worker(spec_path: Path) -> None:
     secrets = [os.environ[target]]
     agent = None
     try:
-        native = wait_out_upstream_outage(build_model(config, model, run_dir), model, run_dir)
+        native = backoff_transport_errors(build_model(config, model, run_dir), config)
+        native = wait_out_upstream_outage(native, model, run_dir)
         agent = DefaultAgent(bound_content_filter(native, model, run_dir),
                              Sandbox(spec["docker"], spec["container"], config["limits"]["command_seconds"]),
                              system_template="{{ frozen_system }}", instance_template="{{ task }}",
@@ -606,10 +637,12 @@ def summarize(run_dir: Path, model: dict | None = None, *, interrupted=False) ->
     timed = 0
     totals["settings_mismatch"] = False
     expected_settings = (model or {}).get("effective_settings", {}).get("expected_transmitted_generation", {})
+    if (model or {}).get("api") == "responses":
+        expected_settings = {**expected_settings, "stream": True}
     if transport.exists():
         callbacks = []
-        # mini never retries, so a request that follows an unanswered request is the SDK's
-        # transport retry; each one fires the SDK's pre-call hook again.
+        # mini never retries, so a request that follows an unanswered request is the controller's
+        # transport retry; each send fires the SDK's pre-call hook again.
         unanswered = False
         for line in transport.read_text().splitlines():
             try:
@@ -623,6 +656,8 @@ def summarize(run_dir: Path, model: dict | None = None, *, interrupted=False) ->
                 unanswered = True
                 settings = record.get("settings") or {}
                 totals["settings_mismatch"] |= any(settings.get(key) != value for key, value in expected_settings.items())
+            if record.get("event") == "stream_error":
+                totals["failed_requests"] += 1
             if record.get("event") == "content_filter_block":
                 # The block answered its send; the bounded re-send is not a transport retry.
                 unanswered = False
@@ -654,7 +689,7 @@ def summarize(run_dir: Path, model: dict | None = None, *, interrupted=False) ->
         totals["identity_unverified"] |= status == "identity_unverified"
         totals["prompt_tokens"] += usage.get("prompt_tokens", usage.get("input_tokens", 0)) or 0
         totals["completion_tokens"] += usage.get("completion_tokens", usage.get("output_tokens", 0)) or 0
-        totals["cached_tokens"] += (usage.get("prompt_tokens_details") or {}).get("cached_tokens", usage.get("cache_read_input_tokens", 0)) or 0
+        totals["cached_tokens"] += (usage.get("prompt_tokens_details") or usage.get("input_tokens_details") or {}).get("cached_tokens", usage.get("cache_read_input_tokens", 0)) or 0
         totals["reasoning_tokens"] += (usage.get("completion_tokens_details") or usage.get("output_tokens_details") or {}).get("reasoning_tokens", 0) or 0
     totals["usage_unknown"] += max(0, totals["requests"] - len(records))
     if interrupted:

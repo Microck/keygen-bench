@@ -12,6 +12,7 @@ import { fmt } from "./core/xm.js";
 import { slide, TRANSITION_CSS } from "./core/transitions.js";
 import { MARKERS, MARKER_CSS, CONSISTENCY_HELP, consistencyTitle } from "./core/consistency.js";
 import { linkIcon } from "./core/logos.js";
+import { modelChangelog } from "./core/changelog.js";
 
 const SHORT = { SUSTAINED_NOISE: "NOISE", PHRASE_SAMPLE: "PHRASE", SAMPLE_HEAVY: "SMP", TAIL_SILENCE: "TAIL", MASKED: "MASK", SILENCE: "SIL" };
 const upperCostText = (range) => money(Math.ceil(range.max * 100) / 100);
@@ -51,6 +52,13 @@ const CSS = `
 .vb .panel > h2 { margin: 0; padding: 1px 1px 0; font-size: 10px; line-height: 11px; font-weight: normal; color: #fff; text-shadow: 1px 1px 0 var(--dsktop2); white-space: nowrap; overflow: hidden; }
 .vb .well { padding: 3px 4px; color: #fff; overflow: auto; min-height: 0; }
 .vb .well p { margin: 0 0 7px; max-width: 86ch; }
+.vb .changelog-list { flex: 1; }
+.vb .change-entry { padding: 4px 1px 6px; border-bottom: 1px solid var(--dsktop2); }
+.vb .change-entry h3 { margin: 0 0 3px; font: inherit; color: var(--pattext); }
+.vb .change-entry time { color: var(--pattext); }
+.vb .change-models { display: flex; flex-wrap: wrap; gap: 3px; margin-top: 3px; }
+.vb .change-models .btn { height: auto; min-height: 16px; max-width: 100%; white-space: normal; overflow-wrap: anywhere; text-align: left; }
+.vb .change-source { color: var(--pattext); margin-left: 5px; }
 .vb .row { display: flex; gap: 3px; align-items: center; min-width: 0; }
 .vb .grow { flex: 1; min-width: 0; }
 .vb .kv { display: grid; grid-template-columns: auto 1fr; gap: 1px 8px; margin: 0; padding: 3px 4px; align-content: start; }
@@ -154,7 +162,7 @@ const CSS = `
   .vb { overflow-y: auto; }
   .vb .bar { height: auto; min-height: 24px; flex-wrap: wrap; }
   .vb .tabs { flex-wrap: wrap; }
-  .vb[data-page="viewer"] .page, .vb[data-page="ranking"] .page, .vb[data-page="support"] .page { flex: none; grid-template-columns: minmax(0, 1fr) !important; grid-template-rows: none !important; grid-auto-rows: auto; }
+  .vb[data-page="viewer"] .page, .vb[data-page="ranking"] .page, .vb[data-page="support"] .page, .vb[data-page="changelog"] .page { flex: none; grid-template-columns: minmax(0, 1fr) !important; grid-template-rows: none !important; grid-auto-rows: auto; }
   .vb .tracker-pickers { flex-wrap: wrap; }
   .vb .tracker-pickers > .grow { display: none; }
   .vb .picker-field { display: flex; gap: 4px; align-items: center; max-width: 100%; }
@@ -178,6 +186,8 @@ const CSS = `
   .vb[data-page="support"] .panel { min-height: auto; }
   .vb[data-page="support"] .well, .vb .support-list { flex: none !important; overflow: visible !important; }
   .vb[data-page="support"] .panel > h2 { white-space: normal; }
+  .vb[data-page="changelog"] .changelog-list { overflow: visible; }
+  .vb[data-page="changelog"] .change-models .btn { min-height: 24px; }
   .vb .donation-links { flex-wrap: wrap; }
   .vb .spend-row { display: grid; grid-template-columns: 16px minmax(0, 1fr) 48px 92px; height: auto !important; min-height: 24px; gap: 3px; }
   .vb .spend-model { overflow-wrap: anywhere; }
@@ -626,12 +636,12 @@ export async function mount(root, ctx) {
           kv([
             [h("span", { title: bestRankHelp }, "Best rank"), h("span", { title: bestRankHelp }, rankText(r))],
             ["Maker", r.maker], ["Effort", effort(r)], ["Wall time", r.usage.wall_minutes + " min"],
-            ...(r.exhibition ? [["Chat turns", r.usage.turns], ["Commands", r.usage.commands]] : [["Requests", r.usage.requests], ["Commands", r.usage.commands]]),
+            ...(r.exhibition && r.provenance?.kind !== "community-submitted" ? [["Chat turns", r.usage.turns], ["Commands", r.usage.commands]] : [["Requests", r.usage.requests], ["Commands", r.usage.commands]]),
             ["In tokens", tokens(r.usage.prompt_tokens)], ["- cached", tokens(r.usage.cached_tokens)],
             ["Out tokens", tokens(r.usage.completion_tokens)], ["- reasoning", tokens(r.usage.reasoning_tokens)],
             ["Est. cost", h("span", { title: r.cost_range_usd?.reason }, costText(r))],
           ]),
-          r.exhibition ? h("p", { class: "note" }, "Run by hand in the chat app: it reports no token counts and has no per-token price. Not ranked.") : null),
+          r.exhibition && r.provenance?.kind !== "community-submitted" ? h("p", { class: "note" }, "Run by hand in the chat app: it reports no token counts and has no per-token price. Not ranked.") : null),
         h("section", { class: "panel raised" }, h("h2", {}, "Price"),
           kv([
             ["$/M in", nf(r.price.input_usd_per_m)], ["$/M cached", nf(r.price.cached_input_usd_per_m)], ["$/M out", nf(r.price.output_usd_per_m)],
@@ -831,6 +841,24 @@ export async function mount(root, ctx) {
             h("span", { style: { minWidth: "92px", textAlign: "right" } }, spendText(m, m.usd)))))));
   }
 
+  function changelog() {
+    main.style.gridTemplateColumns = "minmax(0,1fr)";
+    main.style.gridTemplateRows = "minmax(0,1fr)";
+    const { dated, undated } = modelChangelog(data.byModel);
+    const modelButtons = (models) => h("div", { class: "change-models" }, ...models.map((model) =>
+      h("button", { class: "btn", onclick: () => ctx.go({ page: "viewer", run: model.best.slug }) }, model.best.label)));
+    main.replaceChildren(h("section", { class: "panel raised" },
+      h("h2", {}, "MODEL CHANGELOG"),
+      h("div", { class: "well sunken ft2-scroll changelog-list" },
+        ...dated.map((entry) => h("article", { class: "change-entry" },
+          h("time", { datetime: entry.date }, entry.date),
+          modelButtons(entry.models))),
+        undated.length ? h("article", { class: "change-entry" },
+          h("h3", {}, "Addition date unverified"),
+          modelButtons(undated)) : null,
+        !dated.length && !undated.length ? h("p", {}, "No models in this publication yet.") : null)));
+  }
+
   // Rankings selection is part of the URL (/rankings/<model>[/<attempt>]) without re-rendering the page.
   function select(s2) {
     S.sel = slug = s2;
@@ -846,6 +874,7 @@ export async function mount(root, ctx) {
     if (page === "viewer") viewer();
     else if (page === "ranking") ranking();
     else if (page === "scoring") scoring();
+    else if (page === "changelog") changelog();
     else support();
   }
   // Page change: freeze the old page as a ghost over the new one, then run the slide-deck transition
@@ -884,7 +913,7 @@ export async function mount(root, ctx) {
     update(p) {
       const pageChanged = p.page !== page, runChanged = p.run !== slug, modeChanged = p.mode !== S.mode;
       page = p.page; slug = p.run; S.mode = p.mode ?? "best";
-      if (pageChanged) transition();
+      if (pageChanged) { shell.scrollTop = 0; transition(); }
       else if (runChanged && page === "viewer") loadRun(slug);
       else if (runChanged || modeChanged) renderPage();
     },

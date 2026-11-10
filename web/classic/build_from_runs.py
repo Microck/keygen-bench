@@ -1,8 +1,11 @@
-"""Build a publication from the repository's predetermined ranked attempt slots.
+"""Build a publication from the repository's predetermined attempt slots.
 
-No campaign discovery, provider calls or private server paths are used. --no-media
-runs the same integrity checks and builds metadata/cards without media derivatives;
-it is useful for pull-request validation, but its output is not deployable.
+Maintainer slots are runs/<model>/attempt-1..3. Reviewed community publications
+are runs/<model>/community/<YYYY-MM-DD>-<handle>/attempt-1..3, beside the
+maintainer slots and never in them. No campaign discovery, provider calls or
+private server paths are used. --no-media runs the same integrity checks and
+builds metadata/cards without media derivatives; it is useful for pull-request
+validation, but its output is not deployable.
 """
 from __future__ import annotations
 
@@ -23,7 +26,8 @@ import time
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
 sys.path[:0] = [str(ROOT), str(ROOT / "benchmark"), str(HERE)]
-from benchmark.report import attempt_row, campaign_cohort, condition_fingerprint, counts, digest, read_cohort
+from benchmark.report import (MAX_TIER_PREFIX, attempt_row, campaign_cohort, condition_fingerprint, counts, digest,
+                              read_cohort, rerunnable, tier_label)
 from build import FLAG_RULES, copy_frontend, estimate_cost, price_id, public_maker, public_price, slug
 from collect_public import public_run, sha256, verified_media, write_json
 
@@ -40,6 +44,14 @@ def display_name(name: str) -> str:
     return re.sub(r"-free(?=$| )", "", name.replace(":free", ""))
 
 
+def publication_model_key(row: dict) -> str:
+    """Keep a named execution mode distinct while retaining the upstream model in provenance."""
+    settings = row.get("effective_settings") or {}
+    reasoning = (settings.get("requested_generation") or {}).get("reasoning") or {}
+    model = row["model_id"] if reasoning.get("mode") not in (None, "standard") else row["model"]
+    return display_name(price_id(model))
+
+
 def checked_path(directory: Path, relative: str) -> Path:
     path = directory / relative
     if (Path(relative).is_absolute() or ".." in Path(relative).parts or path.is_symlink()
@@ -48,13 +60,20 @@ def checked_path(directory: Path, relative: str) -> Path:
     return path
 
 
-def load_attempt(directory: Path, report_root: Path) -> tuple[dict, dict, str]:
+def load_attempt(directory: Path, report_root: Path, bundles: dict | None = None,
+                 community: str | None = None, retry_ordinal: int | None = None) -> tuple[dict, dict, str]:
+    """Load one slot. `community` is the submission directory name for community slots, else None."""
     identity = read_json(checked_path(directory, "ATTEMPT.json"))
+    publication = identity.get("publication")
+    if bool(publication) != bool(community):
+        raise ValueError(f"{directory}: community receipts belong only under runs/<model>/community/<submission>/")
     attempt_id = identity["attempt_id"]
     if not re.fullmatch(r"[A-Za-z0-9_.:-]+", attempt_id):
         raise ValueError(f"{directory}: invalid attempt identity")
     status = read_json(checked_path(directory, "status.json"))
-    if status.get("attempt_id") != attempt_id or identity["slot"] != directory.name:
+    slot = "other" if retry_ordinal is not None else directory.name
+    if (status.get("attempt_id") != attempt_id or identity["slot"] != slot
+            or (retry_ordinal is not None and identity.get("path") != f"other/{directory.name}")):
         raise ValueError(f"{directory}: organizer identity mismatch")
     link = report_root / attempt_id
     if (directory / "campaign.json").exists():
@@ -68,7 +87,8 @@ def load_attempt(directory: Path, report_root: Path) -> tuple[dict, dict, str]:
             raise ValueError(f"{directory}: standalone model differs from sealed spec")
         config = {**spec["config"], "models": [spec["model"]],
                   "schema": "keygen-native-campaign-3",
-                  "campaign_id": "next-max-tier-" + identity["campaign_id"]}
+                  "campaign_id": identity["campaign_id"] if publication else
+                  "next-max-tier-" + identity["campaign_id"]}
         campaign_hash, fingerprint = digest(config), digest(config)
         link.mkdir()
         for filename in ("status.json", "profile.json"):
@@ -84,11 +104,110 @@ def load_attempt(directory: Path, report_root: Path) -> tuple[dict, dict, str]:
             shutil.rmtree(link)
     if row["error"] and status.get("status") == "RENDERED_UNSCORED":
         raise ValueError(f"{directory}: {row['error']}")
+    if not publication and not config["campaign_id"].startswith(MAX_TIER_PREFIX):
+        # The organizer places only highest-declared-tier maintainer runs in attempt slots,
+        # as the standalone adapter above already assumes. A campaign named without the
+        # prefix keeps its sealed file; only its publication condition label is derived here.
+        row["cohort"] = campaign_cohort({**config, "campaign_id": MAX_TIER_PREFIX + config["campaign_id"]})
+        row["tier"] = tier_label(status["model"], row["cohort"]["condition"])
+    row["status_model"] = status.get("model")
     row["source_campaign_sha256"] = campaign_hash
     row["source_campaign_id"] = f"campaign-{campaign_hash}"
     row["condition_fingerprint"] = condition_fingerprint(config, status["model"])
-    row["repetition"] = int(directory.name.removeprefix("attempt-"))
+    row["repetition"] = retry_ordinal if retry_ordinal is not None else int(directory.name.removeprefix("attempt-"))
+    if publication:
+        bundle = (bundles or {}).get(publication["bundle_sha256"])
+        if (not bundle or bundle.name != community or publication["kind"] != "community-submitted"
+                or not publication.get("note")):
+            raise ValueError(f"{directory}: missing reviewed community bundle or disclosure")
+        manifest = read_json(bundle / "manifest.json")
+        frozen = manifest["environment"]["contract"]
+        if (config["prompts"] != frozen["prompt"] or config["limits"] != frozen["limits"]
+                or config["native"] != frozen["native"] or config["models"] != [manifest["environment"]["model"]]
+                or config["image"] != manifest["environment"]["images"]["agent"]
+                or config["visualizer_image"] != manifest["environment"]["images"]["visualizer"]):
+            raise ValueError(f"{directory}: reviewed contract mismatch")
+        source = bundle / directory.name
+        submitted = read_json(source / "status.json")
+        if any(status.get(key) != submitted.get(key) for key in
+               ("model", "attempt_id", "repetition", "started_at", "finished_at", "wall_seconds", "totals")):
+            raise ValueError(f"{directory}: reviewed submission identity mismatch")
+        for retained, original in (("submission/tune.xm", "tune.xm"),
+                                   ("trajectory.json", "trajectory.json"),
+                                   ("transport.jsonl", "transport.jsonl")):
+            if (source / original).is_file() and sha256(checked_path(directory, retained)) != sha256(source / original):
+                raise ValueError(f"{directory}: reviewed submission checksum mismatch: {retained}")
+        row["publication"] = publication
+        row["cohort"] = {"key": "community/" + publication["bundle_sha256"],
+                         "condition": "community-submitted", "prompt_version": config["prompts"]["version"],
+                         "label": "Community-submitted, maintainer re-scored; not comparatively ranked"}
     return row, config, campaign_hash
+
+
+def resolve_infrastructure_retry(directory: Path, row: dict, config: dict, campaign_hash: str,
+                                 report_root: Path) -> tuple[Path, dict, dict, str]:
+    """Follow verified same-campaign infrastructure retries without moving original slots."""
+    model_root = directory.parent
+    other = model_root / "other"
+    if other.is_symlink() or (other.exists() and not other.is_dir()):
+        raise ValueError(f"{other}: invalid retry directory")
+    history, seen = [], {row["attempt_id"]}
+    ordinal = row["repetition"]
+    while rerunnable(row) and row.get("model_failure") is not True and other.is_dir():
+        candidates = []
+        for candidate in sorted(other.iterdir()):
+            if candidate.is_symlink() or not candidate.is_dir():
+                raise ValueError(f"{candidate}: invalid retry directory")
+            candidate_status = candidate / "status.json"
+            if not candidate_status.is_file():
+                continue
+            status = read_json(checked_path(candidate, "status.json"))
+            if status.get("retry_of") != row["attempt_id"]:
+                continue
+            attempt_id = status.get("attempt_id")
+            if not isinstance(attempt_id, str) or not re.fullmatch(r"[A-Za-z0-9_.:-]+", attempt_id):
+                raise ValueError(f"{candidate}: invalid retry identity")
+            record = model_root / f"retry-{attempt_id}.json"
+            if not record.exists():
+                continue  # Historical other/ entries without a retained retry record are not promoted.
+            proof = read_json(checked_path(model_root, record.name))
+            retry, retry_config, retry_hash = load_attempt(candidate, report_root, retry_ordinal=ordinal)
+            same_campaign = proof == {"campaign_sha256": campaign_hash, "retry_of": row["attempt_id"],
+                                      "attempt_id": attempt_id} and retry_hash == campaign_hash and retry_config == config
+            if not same_campaign:
+                policies = retry_config.get("policies") or {}
+                model_id = status.get("model", {}).get("id")
+                expected = {"campaign_sha256": retry_hash, "attempt_id": attempt_id, "model_id": model_id,
+                            "repetition": ordinal, "kind": "retry", "retry_of": row["attempt_id"],
+                            "retry_of_campaign_id": config.get("campaign_id")}
+                entries = [entry for entry in (policies.get("plan") or {}).get(model_id, [])
+                           if entry.get("repetition") == ordinal]
+                links = ([entries[0].get("origin")] + entries[0].get("reruns", [])) if len(entries) == 1 else []
+                last = links[-1] if links else None
+                linked = [item for item in policies.get("linked_campaigns", [])
+                          if item.get("campaign_id") == config.get("campaign_id")]
+                actual = read_json(checked_path(directory, "status.json"))
+                required = {"campaign_id": config.get("campaign_id"), "attempt_id": row["attempt_id"],
+                            "status": actual.get("status"), "status_sha256": sha256(checked_path(directory, "status.json")),
+                            "outcome": row.get("outcome"), "failure_category": row.get("failure_category")}
+                if (proof != expected or policies.get("attempt_selection") != "independent_repetitions_infrastructure_reruns"
+                        or last != required or len(linked) != 1 or linked[0].get("config_sha256") != campaign_hash
+                        or condition_fingerprint(retry_config, status.get("model")) != condition_fingerprint(config, row["status_model"])):
+                    raise ValueError(f"{candidate}: retry record invalid or retry differs from linked frozen condition")
+            if (status.get("repetition") != ordinal or status.get("model") != row["status_model"]
+                    or retry["retry_of"] != row["attempt_id"] or attempt_id in seen):
+                raise ValueError(f"{candidate}: retry differs from the original frozen condition")
+            candidates.append((candidate, retry, retry_config, retry_hash))
+        if len(candidates) > 1:
+            raise ValueError(f"{directory}: multiple retries follow the same attempt")
+        if not candidates:
+            break
+        history.append({key: row.get(key) for key in ("attempt_id", "status", "outcome", "failure_category")})
+        directory, row, config, campaign_hash = candidates[0]
+        seen.add(row["attempt_id"])
+    if history:
+        row["superseded_attempts"] = history
+    return directory, row, config, campaign_hash
 
 
 def scored_profile(row: dict, directory: Path, evidence: dict, stage: Path) -> tuple[dict, dict]:
@@ -132,7 +251,7 @@ def scored_profile(row: dict, directory: Path, evidence: dict, stage: Path) -> t
 
 def build_from_runs(runs_root: Path, output: Path, listener_scores: Path,
                     *, no_media: bool = False, models: list[str] | None = None,
-                    site: Path = SITE, cards: bool = True) -> dict:
+                    site: Path = SITE, cards: bool = True, submissions: Path = ROOT / "submissions") -> dict:
     started = time.monotonic()
     runs_root, output = runs_root.resolve(), output.resolve()
     if (output == ROOT or ROOT.is_relative_to(output) or output.is_relative_to(runs_root)
@@ -160,53 +279,86 @@ def build_from_runs(runs_root: Path, output: Path, listener_scores: Path,
     if models and set(models) != {path.name for path in selected}:
         raise ValueError("Requested model directories are missing")
     selected = [path for path in selected if path.name not in exclusions]
+    # Maintainer slots and each reviewed community submission are separate attempt sets of a model.
+    sets = []
+    for model in selected:
+        sets.append((model.name, None, sorted(model.glob("attempt-*"))))
+        community = model / "community"
+        if community.is_symlink() or (community.exists() and not community.is_dir()):
+            raise ValueError(f"{community}: invalid community directory")
+        for source in sorted(community.iterdir()) if community.is_dir() else []:
+            if source.is_symlink() or not source.is_dir() or not re.fullmatch(r"\d{4}-\d{2}-\d{2}-[A-Za-z0-9-]+", source.name):
+                raise ValueError(f"{source}: community publications are <YYYY-MM-DD>-<handle> directories")
+            sets.append((f"{model.name}/community/{source.name}", source.name, sorted(source.glob("attempt-*"))))
+    # Validate only referenced bundles, once each. Unreviewed submissions are not publication inputs.
+    from benchmark.contrib.validate_bundle import validate
+    required = set()
+    for _, community, directories in sets:
+        for directory in directories if community else []:
+            publication = read_json(checked_path(directory, "ATTEMPT.json")).get("publication")
+            if publication:
+                required.add(publication["bundle_sha256"])
+    bundles = {}
+    for manifest in submissions.glob("*/*/manifest.json") if required else []:
+        manifest_hash = sha256(manifest)
+        if manifest_hash in required:
+            validate(manifest.parent)
+            bundles[manifest_hash] = manifest.parent
+    if required - bundles.keys():
+        raise ValueError("Missing reviewed community bundle")
     loaded, missing = [], []
     with tempfile.TemporaryDirectory(prefix="keygen-site-") as temporary:
         work = Path(temporary)
         report_root = work / "report"
         report_root.mkdir()
-        for model in selected:
-            directories = sorted(model.glob("attempt-*"))
+        for set_id, community, directories in sets:
             for directory in directories:
                 if directory.is_symlink() or not directory.is_dir() or not re.fullmatch(r"attempt-[123]", directory.name):
                     raise ValueError(f"{directory}: invalid ranked slot")
-                row, config, campaign_hash = load_attempt(directory, report_root)
+                row, config, campaign_hash = load_attempt(directory, report_root, bundles, community)
+                if not community:
+                    directory, row, config, campaign_hash = resolve_infrastructure_retry(
+                        directory, row, config, campaign_hash, report_root)
                 row["retained_profile_sha256"] = sha256(directory / "profile.json") if (directory / "profile.json").is_file() else None
                 row["retained_status_sha256"] = sha256(directory / "status.json")
                 row.pop("profile", None)
                 selection = config.get("policies", {}).get("attempt_selection")
-                loaded.append((model.name, directory, row, selection, campaign_hash))
+                loaded.append((set_id, community, directory, row, selection, campaign_hash))
                 if row["eligible"]:
                     xm_hash = sha256(checked_path(directory, "submission/tune.xm"))
                     if xm_hash not in evidence:
-                        missing.append(f"{model.name}/{directory.name}")
+                        missing.append(f"{set_id}/{directory.name}")
         if missing and not os.environ.get("KEYGEN_LISTENER_PYTHON"):
             raise ValueError("Missing listener-v1 evidence; set KEYGEN_LISTENER_PYTHON to rate: " + ", ".join(missing))
-        if not any(row["eligible"] for _, _, row, _, _ in loaded):
+        if not any(row["eligible"] for _, _, _, row, _, _ in loaded):
             raise ValueError("No eligible ranked attempts")
         output.mkdir(parents=True, exist_ok=True)
         dist = output / "dist"
         dist.mkdir()
         published, groups, campaign_rows = [], {}, {}
-        for model, directory, row, selection, campaign_hash in loaded:
+        for set_id, community, directory, row, selection, campaign_hash in loaded:
             ordinal = row["repetition"]
             cohort = row["cohort"]
-            key = display_name(price_id(row["model"]))
-            group = groups.setdefault(model, {"cohort_key": cohort["key"], "model_key": key,
+            key = publication_model_key(row)
+            # The public key is the model route (/tracker/<key>); a community set gets its own.
+            public_key = f"{key}-community-{community.lower()}" if community else key
+            model = set_id.split("/", 1)[0]
+            group = groups.setdefault(set_id, {"cohort_key": cohort["key"], "model_key": public_key,
                 "name": display_name(model) + " (max-tier)", "tier": row["tier"],
                 "maker": public_maker(display_name(model), {}),
                 "campaign_id": f"campaign-{campaign_hash}", "campaign_sha256": campaign_hash,
                 "condition_fingerprint": row["condition_fingerprint"],
                 "declared": 3, "attempts": [], "ranking_policy": "best of 3", "outside_condition": []})
             if group["cohort_key"] != cohort["key"]:
-                raise ValueError(f"{model}: ranked slots cross cohorts")
-            if group["model_key"] != key:
-                raise ValueError(f"{model}: ranked slots mix model identities")
+                raise ValueError(f"{set_id}: ranked slots cross cohorts")
+            if group["model_key"] != public_key:
+                raise ValueError(f"{set_id}: ranked slots mix model identities")
             summary = {"ordinal": ordinal, "status": row["status"], "outcome": row["outcome"],
                 "eligible": row["eligible"], "attempted": row["attempted"], "failure_category": row["failure_category"],
                 "model_failure": row["model_failure"], "source_campaign_sha256": campaign_hash,
                 "source_campaign_id": f"campaign-{campaign_hash}", "source": "ranked attempt slot",
-                "stopped_by": None, "slug": None, "score": None, "ranked": False, "superseded": []}
+                "stopped_by": None, "slug": None, "score": None, "ranked": False,
+                "superseded": row.get("superseded_attempts", [])}
             group["attempts"].append(summary)
             campaign_rows.setdefault(campaign_hash, []).append(row)
             if not row["eligible"]:
@@ -215,19 +367,22 @@ def build_from_runs(runs_root: Path, output: Path, listener_scores: Path,
             profile, verification = scored_profile(row, directory, evidence, stage)
             xm_hash = verification["input_sha256"]["submission/tune.xm"]
             identity = identities.get(xm_hash, {})
-            if identity and (identity["attempt_ordinal"] != ordinal or identity["model_key"] != key):
+            if identity and (identity["attempt_ordinal"] != ordinal or identity["model_key"] != public_key):
                 identity = {}
             if key not in metadata:
                 raise ValueError(f"Unknown model metadata: {key}")
-            if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", metadata[key].get("release_date", "")):
+            release = metadata[key].get("release_date")
+            unknown_release = ("release_date" in metadata[key] and release is None
+                               and bool(metadata[key].get("release_date_note")))
+            if not unknown_release and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", release or ""):
                 raise ValueError(f"Missing release_date: {key}")
-            run_slug = identity.get("slug", f"{slug(key)}-a{ordinal}-{xm_hash[:12]}")
+            run_slug = identity.get("slug", f"{slug(public_key)}-a{ordinal}-{xm_hash[:12]}")
             if not re.fullmatch(r"[a-z0-9][a-z0-9-]*", run_slug):
                 raise ValueError(f"Invalid public slug: {run_slug}")
             source_evaluation = {key: row[key] for key in ("score_version", "evaluation_fingerprint")}
             source_evaluation["profile_sha256"] = row["retained_profile_sha256"]
             if xm_hash in evidence:
-                listener_identity = scores.get("listener")
+                listener_identity = evidence[xm_hash].get("listener", scores.get("listener"))
             else:
                 from benchmark.score import listener_identity as local_listener_identity
                 listener_identity = local_listener_identity()
@@ -239,16 +394,25 @@ def build_from_runs(runs_root: Path, output: Path, listener_scores: Path,
             collector_stage = dist / ".verified" / run_slug
             collector_stage.parent.mkdir(exist_ok=True)
             shutil.move(stage, collector_stage)
-            run = public_run(row, {"attempted_count": sum(r["attempted"] for m, _, r, _, _ in loaded if m == model)},
+            run = public_run(row, {"attempted_count": sum(r["attempted"] for s, _, _, r, _, _ in loaded if s == set_id)},
                              directory, dist, {"campaign_sha256": campaign_hash,
                              "attempt_selection": selection},
                              "repetitions", {price_id(row["model"]): prices.get(key, {})}, run_slug=run_slug,
                              no_media=no_media, verification=verification, lossless="flac")
-            run.update(model_key=key, name=identity.get("name", f"{key} (max-tier, attempt {ordinal})"), ranked=False)
+            default_name = f"{key} community {community} (attempt {ordinal})" if community else f"{key} (max-tier, attempt {ordinal})"
+            # Community routes differ from the model key, so carry the model's release date on the run.
+            run.update(model_key=public_key, name=identity.get("name", default_name), ranked=False, release_date=release)
             run["provenance"].update(selected_by="best eligible score among three predetermined ordinals; ties use the lowest ordinal",
                 evaluation_kind="listener-evidence" if xm_hash in evidence else "listener-local",
                 listener=listener_identity, source_evaluation=source_evaluation,
                 configuration_source="campaign.json" if (directory / "campaign.json").is_file() else "sealed standalone spec.json")
+            if row.get("superseded_attempts"):
+                run["provenance"]["retry_of"] = row["retry_of"]
+                run["provenance"]["superseded_attempts"] = row["superseded_attempts"]
+            if row.get("publication"):
+                run.update(exhibition=True, publication_note=row["publication"]["note"])
+                run["provenance"].update(row["publication"])
+                run["provenance"]["configuration_source"] = "sealed community bundle contract"
             run["provenance"].pop("profile_sha256")
             # Known partial usage is a lower bound, not a zero bill.
             if run["cost_usd"] is None and row["usage_unknown"]:
@@ -258,7 +422,7 @@ def build_from_runs(runs_root: Path, output: Path, listener_scores: Path,
             summary.update(slug=run_slug, score=run["score"])
             group_name = re.sub(r", attempt \d+\)$", ")", run["name"])
             group_name = re.sub(r" \(attempt \d+\)$", "", group_name)
-            group.update(model_key=key, name=group_name, maker=run["maker"])
+            group.update(model_key=public_key, name=group_name, maker=run["maker"])
             published.append(run)
             shutil.rmtree(collector_stage)
             row.pop("profile")
@@ -282,12 +446,14 @@ def build_from_runs(runs_root: Path, output: Path, listener_scores: Path,
                          state=state, ranked_slug=None, best_ordinal=None)
             if eligible:
                 best = min(eligible, key=lambda a: (-a["score"], a["ordinal"]))
-                best["ranked"] = True
+                comparative = not by_slug[best["slug"]]["exhibition"]
+                best["ranked"] = comparative
                 group.update(ranked_slug=best["slug"], best_ordinal=best["ordinal"])
                 for attempt in eligible:
                     run = by_slug[attempt["slug"]]
-                    run.update(ranked=attempt is best, attempt_of=None if attempt is best else best["slug"])
-                ranked.append(by_slug[best["slug"]])
+                    run.update(ranked=comparative and attempt is best, attempt_of=None if attempt is best else best["slug"])
+                if comparative:
+                    ranked.append(by_slug[best["slug"]])
         for cohort_key in {run["cohort"]["key"] for run in ranked}:
             members = sorted((run for run in ranked if run["cohort"]["key"] == cohort_key),
                              key=lambda run: (-run["score"], run["name"]))
@@ -304,7 +470,7 @@ def build_from_runs(runs_root: Path, output: Path, listener_scores: Path,
             "selection_counts": {"main_model_roster": len(groups)}, "cohorts": cohorts,
             "limitations": ["Ranking uses the best eligible score among three predetermined ordinals; ties use the lowest ordinal.",
                 "Scores are 10 x Meta Audiobox Aesthetics content enjoyment, capped for silent or baked-sample artifacts.",
-                "Only runs/<model>/attempt-1 through attempt-3 are published. Other attempts and private rerun histories are not read.",
+                "Only predetermined ordinals are published; verified same-campaign infrastructure retries can supply a failed ordinal.",
                 "MP3 is a listening derivative; FLAC is the retained continuous loop source; XM is the original submission.",
                 "Costs are list-price estimates from recorded usage, not provider bills."],
             "campaigns": [{"campaign_id": f"campaign-{digest}", "campaign_sha256": digest,

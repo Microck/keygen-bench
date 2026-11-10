@@ -112,6 +112,14 @@ class LoginTests(unittest.TestCase):
         self.assertIn("XAI_API_KEY", result.stderr)
         self.assertFalse(self.directory.exists())
 
+    def test_help_states_login_defaults_to_oauth_with_explicit_api_key_option(self):
+        result = subprocess.run([sys.executable, str(SPEC.origin), "--help"], env={**self.env, "COLUMNS": "400"},
+                                capture_output=True, text=True, timeout=20)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        login = next(line for line in result.stdout.splitlines() if line.split()[:1] == ["login"])
+        self.assertIn("OAuth", login)
+        self.assertIn("--method api-key", login)
+
 
 if __name__ == "__main__":
     unittest.main()

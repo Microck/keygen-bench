@@ -19,6 +19,7 @@ import asyncio
 import base64
 import html
 import json
+import math
 import shutil
 import subprocess
 import tempfile
@@ -99,7 +100,13 @@ html, body { margin: 0; background: #000; }
 
 def bar_html(w: int, h: int, run: dict, total: int) -> str:
     """The site's own top bar already says KEYGEN BENCH; the footer adds the run, the score and the URL."""
-    cost = f"${run['cost_usd']:.2f}" if run.get("cost_usd") else "$0" if run.get("cost_usd") == 0 else "n/a"
+    # Match the site: display a bounded estimate by its upper bound, rounded up.
+    if run.get("cost_range_usd"):
+        cost = f"${math.ceil(run['cost_range_usd']['max'] * 100) / 100:.2f}"
+    elif run.get("cost_usd") is not None:
+        cost = f"${run['cost_usd']:.2f}"
+    else:
+        cost = "n/a"
     body = f"""<div class="card bevel" style="padding:5px 8px;gap:4px">
       <div style="display:flex;justify-content:space-between;align-items:baseline">
         <span class="big">{html.escape(run['model_key'])} <span style="color:#fff">{run['score']:.1f}</span></span><span class="big blue">keygen.micr.dev</span></div>

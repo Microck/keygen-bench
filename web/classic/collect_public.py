@@ -21,10 +21,43 @@ ROOT = HERE.parents[1]
 sys.path.insert(0, str(ROOT))
 from benchmark.artifacts import ArtifactStore
 from benchmark.report import INDEPENDENT_SELECTION, QUEUE_SELECTION, build_report, finite_json
-from build import FLAG_RULES, compact_trace, estimate_cost, estimate_cost_range, price_id, public_maker, public_price, slug, worst_transition
+from build import FLAG_RULES, compact_trace, estimate_cost, estimate_cost_range, estimate_request_cost, price_id, public_maker, public_price, slug, worst_transition
 
 # Publication reads the evaluator's version without loading its numerical dependencies.
 SCORE_VERSION = re.search(r'^SCORE_VERSION = "([^"]+)"$', (ROOT / "benchmark/score.py").read_text(), re.M)[1]
+
+
+def response_usage(directory: Path, totals: dict) -> list[dict] | None:
+    """Use complete Responses receipts, not the controller's lossy cache totals.
+
+    Other protocols retain their existing aggregate accounting. Reconcile the
+    token/request totals before treating receipts as the whole attempt.
+    """
+    path = directory / "transport.jsonl"
+    if not path.is_file():
+        return None
+    requests = []
+    with path.open() as stream:
+        for line in stream:
+            receipt = json.loads(line)
+            usage = receipt.get("usage")
+            if not usage:
+                continue
+            details = usage.get("input_tokens_details") or {}
+            fields = (usage.get("input_tokens"), usage.get("output_tokens"),
+                      details.get("cached_tokens"), details.get("cache_write_tokens"))
+            if any(type(value) is not int or value < 0 for value in fields):
+                return None
+            prompt, output, cached, writes = fields
+            if cached + writes > prompt:
+                raise ValueError(f"{path}: invalid response cache usage")
+            requests.append({"prompt_tokens": prompt, "completion_tokens": output,
+                             "cached_tokens": cached, "cache_write_tokens": writes})
+    if (not requests or len(requests) != totals.get("requests")
+            or any(sum(request[key] for request in requests) != totals.get(key)
+                   for key in ("prompt_tokens", "completion_tokens"))):
+        return None
+    return requests
 
 
 def sha256(path: Path) -> str:
@@ -171,6 +204,13 @@ def public_run(row: dict, group: dict, directory: Path, output: Path, campaign: 
                        "profile_sha256": sha256(directory / "profile.json"), **verification,
                        "public_media_sha256": {} if no_media else {key: sha256(media / f"{run_slug}.{ext}") for key, ext in (("xm", "xm"), (lossless, lossless), ("mp3", "mp3"))}},
     }
+    requests = response_usage(directory, totals) if not row["usage_unknown"] else None
+    if requests:
+        run["usage"]["cached_tokens"] = sum(request["cached_tokens"] for request in requests)
+        run["provenance"]["usage_source"] = "reconciled per-response transport receipts"
+        amounts = [estimate_request_cost(request, pub_price) for request in requests]
+        run["cost_usd"] = round(sum(amounts), 4) if all(amount is not None for amount in amounts) else None
+        totals = {**totals, **{key: sum(request[key] for request in requests) for key in requests[0]}}
     if run["cost_usd"] is None and not row["usage_unknown"]:
         interval = estimate_cost_range(totals, pub_price)
         if interval is not None:

@@ -120,6 +120,41 @@ class BenchmarkTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "readiness"):
             self.compile()
 
+    def test_inventory_request_and_native_response_identity_are_provider_neutral(self):
+        for provider, label, base in (("go", "OpenCode Go", "https://opencode.ai/zen/go/v1"),
+                                      ("vercel", "Vercel AI Gateway", "https://ai-gateway.vercel.sh/v1"),
+                                      ("openai", "OpenAI", "https://api.openai.com/v1"),
+                                      ("custom", "Custom", "https://api.example.com/v1")):
+            with self.subTest(provider=provider):
+                output = self.root / "campaign.json"
+                if output.exists():
+                    output.unlink()
+                self.model.update(provider=provider, model="gateway/exact-model", base_url=base)
+                self.selection["concurrency"]["providers"][provider] = 1
+                self.inventory["models"][0].update(provider=label, proxy_request_model="gateway/exact-model")
+                self.tier_spec_path.write_text(json.dumps({"entries": [
+                    {"provider": provider, "api": "chat", "model": "gateway/exact-model", "tier": "max",
+                     "reasoning": {"reasoning_effort": "max"}}]}))
+                self.model["tier"]["spec_sha256"] = campaign.file_digest(self.tier_spec_path)
+                self.proof["route"] = {key: self.model[key] for key in
+                                      ("provider", "api", "base_url", "model", "response_model", "backend_provenance")}
+                self.proof["effective_settings"] = campaign.normalize_native(self.selection, [self.model])[0]
+                self.proof_path.write_text(json.dumps(self.proof))
+                self.model["readiness"]["evidence"]["artifact_sha256"] = campaign.file_digest(self.proof_path)
+                compiled = self.compile()
+                self.assertEqual(compiled["models"][0]["model"], "gateway/exact-model")
+                self.assertEqual(compiled["models"][0]["response_model"], "exact-model")
+                for field in ("model", "response_model"):
+                    changed = copy.deepcopy(compiled)
+                    changed["models"][0][field] = "unapproved-model"
+                    with self.assertRaisesRegex(ValueError, "identity differs"):
+                        campaign.validate(changed, check_provenance=False)
+                changed = copy.deepcopy(compiled)
+                changed["inventory"]["entries"][0]["proxy_request_model"] = None
+                changed["inventory"]["sha256"] = campaign.digest(changed["inventory"]["entries"])
+                with self.assertRaisesRegex(ValueError, "identity differs"):
+                    campaign.validate(changed, check_provenance=False)
+
     def test_devin_compilation_freezes_alias_response_identity_bridge_and_concurrency(self):
         self.model.update(provider="devin", model="devin/exact-model",
                           base_url="http://127.0.0.1:8417/v1", api_key_env="DEVIN_BRIDGE_API_KEY")
@@ -200,6 +235,27 @@ class BenchmarkTests(unittest.TestCase):
         self.model["readiness"]["evidence"]["artifact_sha256"] = campaign.file_digest(self.proof_path)
         with self.assertRaisesRegex(ValueError, "transmitted settings|reasoning control"):
             self.compile()
+
+    def test_recovered_readiness_checks_failed_sends_without_counting_them_as_turns(self):
+        self.selection["native"]["retries"] = len(run.TRANSPORT_RETRY_DELAYS_SECONDS)
+        self.proof["effective_settings"] = campaign.normalize_native(self.selection, [self.model])[0]
+        failed = copy.deepcopy(self.proof["transport"][0])
+        self.proof["transport"].insert(0, failed)
+        self.proof_path.write_text(json.dumps(self.proof))
+        self.model["readiness"]["evidence"]["artifact_sha256"] = campaign.file_digest(self.proof_path)
+        compiled = self.compile()
+        # The proof keeps every send even though only answered exchanges reached history.
+        self.assertEqual(len(compiled["models"][0]["readiness"]["evidence"]["payload"]["transport"]), 5)
+        for field, value in (("settings", {"max_tokens": 1}), ("tools_sha256", campaign.digest(None)),
+                             ("input_sha256", "not-a-hash"), ("input_sha256", campaign.digest("different input")),
+                             ("model", "different-model")):
+            changed = copy.deepcopy(failed)
+            changed[field] = value
+            self.proof["transport"][0] = changed
+            self.proof_path.write_text(json.dumps(self.proof))
+            self.model["readiness"]["evidence"]["artifact_sha256"] = campaign.file_digest(self.proof_path)
+            with self.subTest(field=field, value=value), self.assertRaisesRegex(ValueError, "request changed"):
+                self.compile()
 
     def test_first_success_contract_preserves_exact_prompts(self):
         config = self.compile()

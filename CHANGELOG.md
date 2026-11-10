@@ -2,7 +2,59 @@
 
 ## Unreleased
 
+- Show bounded cost estimates in benchmark video footers.
+
+### Added
+
+- Add o3 benchmark attempts and their recorded usage.
+- Add three Claude Fable 5.2 subscription OAuth benchmark attempts and their reviewed usage estimates.
+- Add gpt-5 benchmark attempts and their recorded usage.
+- Add gpt-5-mini benchmark attempts and their recorded usage.
+- Add gpt-5-nano benchmark attempts and their recorded usage.
+
+- Add GPT-5 Pro benchmark attempts and preserve the rate-limited attempt and separate retry.
+
+- Add three GPT-6 Astra Pro mode runs at max reasoning as a separate ranked GPT-6 Pro entry.
+- Support explicit OpenAI Responses reasoning mode alongside effort, preserving both in route validation and audit evidence.
+
+- Add a model changelog tab showing source-backed history dates and an undated group for models without historical evidence.
+
 ### Fixed
+
+- Verify linked-campaign infrastructure retries before publishing their original ordinals.
+- Preserve malformed model-generated intermediate WAVs unchanged in submission archives.
+
+- Include verified retry artifacts in the site deployment checkout.
+
+- Include recorded GPT-5 Pro and GPT-6 Pro run and readiness usage in estimated spend.
+
+- Publish verified infrastructure retries as their original ordinal without hiding the failed attempt.
+
+- Add a third media repository so new audio fits within GitHub Pages limits.
+
+- Keep separately named Responses reasoning modes distinct in published model identities.
+
+- Use native Responses streaming while retaining the complete response, tool history and usage evidence.
+- Space transient transport retries and stop on recognized quota failures. Preserve failed sends in readiness audits.
+- Validate gateway request and native response inventory identities independently for every provider.
+
+- Add the maintainer organizer, `scripts/organize_runs.py`, which writes a finished private campaign into `runs/<model>/` slots without overwriting attempts; AGENTS.md now names it.
+- Restore GPT-6.1 Terra as the maintainer's Codex OAuth run from its original campaign, ranked in the highest-declared-tier condition like earlier Codex runs. Attempts, scores, music, hashes and public slugs are unchanged; the requested 128k output cap stays unverified upstream, as on those runs. The contributor bundle stays in `submissions/` as evidence and is no longer published as a separate exhibition.
+- Publish reviewed community runs under `runs/<model>/community/<date>-<handle>/`, beside maintainer slots, so a model that already has maintainer runs can receive contributions without overwriting attempts, ordinals or URLs. Receipts in maintainer slots are rejected.
+- Label maintainer slots as the highest-declared-tier condition even when their sealed campaign was named without the `next-max-tier-` prefix, as standalone slots already were.
+- Describe merged community submissions as retained evidence, published after maintainer review only as unranked `community-submitted` exhibitions, without claiming validation proves model provenance or settings delivery.
+- Have contributors fill in the run-submission PR description in a private file outside the checkout before opening a ready-for-review PR.
+- Replace links to the deleted public-launch checklist with a publication review guide that keeps its still-applicable history, secret-scan and privacy checks.
+- Correct contributor CLI help: login defaults to OAuth for Codex/OpenAI, Anthropic and xAI. bridge-serve no longer accepts ignored `--method`/`--base-url` options.
+
+- Put Terra in release-date order, add official API prices, and calculate complete Responses usage from per-request cache receipts.
+- Keep detailed publication disclosures in provenance rather than the score sidebar.
+
+- Keep code-only CI checkouts free of retained run and submission artifacts, avoiding checkout timeouts before tests start.
+
+- Keep the pinned FT2 build script in the deployment checkout so reviewed community bundle verification can run.
+
+- Publish maintainer-verified community bundles through the canonical site pipeline, with playable attempts, source receipts and route disclosures, without comparative ranks.
 
 - Keep Support button-link labels black and simplify the Muse Full access request.
 
@@ -44,6 +96,7 @@
 
 ### Changed
 
+- Remove the snapshot date label from the home Open Graph image.
 - Add private full three-attempt Cursor/mini music experiments with canonical FT2 collection/rendering/scoring, explicit non-ranked results, fresh per-attempt sessions and offline pipeline regression coverage. The existing probe remains a diagnostic only.
 
 - Fetch independent optional website metadata in parallel while preserving missing-file defaults and failure reporting.

@@ -1,6 +1,11 @@
 # FT2 website
 
-This is the canonical frontend. It keeps the FT2 tracker, audio playback and looping, rankings with best/first/all-attempt views, scoring explanation, and support page. There is no JavaScript build step and no checked-in result dataset.
+This is the canonical frontend. It keeps the FT2 tracker, audio playback and looping, rankings with best/first/all-attempt views, scoring explanation, model changelog, and support page. There is no JavaScript build step and no checked-in result dataset.
+
+The Changelog lists models in the loaded publication. Dates in `core/changelog.js`
+record source PR merges, snapshots, or repository archive evidence. Snapshot and
+archive dates establish presence, not first website addition. Unknown models
+remain in the undated group. Keep evidence and tests current when editing history.
 
 ## Design and historical results
 
@@ -25,11 +30,16 @@ All commands below run from the repository root. Use your own local campaign and
 
 ## Build from repository runs
 
-The deployment builder reads only `runs/<model>/attempt-1/` through
-`attempt-3/`, never `other/`. It verifies frozen campaign identities, retained
+The deployment builder reads `runs/<model>/attempt-1/` through
+`attempt-3/`. A slot stopped by a non-model infrastructure failure may use a
+verified retry retained in `other/`, linked by its immutable retry record. For a
+linked recovery campaign, the builder also checks the frozen origin status hash,
+campaign identity and unchanged model condition. The failed original stays in its slot and in provenance; a scored result
+is never replaced. It verifies frozen campaign identities, retained
 profiles, submitted XM checksums, playback traces and byte-exact decoded
-canonical WAVs. Standalone contribution attempts use their sealed `spec.json`
-configuration when no campaign envelope exists.
+canonical WAVs. Model-generated invalid intermediate WAVs remain byte-exact in the submission;
+canonical WAVs still require verified lossless FLAC. Standalone contribution
+attempts use their sealed `spec.json` configuration when no campaign envelope exists.
 
 ```sh
 python3 web/classic/build_from_runs.py --runs runs --out /absolute/publication
@@ -40,6 +50,8 @@ Install the website requirements plus NumPy, `ffmpeg` with `libmp3lame`, and
 FLAC media, writes per-attempt evaluation summaries and builds OG cards.
 Only one canonical WAV is decoded at a time. FLAC loop sources contain the
 full canonical audio, not the short evaluator loop preview.
+
+For Responses runs with a declared nonstandard reasoning mode, the frozen model ID is the public identity; the provider model remains unchanged in the run provenance. This keeps distinct modes separate from their underlying model.
 
 `data/site/` contains the reviewed release dates, price catalog, historical
 spend ledger, reviewed publication exclusions and XM/ordinal-keyed
@@ -80,11 +92,70 @@ reading `other/`, so the builder does not claim to reproduce those histories.
 The spend ledger retains reviewed historical totals independently of this
 ranked-only export.
 
-Pricing uses the canonical builder's cache-write and context-tier rules. Where
+The Fable 5.2 campaign used Claude subscription OAuth through CLIProxyAPI 8.0.62 with a temporary Claude Code version-header override (2.1.293). Captured controller-to-bridge settings and model identity do not establish the exact prompt or settings received upstream. Historical OAuth runs also lack complete upstream prompt evidence, so differences in bridge-added instructions cannot be ruled out; this is not proof that they differed.
+
+The Fable 5.2 addition uses `data/site/fable52-spend-usage.json` for the three attempts and readiness pilot. Cache-write TTL is unavailable in the receipts, so the builder retains conservative bounds. Subscription usage is not an API bill.
+
+The GPT-5 Pro and GPT-6 Pro additions in `data/site/spend.json` use the
+per-request records in `data/site/gpt-pro-spend-usage.json`, priced with
+`data/site/prices.json`. They include readiness pilots and the interrupted
+GPT-5 Pro attempt as distinct started runs. The interrupted request has
+unknown usage. The earlier aggregate remains the reviewed snapshot from
+commit `547ddb3f`; its original per-attempt input is not included here.
+Rebuild the additions with `build_spend.py` and add their recorded bounds to
+the historical bounds, without treating the snapshot as raw attempt records.
+
+Pricing uses the canonical builder's cache-write and context-tier rules. Complete
+Responses transport receipts are reconciled with request/input/output totals
+before using their cache counts and per-request context tiers. These take
+precedence over lossy controller cache aggregates. Where
 the recorded aggregate usage cannot establish an exact amount, the publication
 shows a bounded estimate or an unknown cost instead of the legacy prototype's
 guessed exact amount. Partly recorded usage with a known estimate is explicitly
 marked as a lower bound.
+
+## Reviewed community publication
+
+Merging `submissions/` retains evidence; it does not publish a result. A maintainer
+must validate, re-render and re-score the sealed bundle with a trusted image.
+The rescore command writes canonical attempt slots, a sealed specification from
+the bundle contract, and per-attempt publication receipts. Set `--publication-note`
+to disclose route limits and `--source-url` to the reviewed submission. Keep this
+output separate from the sealed bundle. Pass
+`--publication-out runs/<model>/community/<submission directory>` to retain the
+slots with lossless compressed WAVs and public evaluator labels. The command
+refuses any other target and any existing directory, so it works for a model that
+already has maintainer runs without touching `runs/<model>/attempt-N/` or `other/`.
+Raw evaluation files stay in the private rescore output; publication receipts pin
+their original profile hashes. Only absolute home prefixes in dependency labels
+change, not artifact hashes, executable hashes, ratings or music.
+
+```sh
+python3 benchmark/contrib/validate_bundle.py submissions/MODEL/DATE-HANDLE \
+  --rescore --trusted-agent-image keygen-ft2-benchmark:local \
+  --rescore-out /absolute/private-review --publication-out runs/MODEL/community/DATE-HANDLE \
+  --source-url https://github.com/OWNER/REPO/pull/NUMBER \
+  --publication-note "Community-submitted; disclose any route limits here. Not comparatively ranked."
+```
+
+The canonical builder publishes each community directory as its own
+`community-submitted` cohort and model route, `/tracker/<model>-community-<date-handle>`,
+with all three attempts and the review note retained in provenance. They are playable
+exhibitions, never comparative ranks, average ranks or podium entries, even after
+verification. Adding a community directory does not change the routes, slugs or
+ranks of the maintainer's `runs/<model>/attempt-N` slots. The builder accepts a
+publication receipt only inside `community/`, verifies it against the committed
+bundle with the same directory name and its original ordinals, and rejects
+receipts in maintainer slots. A rescore does not certify unverified upstream
+generation settings, model identity or the absence of undisclosed attempts. Do not
+change the sealed bundle. Model metadata may explicitly use `release_date: null`
+with `release_date_note` when no release date has been verified; do not substitute
+the attempt date.
+
+Maintainer slots are the highest-declared-tier condition. The organizer places only
+such runs in `runs/<model>/attempt-N`; the builder labels them that way even when
+their sealed campaign was named without the `next-max-tier-` prefix, as it already
+does for standalone `spec.json` runs. The campaign file itself is never rewritten.
 
 ## Export, build, and serve
 
@@ -299,7 +370,7 @@ commit so it works before that PR merges. A private repository requires GitHub
 access to open it; do not advertise the link as public until the repository is
 public.
 
-Open Graph generation writes `dist/og/home.png`, one image per model, and `dist/og/meta.json`. The server uses that metadata to inject route-specific titles and preview tags. Without OG generation, the site still works but has no generated link-preview cards. Rerun OG generation whenever the results change.
+Open Graph generation writes `dist/og/home.png` without a snapshot date label, one image per model, and `dist/og/meta.json`. The server uses that metadata to inject route-specific titles and preview tags. Without OG generation, the site still works but has no generated link-preview cards. Rerun OG generation whenever the results change.
 
 The server supports `/tracker`, `/rankings`, `/scoring`, `/support`, and model/attempt URLs, plus byte ranges for audio seeking and downloads. JSON, JavaScript, CSS and XM files are sent gzip-compressed to browsers that accept it (a pretty-printed 6.3 MB `data.json` becomes about 0.76 MB); range requests and audio are always sent uncompressed. It rejects dotfiles, symlinks, and directory listings. Serve only the dedicated publication directory, never the repository or a campaign directory. For public deployment, put this local server behind a proxy with HTTPS; configure the proxy to set trustworthy `Host` or `X-Forwarded-Host` and `X-Forwarded-Proto` headers for preview URLs. No deployment-specific service files are included.
 
@@ -316,11 +387,11 @@ netlify deploy --prod --dir /absolute/static
 
 The live site is published with `--host github-pages` to the public repository `Microck/keygen-bench-site` (GitHub Pages, custom domain `keygen.micr.dev`, HTTPS enforced): the exporter writes `404.html` (the app shell, so unlisted app routes such as attempt URLs still render), `CNAME` and `.nojekyll` instead of `netlify.toml`. GitHub Pages has no deploy credits or bandwidth meter (soft limits: 1 GB per site, about 100 GB a month), but response headers cannot be configured. Push the output as the repository's `main` branch to deploy.
 
-`--media-map` maps every media file name to its absolute URL. The live site serves MP3 renders, XM modules and one lossless FLAC loop source per WAV (`ffmpeg -c:a flac`, same name with `.flac`) from public GitHub Pages repositories (`Microck/keygen-bench-media`, `Microck/keygen-bench-media-2`; each published site must stay under 1 GB, so the files are split by size). GitHub Pages sends `Access-Control-Allow-Origin: *` and honours byte ranges, which the player's `fetch` of modules and loop sources and MP3 seeking need. The exporter rewrites `data.json` media paths to those URLs (the frontend's `mediaUrl` accepts absolute URLs), writes one HTML file per route in `dist/og/meta.json` with that route's preview tags (a static host cannot inject them per request), writes `netlify.toml` falling back to `index.html` for other app routes and redirecting `--redirect-from` hosts to the site URL, drops `dist/evaluations/` (not read by the site) and moves each run's playback trace to `dist/traces/<slug>.json`, which the tracker loads when it opens the run (`data.json` drops from 2.8 MB to 0.95 MB, about 130 kB with Brotli). Cross-origin `.XM`/`.MP3` buttons open the file instead of forcing a download, because browsers ignore `download` across origins.
+`--media-map` maps every media file name to its absolute URL. The live site serves MP3 renders, XM modules and one lossless FLAC loop source per WAV (`ffmpeg -c:a flac`, same name with `.flac`) from public GitHub Pages repositories (`Microck/keygen-bench-media`, `Microck/keygen-bench-media-2`, `Microck/keygen-bench-media-3`; each published site must stay under 1 GB, so the files are split by size). GitHub Pages sends `Access-Control-Allow-Origin: *` and honours byte ranges, which the player's `fetch` of modules and loop sources and MP3 seeking need. The exporter rewrites `data.json` media paths to those URLs (the frontend's `mediaUrl` accepts absolute URLs), writes one HTML file per route in `dist/og/meta.json` with that route's preview tags (a static host cannot inject them per request), writes `netlify.toml` falling back to `index.html` for other app routes and redirecting `--redirect-from` hosts to the site URL, drops `dist/evaluations/` (not read by the site) and moves each run's playback trace to `dist/traces/<slug>.json`, which the tracker loads when it opens the run (`data.json` drops from 2.8 MB to 0.95 MB, about 130 kB with Brotli). Cross-origin `.XM`/`.MP3` buttons open the file instead of forcing a download, because browsers ignore `download` across origins.
 
 ## Share a run as a video
 
-`make_demo.py` turns one run into a video for posting: the site's Tracker playing the tune, with a branded footer (model, score, rank, cost and the site URL), an end card and the run's own MP3 as the soundtrack. It also writes a draft post text. Output goes to `~/keygen-demos/` and is never part of the repository.
+`make_demo.py` turns one run into a video for posting: the site's Tracker playing the tune, with a branded footer (model, score, rank, cost and the site URL), an end card and the run's own MP3 as the soundtrack. For bounded costs, the footer shows the upper estimate rounded up to cents, matching the site. It also writes a draft post text. Output goes to `~/keygen-demos/` and is never part of the repository.
 
 ```sh
 python3 web/classic/make_demo.py --model qwen3.5-397b-a17b                 # 4:3, full loop (default)

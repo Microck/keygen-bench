@@ -8,6 +8,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+from benchmark import campaign
 from benchmark import native_readiness as readiness
 
 
@@ -132,6 +133,75 @@ class QualificationBoundaryTests(unittest.TestCase):
             executable.write_bytes(b"changed executable")
             with self.assertRaisesRegex(ValueError, "does not match"):
                 readiness.normalize_spec(spec, executable)
+
+
+class RecoveredExchangeTests(unittest.TestCase):
+    def pilot(self, root):
+        spec = pilot_spec()
+        spec["config"]["native"]["retries"] = readiness.MAX_TRANSPORT_RETRIES
+        spec = readiness.normalize_spec(spec, None)
+        model = spec["model"]
+        messages = [{"role": "system", "content": "Synthetic probe"}, {"role": "user", "content": "Run tools"}]
+        records = []
+        for call in ("a", "b", "c"):
+            records.append({"event": "request", "model": model["model"], "input_sha256": campaign.digest(messages),
+                            "tools_sha256": campaign.digest(["bash"]),
+                            "settings": {**model["effective_settings"]["expected_transmitted_generation"], "stream": True}})
+            records.append({"event": "response", "identity_status": "identity_match"})
+            messages.extend([{**responses_reply(call), "model": model["response_model"],
+                              "usage": {"input_tokens": 1, "output_tokens": 1}},
+                             responses_result(call)])
+        trajectory = {"messages": messages, "info": {"config": {
+            "agent_type": "minisweagent.agents.default.DefaultAgent",
+            "model_type": "native_models.StreamingOpenAIResponseModel"}}}
+        provenance = {"native_source_sha256": campaign.file_digest(readiness.HERE / "native_models.py"),
+                      "sandbox_source_sha256": campaign.file_digest(readiness.HERE / "run.py"),
+                      "readiness_source_sha256": campaign.file_digest(Path(readiness.__file__)),
+                      "upstream_source_sha256": campaign.upstream_provenance(model["api"]),
+                      "packages": campaign.package_provenance(), "backend_provenance": model["backend_provenance"]}
+        for name, value in (("worker-result.json", {"exit_status": "Submitted"}),
+                            ("trajectory.json", trajectory), ("runtime-provenance.json", provenance),
+                            ("sandbox-preflight.json", {}), ("cleanup.json", {})):
+            (root / name).write_text(json.dumps(value))
+        (root / "submission").mkdir()
+        (root / "submission/readiness.txt").write_text("marker\n")
+        return spec, records
+
+    def test_first_and_later_retries_verify_without_rewriting_audit(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            spec, records = self.pilot(root)
+            # Timeout/5xx sends have no response callback. Each successful resend answers
+            # the same input, before a genuinely new history turn starts.
+            recovered = [records[0], records[0], *records[:2], records[2], *records[2:]]
+            audit = "".join(json.dumps(record) + "\n" for record in recovered)
+            (root / "transport.jsonl").write_text(audit)
+            payload = readiness.verify_pilot(spec, root, "marker")
+            self.assertEqual(payload["transport"], recovered)
+            self.assertEqual((root / "transport.jsonl").read_text(), audit)
+            self.assertEqual(campaign.unblocked_exchanges(recovered), records)
+
+    def test_unanswered_send_cannot_be_replaced_by_a_different_request(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            spec, records = self.pilot(root)
+            for field, value in (("model", "other-model"), ("input_sha256", campaign.digest("other input")),
+                                 ("tools_sha256", campaign.digest(["other tool"])), ("settings", {"max_output_tokens": 1})):
+                changed = {**records[0], field: value}
+                audit = [changed, *records]
+                (root / "transport.jsonl").write_text("".join(json.dumps(record) + "\n" for record in audit))
+                with self.subTest(field=field), self.assertRaisesRegex(ValueError, "request changed"):
+                    readiness.verify_pilot(spec, root, "marker")
+
+    def test_incomplete_or_orphan_response_still_fails_pilot(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            spec, records = self.pilot(root)
+            for broken in ([*records, records[0]], [records[1], *records]):
+                (root / "transport.jsonl").write_text("".join(json.dumps(record) + "\n" for record in broken))
+                with self.subTest(events=[record["event"] for record in broken]), \
+                        self.assertRaisesRegex(ValueError, "complete sequential wire exchanges"):
+                    readiness.verify_pilot(spec, root, "marker")
 
 
 class ExecutedCallTests(unittest.TestCase):
