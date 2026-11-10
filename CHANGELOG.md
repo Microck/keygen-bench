@@ -23,6 +23,8 @@
 
 ### Fixed
 
+- Group model changelog entries by date and update untested GPT Pro estimates using recorded GPT-5 Pro usage.
+
 - Retry transient LiteLLM connection errors within the existing bounded policy.
 
 - Verify linked-campaign infrastructure retries before publishing their original ordinals.

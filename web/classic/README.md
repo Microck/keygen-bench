@@ -361,7 +361,7 @@ field names or a visible cost-range warning.
 4. Generate the optional spend summary and rerun `build_og.py` against the new `dist/` directory.
 5. Serve the new directory locally and check playback, seeking, looping, downloads, rankings, scoring, support, and direct model links before publishing it.
 
-The source of support links, wanted-model estimates, and manually recorded fundraising amounts is `core/content.js`. Review them before deploying a fork or changing a fundraising goal. Those planning estimates are separate from measured attempt usage and the optional spend ledger.
+The source of support links, wanted-model estimates, and manually recorded fundraising amounts is `core/content.js`. Review them before deploying a fork or changing a fundraising goal. Those planning estimates are separate from measured attempt usage and the optional spend ledger. GPT Pro estimates use GPT-5 Pro run sizes as planning scenarios, not a prediction of another model's token usage.
 
 The Support page pairs a combined funding panel with a contributor-run panel.
 Keep provider and cost caveats in `SUPPORT.contribution`, and the guide URL in

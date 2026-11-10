@@ -42,3 +42,13 @@ export function modelChangelog(byModel, history = MODEL_HISTORY) {
     .sort((a, b) => a.best.label.localeCompare(b.best.label));
   return { dated, undated };
 }
+
+// Group only for display; the underlying events retain their provenance.
+export function groupChangelogDates(events) {
+  const groups = new Map();
+  for (const event of events) {
+    if (!groups.has(event.date)) groups.set(event.date, []);
+    groups.get(event.date).push(...event.models);
+  }
+  return Array.from(groups, ([date, models]) => ({ date, models }));
+}

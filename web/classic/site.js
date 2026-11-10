@@ -12,7 +12,7 @@ import { fmt } from "./core/xm.js";
 import { slide, TRANSITION_CSS } from "./core/transitions.js";
 import { MARKERS, MARKER_CSS, CONSISTENCY_HELP, consistencyTitle } from "./core/consistency.js";
 import { linkIcon } from "./core/logos.js";
-import { modelChangelog } from "./core/changelog.js";
+import { groupChangelogDates, modelChangelog } from "./core/changelog.js";
 
 const SHORT = { SUSTAINED_NOISE: "NOISE", PHRASE_SAMPLE: "PHRASE", SAMPLE_HEAVY: "SMP", TAIL_SILENCE: "TAIL", MASKED: "MASK", SILENCE: "SIL" };
 const upperCostText = (range) => money(Math.ceil(range.max * 100) / 100);
@@ -850,7 +850,7 @@ export async function mount(root, ctx) {
     main.replaceChildren(h("section", { class: "panel raised" },
       h("h2", {}, "MODEL CHANGELOG"),
       h("div", { class: "well sunken ft2-scroll changelog-list" },
-        ...dated.map((entry) => h("article", { class: "change-entry" },
+        ...groupChangelogDates(dated).map((entry) => h("article", { class: "change-entry" },
           h("time", { datetime: entry.date }, entry.date),
           modelButtons(entry.models))),
         undated.length ? h("article", { class: "change-entry" },
