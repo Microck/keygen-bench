@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add an incomplete Bend 2 controller experiment for attempt decisions and sandbox argument parity.
+
 - Show bounded cost estimates in benchmark video footers.
 
 ### Added
