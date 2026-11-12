@@ -60,6 +60,16 @@ OpenAI Responses routes can declare `generation.reasoning` with an `effort` and 
 
 ## Provider routes
 
+The native route adapter registry in `native_models.py` declares approved
+protocols, fixed or bridge destination rules, SDK prefixes and request policies
+in one place. The runner applies the declared policies rather than maintaining
+its own provider lists. Existing `custom` routes remain available for public
+HTTPS endpoints; adding a route does not prove protocol equivalence, permit
+private destinations, or waive readiness and provenance checks. Provider-
+specific generation mapping and other specialized handling still require
+review and tests. Changing the native source invalidates prior native-readiness
+proofs by design; a new paid pilot requires explicit spending authorization.
+
 Use the [guided contributor CLI](../CONTRIBUTING-RUNS.md#guided-setup-and-run) for setup and private model configuration.
 
 | Provider | Protocol | Endpoint |
