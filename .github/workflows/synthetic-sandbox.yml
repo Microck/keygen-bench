@@ -1,0 +1,59 @@
+name: Trusted synthetic sandbox
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'benchmark/run.py'
+      - 'benchmark/native_models.py'
+      - 'benchmark/campaign.py'
+      - 'benchmark/artifacts.py'
+      - 'benchmark/bridge.py'
+      - 'benchmark/Dockerfile'
+      - 'benchmark/score*.py'
+      - 'benchmark/requirements*.txt'
+      - 'scripts/build-ft2*.py'
+      - 'scripts/build-ft2*.sh'
+      - '.github/workflows/synthetic-sandbox.yml'
+permissions:
+  contents: read
+jobs:
+  synthetic:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /*
+            !/runs/
+            !/submissions/
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12'
+      - name: Install native build prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends python3-venv build-essential git pkg-config libsdl2-dev libmicrohttpd-dev
+      - name: Set up pinned renderer, images and listener
+        env:
+          KEYGEN_FT2_ANALYSIS: ${{ runner.temp }}/keygen-ft2-analysis
+          LITELLM_LOCAL_MODEL_COST_MAP: 'True'
+        run: python benchmark/contrib/cli.py setup --home "$RUNNER_TEMP/keygen-setup"
+      - name: Generate a synthetic tracker module
+        run: |
+          "$RUNNER_TEMP/keygen-setup/venv/bin/python" - <<'PY'
+          from pathlib import Path
+          from benchmark.tests.test_score_playback import fixture_xm, NOTE, EMPTY
+          import os
+          Path(os.environ['RUNNER_TEMP'], 'synthetic.xm').write_bytes(fixture_xm([[NOTE] + [EMPTY] * 63], speed=6))
+          PY
+      - name: Collect, render and score without provider traffic
+        env:
+          KEYGEN_FT2_ANALYSIS: ${{ runner.temp }}/keygen-ft2-analysis
+          KEYGEN_LISTENER_PYTHON: ${{ runner.temp }}/keygen-setup/listener-venv/bin/python
+          LITELLM_LOCAL_MODEL_COST_MAP: 'True'
+        run: |
+          "$RUNNER_TEMP/keygen-setup/venv/bin/python" benchmark/contrib/cli.py doctor --infrastructure-only --sandbox \
+            --xm "$RUNNER_TEMP/synthetic.xm" --work "$RUNNER_TEMP/keygen-synthetic-evidence"
