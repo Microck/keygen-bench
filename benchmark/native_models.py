@@ -391,13 +391,14 @@ def _check_extra_body(model: dict, extra: Any) -> None:
         config = extra.get("generationConfig") if isinstance(extra, dict) and set(extra) == {"generationConfig"} else None
         thinking = config.get("thinkingConfig") if isinstance(config, dict) and set(config) == {"thinkingConfig"} else None
         if (not isinstance(thinking, dict) or set(thinking) != {"thinkingLevel", "includeThoughts"}
+                or not isinstance(thinking["thinkingLevel"], str)
                 or thinking["thinkingLevel"] not in {"LOW", "MEDIUM", "HIGH", "XHIGH"}
                 or thinking["includeThoughts"] is not True):
             raise ValueError("Google native thinking requires a supported level and includeThoughts")
         return
     allowed = EXTRA_BODY.get((model["provider"], model["api"]))
     if allowed is None:
-        raise ValueError("extra_body pass-through is only approved for NIM Chat")
+        raise ValueError("extra_body pass-through is only approved for Google and NIM Chat")
     if not isinstance(extra, dict) or not extra or set(extra) - allowed:
         raise ValueError("extra_body may contain only this route's approved reasoning fields")
     template = extra["chat_template_kwargs"]

@@ -2,6 +2,7 @@
 // which a run was archived. They are not model release dates or verified first
 // website addition dates. Unknown models remain in the undated group.
 export const MODEL_HISTORY = [
+  { date: "2026-11-12", kind: "repository", commits: ["8deb1eba8702"], keys: ["gemini-4-hydrogen"], note: "Run archive added; publication date may differ" },
   { date: "2026-11-12", kind: "repository", commits: ["e57951647cdc"], keys: ["gpt-6.1-sol-pro"], note: "Run archive added; publication date may differ" },
   { date: "2026-11-12", kind: "repository", commits: ["f534816fd924"], keys: ["gpt-6-sol-pro"], note: "Run archive added; publication date may differ" },
   { date: "2026-11-11", kind: "repository", commits: ["1d156389a579"], keys: ["gpt-6-luna-pro"], note: "Run archive added; publication date may differ" },

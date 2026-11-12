@@ -478,6 +478,11 @@ class NativeProtocolTests(unittest.TestCase):
         effective = native.validate_model({"native": {"timeout_seconds": 60, "retries": 2}}, spec)
         self.assertEqual(effective["expected_transmitted_generation"]["thinkingConfig"], native_body["generationConfig"]["thinkingConfig"])
         self.assertEqual(effective["expected_transmitted_generation"]["max_output_tokens"], 65536)
+        thinking = native_body["generationConfig"]["thinkingConfig"]
+        thinking["thinkingLevel"] = []
+        with self.assertRaises(ValueError):
+            native.validate_model({"native": {"timeout_seconds": 60, "retries": 2}}, spec)
+        thinking["thinkingLevel"] = "XHIGH"
         spec["generation"]["reasoning_effort"] = "high"
         with self.assertRaises(ValueError):
             native.validate_model({"native": {"timeout_seconds": 60, "retries": 2}}, spec)
