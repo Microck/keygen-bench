@@ -177,7 +177,7 @@ export const SUPPORT = {
     button: "View the contributor guide",
   },
   // Planning estimates = assumed token use x the listed price, rounded up to the next $5.
-  // Prices checked 2026-10-06 against developers.openai.com/api/docs/pricing (Standard) and Anthropic's legacy price list.
+  // Prices checked 2026-11-12 against developers.openai.com/api/docs/pricing (Standard) and Anthropic's legacy price list.
   // Other models: typical 1.03M input / 125k output, long 3.5M / 270k, heavy 6.9M / 333k.
   // Models with a cached-input price assume 94.5% cached input; Pro models assume full-price input.
   // Every figure covers three attempts; est uses the long-run assumption. Update prices before fundraising.
@@ -185,13 +185,13 @@ export const SUPPORT = {
   // raised: USD donated so far towards that model; update by hand.
   // tip: shows a hover asterisk with this note.
   wanted: [
-    { model: "muse-wonder-full-1.0", maker: "Meta", accessOnly: true, price: "", tip: "Full is only available through a Muse Code subscription. I need access to test it. No run budget is set yet; any runs will be marked experimental." },
-    { model: "claude-3-opus", maker: "Anthropic", price: "$15/$75", typical: 40, est: 85, heavy: 125, raised: 0, tip: "I also need access to this model: it's retired and only open to researchers. If you can lend me a hand getting API access, it would be really appreciated." },
-    { model: "o1-pro", maker: "OpenAI", price: "$150/$600", typical: 690, est: 2065, heavy: 3705, raised: 0 },
+    { model: "muse-wonder-full-1.0", maker: "Meta", accessOnly: true, accessLabel: "Muse Code access needed", price: "", tip: "Full is only available through a Muse Code subscription. I need access to test it. No run budget is set yet; any runs will be marked experimental." },
+    { model: "claude-3-opus", maker: "Anthropic", accessOnly: true, accessLabel: "Research access needed", price: "", tip: "The API model is retired. Research access would need to be confirmed before setting a budget." },
+    { model: "o1-pro", maker: "OpenAI", accessOnly: true, accessLabel: "API model shut down", price: "", tip: "OpenAI shut down o1-pro on October 23, 2026. No funding target is set." },
     { model: "gpt-5.5-pro", maker: "OpenAI", price: "$30/$180", typical: 20, est: 25, heavy: 40, raised: 0 },
     { model: "gpt-5.4-pro", maker: "OpenAI", price: "$30/$180", typical: 20, est: 25, heavy: 40, raised: 0 },
     { model: "gpt-5.2-pro", maker: "OpenAI", price: "$21/$168", typical: 15, est: 20, heavy: 35, raised: 0 },
-    { model: "o3-pro", maker: "OpenAI", price: "$20/$80", typical: 95, est: 275, heavy: 495, raised: 0 },
+    { model: "o3-pro", maker: "OpenAI", accessOnly: true, accessLabel: "API access needed", price: "$20/$80", typical: 95, est: 275, heavy: 495, raised: 0, tip: "API access is not currently available to this organization. OpenAI plans to shut the model down on December 11, 2026." },
   ],
   // Collapsible note under the wanted list.
   costHelp: {

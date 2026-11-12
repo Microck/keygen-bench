@@ -68,3 +68,14 @@ test('untested GPT Pro estimates use the disclosed planning scenarios', async ()
   }
   assert.ok(!SUPPORT.wanted.some((item) => item.model === 'gpt-5-pro'));
 });
+
+
+test('retired wanted models do not have funding goals', async () => {
+  const { SUPPORT } = await import('../web/classic/core/content.js');
+  for (const name of ['o1-pro', 'claude-3-opus']) {
+    const entry = SUPPORT.wanted.find((item) => item.model === name);
+    assert.equal(entry.accessOnly, true);
+    assert.equal(entry.est, undefined);
+    assert.ok(entry.accessLabel);
+  }
+});
