@@ -113,7 +113,7 @@ NEVER_RETRIED_ERRORS = ("BadRequestErrorRetries", "AuthenticationErrorRetries", 
                         "ContentPolicyViolationErrorRetries", "DefaultRetries")
 # Provider response bodies indicating depleted funds or usage windows.
 QUOTA_MARKERS = ("insufficient account funds", "usage limit exceeded", "gousagelimiterror",
-                 "positive credit balance")
+                 "positive credit balance", "no credits remaining")
 # mini renders this on a reply without a valid tool call; finish_reason "length" (Chat/Messages
 # max_tokens, Responses incomplete max_output_tokens) means the output cap cut the reply off.
 FORMAT_ERROR = (

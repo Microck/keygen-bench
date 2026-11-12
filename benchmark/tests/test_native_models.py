@@ -798,6 +798,10 @@ class NativePolicyTests(unittest.TestCase):
         plain = llm.BadRequestError(message="prompt is too long", llm_provider="openai", model="x")
         self.assertEqual(native.classify_error(plain), "provider_request_error")
 
+    def test_depleted_credits_are_a_quota_failure(self):
+        error = RuntimeError("You have no credits remaining. Add credits to continue using the API.")
+        self.assertEqual(native.classify_error(error), "quota_or_rate_limit")
+
     def test_subminimum_response_limit_is_rejected_not_raised_silently(self):
         spec = model_spec()
         spec["generation"]["max_output_tokens"] = 1
