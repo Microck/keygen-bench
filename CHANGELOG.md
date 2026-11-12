@@ -2,9 +2,13 @@
 
 ## Unreleased
 
+- Classify provider responses reporting no remaining credits as quota failures.
+
 - Show bounded cost estimates in benchmark video footers.
 
 ### Added
+
+- Add GPT-6.1 Terra Pro benchmark attempts, including the credit-exhausted third attempt.
 
 - Add Gemini 4 Carbon benchmark attempts and the separately retained infrastructure retry.
 

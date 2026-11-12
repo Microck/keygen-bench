@@ -984,7 +984,7 @@ def run_model_sequence(root: Path, config: dict, model: dict, docker: list[str] 
 # wait and re-probe instead of starting an attempt that would only record a QUOTA failure.
 PROBE_WAIT_MARKERS = ("rate limit", "rate_limit", "ratelimit", "too many requests", "quota", "usage limit",
                       "usage_limit", "auth_unavailable", "no auth available", "cooldown", "cooling down",
-                      "exhausted", "insufficient account funds", "gousagelimiterror", "positive credit balance")
+                      "exhausted", "insufficient account funds", "gousagelimiterror", "positive credit balance", "no credits remaining")
 PROBE_TEXT = "Reply with OK."
 
 
