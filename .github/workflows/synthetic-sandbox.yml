@@ -6,6 +6,7 @@ on:
       - 'benchmark/run.py'
       - 'benchmark/native_models.py'
       - 'benchmark/campaign.py'
+      - 'benchmark/contrib/cli.py'
       - 'benchmark/artifacts.py'
       - 'benchmark/bridge.py'
       - 'benchmark/Dockerfile'
@@ -36,6 +37,10 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends python3-venv build-essential git pkg-config libsdl2-dev libmicrohttpd-dev ffmpeg
+      # setup retains its 20 GiB free-space admission check; show the actual
+      # hosted runner capacity rather than weakening or bypassing that check.
+      - name: Report available setup disk space
+        run: df -h "$RUNNER_TEMP"
       - name: Set up pinned renderer, images and listener
         env:
           KEYGEN_FT2_ANALYSIS: ${{ runner.temp }}/keygen-ft2-analysis
