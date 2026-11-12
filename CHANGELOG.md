@@ -10,6 +10,8 @@
 
 ### Added
 
+- Add three Gemini 4 Hydrogen benchmark attempts.
+
 - Add three GPT-6.1 Sol Pro benchmark attempts.
 - Add three GPT-6 Sol Pro benchmark attempts.
 - Add three GPT-6 Luna Pro benchmark attempts.

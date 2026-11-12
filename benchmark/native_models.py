@@ -109,6 +109,8 @@ CAPABILITY_OVERRIDES = {
     ("google", "chat", "gemini-4-argon"): {"effort": "high"},
     # Gemini 4 Carbon also supports thinkingLevel high; the pinned SDK predates it.
     ("google", "chat", "gemini-4-carbon"): {"effort": "high"},
+    # Hydrogen advertises thinking; the actual high-level endpoint accepts this setting.
+    ("google", "chat", "gemini-4-hydrogen"): {"effort": "high"},
     ("devin", "chat", "devin/gpt-5-4"): {"effort": "xhigh"},
     ("devin", "chat", "devin/gpt-5-4-mini"): {"effort": "xhigh"},
     ("devin", "chat", "devin/gpt-5-3-codex"): {"effort": "xhigh"},

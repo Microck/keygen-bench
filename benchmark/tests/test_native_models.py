@@ -469,6 +469,15 @@ class NativeProtocolTests(unittest.TestCase):
         self.assertEqual(mapped["thinkingConfig"], {"thinkingLevel": "high", "includeThoughts": True})
         self.assertEqual(mapped["max_output_tokens"], 65536)
 
+    def test_gemini_4_hydrogen_sends_high_thinking_and_output_cap(self):
+        spec = model_spec("chat", "google", native.GOOGLE_BASE)
+        spec["model"] = spec["response_model"] = "gemini-4-hydrogen"
+        spec["generation"] = {"max_tokens": 65536, "reasoning_effort": "high"}
+        spec["tier"] = {"level": "high", "reasoning": {"reasoning_effort": "high"}, "spec_sha256": "0" * 64}
+        mapped = native._map_generation(spec, spec["generation"])
+        self.assertEqual(mapped["thinkingConfig"], {"thinkingLevel": "high", "includeThoughts": True})
+        self.assertEqual(mapped["max_output_tokens"], 65536)
+
     def test_gemini_4_carbon_sends_high_thinking_and_output_cap(self):
         spec = model_spec("chat", "google", native.GOOGLE_BASE)
         spec["model"] = spec["response_model"] = "gemini-4-carbon"
