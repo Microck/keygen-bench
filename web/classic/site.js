@@ -837,7 +837,7 @@ export async function mount(root, ctx) {
         h("span", { class: "hint goal", tabindex: "0", style: { color: "#fff" }, "data-tip": spendTip(ledger), "aria-label": spendTip(ledger) }, `Estimated spend: ${spendText(ledger, ledger.total_usd)}`)),
         h("div", { class: "sunken ft2-scroll support-list", style: { flex: "1", overflow: "auto", padding: "2px" } },
           ...ledger.models.map((m) => h("div", { class: "row spend-row", style: { height: "18px" }, title: spendTip(m) },
-            badge(m.maker), h("span", { class: "grow muted spend-model" }, m.name), h("span", { class: "muted", style: { width: "48px", textAlign: "right" } }, `${m.runs} run${m.runs === 1 ? "" : "s"}`),
+            badge(m.maker), h("span", { class: "grow muted spend-model" }, data.modelMetadata[m.name]?.display_name ?? m.name), h("span", { class: "muted", style: { width: "48px", textAlign: "right" } }, `${m.runs} run${m.runs === 1 ? "" : "s"}`),
             h("span", { style: { minWidth: "92px", textAlign: "right" } }, spendText(m, m.usd)))))));
   }
 

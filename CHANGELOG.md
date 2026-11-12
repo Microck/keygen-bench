@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Rename GPT-6 Pro to GPT-6 Astra Pro in published labels.
+
 - Show bounded cost estimates in benchmark video footers.
 
 ### Added
