@@ -109,7 +109,7 @@ def bar_html(w: int, h: int, run: dict, total: int) -> str:
         cost = "n/a"
     body = f"""<div class="card bevel" style="padding:5px 8px;gap:4px">
       <div style="display:flex;justify-content:space-between;align-items:baseline">
-        <span class="big">{html.escape(run['model_key'])} <span style="color:#fff">{run['score']:.1f}</span></span><span class="big blue">keygen.micr.dev</span></div>
+        <span class="big">{html.escape(run['name'].split(' (', 1)[0])} <span style="color:#fff">{run['score']:.1f}</span></span><span class="big blue">keygen.micr.dev</span></div>
       <div class="dim">{html.escape(run['maker'])} | attempt {run['attempt']} | rank {run.get('rank', '-')} of {total} | cost {cost}</div>
       </div>"""
     return f"<div style='width:{w}px;height:{h}px'>{body}</div>"
@@ -118,7 +118,7 @@ def bar_html(w: int, h: int, run: dict, total: int) -> str:
 def card_html(w: int, h: int, run: dict, total: int) -> str:
     """End card: the score, the rank and the site URL."""
     lines = f"""<div class="big" style="font-size:40px;line-height:40px">{run['score']:.1f}</div>
-      <div class="dim">{html.escape(run['model_key'])} | rank {run.get('rank', '-')} of {total}</div>
+      <div class="dim">{html.escape(run['name'].split(' (', 1)[0])} | rank {run.get('rank', '-')} of {total}</div>
       <div class="well" style="padding:10px 14px;margin-top:10px;text-align:center">
       <div class="dim">Every model, 3 attempts, scored in FastTracker II</div>
       <div class="big blue" style="margin-top:6px">keygen.micr.dev</div></div>"""

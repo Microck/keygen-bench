@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Rename GPT-6 Pro to GPT-6 Astra Pro in published labels.
 - Show the recorded lower-bound cost when an interrupted response leaves usage incomplete.
 
 - Show bounded cost estimates in benchmark video footers.

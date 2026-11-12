@@ -339,6 +339,13 @@ class RunsBuilderTests(unittest.TestCase):
         self.assertTrue((self.root / "publication/dist/data.json").is_file())
         self.assertFalse((self.root / "publication/dist/.verified").exists())
 
+    def test_reviewed_display_name_preserves_identity_and_attempt_suffix(self):
+        metadata = {"gpt-6-pro": {"display_name": "gpt-6-astra-pro"}}
+        self.assertEqual(builder.public_display_name("gpt-6-pro (max-tier, attempt 2)", "gpt-6-pro", metadata),
+                         "gpt-6-astra-pro (max-tier, attempt 2)")
+        self.assertEqual(builder.public_display_name("gpt-5-pro (max-tier)", "gpt-5-pro", metadata),
+                         "gpt-5-pro (max-tier)")
+
     def test_display_names_drop_route_free_and_contributor_tags(self):
         self.assertEqual(builder.display_name("meta/muse-spark-1.13-contributor:free"), "muse-spark-1.13")
         self.assertEqual(builder.display_name("stepfun/step-3.7-flash:free"), "step-3.7-flash")
