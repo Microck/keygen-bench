@@ -55,5 +55,17 @@ jobs:
           KEYGEN_LISTENER_PYTHON: ${{ runner.temp }}/keygen-setup/listener-venv/bin/python
           LITELLM_LOCAL_MODEL_COST_MAP: 'True'
         run: |
-          "$RUNNER_TEMP/keygen-setup/venv/bin/python" benchmark/contrib/cli.py doctor --infrastructure-only --sandbox \
-            --xm "$RUNNER_TEMP/synthetic.xm" --work "$RUNNER_TEMP/keygen-synthetic-evidence"
+          if ! "$RUNNER_TEMP/keygen-setup/venv/bin/python" benchmark/contrib/cli.py doctor --infrastructure-only --sandbox \
+            --xm "$RUNNER_TEMP/synthetic.xm" --work "$RUNNER_TEMP/keygen-synthetic-evidence"; then
+            "$RUNNER_TEMP/keygen-setup/venv/bin/python" - <<'PY'
+          import json, os
+          from pathlib import Path
+          path = Path(os.environ['RUNNER_TEMP'], 'keygen-synthetic-evidence/sandbox-smoke/profile.json')
+          if path.is_file():
+              profile = json.loads(path.read_text())
+              print(json.dumps({key: profile.get(key) for key in ('evaluation_status', 'evaluation_error')}))
+          else:
+              print('No synthetic profile was produced.')
+          PY
+            exit 1
+          fi
