@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Rename GPT-6 Pro to GPT-6 Astra Pro in published labels.
+- Centralize approved route destinations, protocols, SDK prefixes and runner request policies in explicit native adapter declarations without changing frozen controls.
 - Show the recorded lower-bound cost when an interrupted response leaves usage incomplete.
 
 - Show bounded cost estimates in benchmark video footers.

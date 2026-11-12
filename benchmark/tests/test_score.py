@@ -45,6 +45,14 @@ def build_xm(rows=16, channels=2, order=(0, 0, 1), restart=1, sample_frames=1000
 
 
 class ScoreTests(unittest.TestCase):
+    def test_numerical_identity_initializes_mmap_before_fingerprinting(self):
+        with patch.object(score.importlib, "import_module", wraps=score.importlib.import_module) as imports:
+            identity = score.numerical_identity()
+        self.assertTrue(any(call.args == ("mmap",) for call in imports.call_args_list))
+        import mmap
+        if getattr(mmap, "__file__", "").endswith(".so"):
+            self.assertIn(str(Path(mmap.__file__).resolve()), identity["loaded_native_libraries"])
+
     def test_parse_and_structure(self):
         xm = score.parse_xm(build_xm())
         self.assertEqual((xm["channels"], xm["song_length"], xm["restart"], xm["n_instruments"]), (2, 3, 1, 1))
