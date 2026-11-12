@@ -28,8 +28,8 @@ ROOT = HERE.parents[1]
 sys.path[:0] = [str(ROOT), str(ROOT / "benchmark"), str(HERE)]
 from benchmark.report import (MAX_TIER_PREFIX, attempt_row, campaign_cohort, condition_fingerprint, counts, digest,
                               read_cohort, rerunnable, tier_label)
-from build import FLAG_RULES, copy_frontend, estimate_cost, price_id, public_maker, public_price, slug
-from collect_public import public_run, sha256, verified_media, write_json
+from build import FLAG_RULES, copy_frontend, estimate_cost, estimate_request_cost, price_id, public_maker, public_price, slug
+from collect_public import public_run, response_usage, sha256, verified_media, write_json
 
 SITE = ROOT / "data/site"
 
@@ -423,9 +423,13 @@ def build_from_runs(runs_root: Path, output: Path, listener_scores: Path,
             run["provenance"].pop("profile_sha256")
             # Known partial usage is a lower bound, not a zero bill.
             if run["cost_usd"] is None and row["usage_unknown"]:
-                lower = estimate_cost(row["totals"], public_price(prices.get(key, {})))
+                price = public_price(prices.get(key, {}))
+                requests = response_usage(directory, row["totals"], allow_partial=True)
+                costs = [estimate_request_cost(request, price) for request in requests] if requests else []
+                # Individual receipts preserve context tiers even if a response was interrupted.
+                lower = sum(costs) if costs and all(cost is not None for cost in costs) else estimate_cost(row["totals"], price)
                 if lower is not None:
-                    run.update(cost_usd=lower, cost_lower_bound=True)
+                    run.update(cost_usd=round(lower, 6), cost_lower_bound=True)
             summary.update(slug=run_slug, score=run["score"])
             group_name = re.sub(r", attempt \d+\)$", ")", run["name"])
             group_name = re.sub(r" \(attempt \d+\)$", "", group_name)
