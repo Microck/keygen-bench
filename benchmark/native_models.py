@@ -39,17 +39,18 @@ class RouteAdapter:
     strict_tools: bool = False
     encrypted_reasoning: bool = False
     probe_session_header: str | None = None
+    sdk_opt_ins: tuple[tuple[str, str], ...] = ()
 
 
 # One auditable declaration per route. Never infer trust, policy, or SDK from
 # an arbitrary endpoint hostname or model name. Protocol and destination checks
 # remain mandatory even when a new adapter is added.
 ROUTE_ADAPTERS = {
-    "go": RouteAdapter(frozenset({"chat", "responses", "messages"}), "fixed", ("opencode.ai", "/zen/go/v1"), policies=frozenset({"upstream_outage"}), user_agent="keygen-benchmark/mini-swe-agent-2.4.6", probe_session_header="x-opencode-session"),
+    "go": RouteAdapter(frozenset({"chat", "responses", "messages"}), "fixed", ("opencode.ai", "/zen/go/v1"), policies=frozenset({"upstream_outage"}), user_agent="keygen-benchmark/mini-swe-agent-2.4.6", probe_session_header="x-opencode-session", sdk_opt_ins=(("messages", "thinking"),)),
     "vercel": RouteAdapter(frozenset({"chat", "responses"}), "fixed", ("ai-gateway.vercel.sh", "/v1")),
     "nim": RouteAdapter(frozenset({"chat"}), "fixed", ("integrate.api.nvidia.com", "/v1")),
     "google": RouteAdapter(frozenset({"chat"}), "fixed", ("generativelanguage.googleapis.com", "/v1beta"), "gemini", omit_api_base=True),
-    "mistral": RouteAdapter(frozenset({"chat"}), "fixed", ("api.mistral.ai", "/v1"), "mistral"),
+    "mistral": RouteAdapter(frozenset({"chat"}), "fixed", ("api.mistral.ai", "/v1"), "mistral", sdk_opt_ins=(("chat", "reasoning_effort"),)),
     "cohere": RouteAdapter(frozenset({"chat"}), "fixed", ("api.cohere.ai", "/compatibility/v1"), strict_tools=True),
     "openai": RouteAdapter(frozenset({"chat", "responses"}), "fixed", ("api.openai.com", "/v1")),
     "anthropic": RouteAdapter(frozenset({"messages"}), "fixed", ("api.anthropic.com", "/v1"), policies=frozenset({"content_filter"})),
@@ -57,7 +58,7 @@ ROUTE_ADAPTERS = {
     "anthropic_oauth": RouteAdapter(frozenset({"messages"}), "bridge", policies=frozenset({"content_filter"})),
     "codex_oauth": RouteAdapter(frozenset({"responses"}), "bridge", encrypted_reasoning=True),
     "xai_oauth": RouteAdapter(frozenset({"responses"}), "bridge"),
-    "custom": RouteAdapter(frozenset({"chat", "responses", "messages"}), "custom"),
+    "custom": RouteAdapter(frozenset({"chat", "responses", "messages"}), "custom", sdk_opt_ins=(("messages", "thinking"),)),
 }
 PROVIDERS = set(ROUTE_ADAPTERS)
 BRIDGE_PROVIDERS = {name for name, adapter in ROUTE_ADAPTERS.items() if adapter.destination == "bridge"}
@@ -490,13 +491,9 @@ def sdk_controls(model: dict) -> dict:
     LiteLLM accepts Anthropic thinking only for Claude names unless the caller opts in with
     its documented allowed_openai_params flag. Go and custom Messages may serve other models.
     """
-    if model["provider"] in {"go", "custom"} and model["api"] == "messages" and "thinking" in model["generation"]:
-        return {"allowed_openai_params": ["thinking"]}
-    # LiteLLM's Mistral provider lists reasoning_effort only for "magistral" names, and for those it injects a
-    # system prompt instead of sending the field. The opt-in sends the declared field unaltered for any name.
-    if model["provider"] == "mistral" and "reasoning_effort" in model["generation"]:
-        return {"allowed_openai_params": ["reasoning_effort"]}
-    return {}
+    opt_ins = [field for api, field in ROUTE_ADAPTERS[model["provider"]].sdk_opt_ins
+               if model["api"] == api and field in model["generation"]]
+    return {"allowed_openai_params": opt_ins} if opt_ins else {}
 
 
 def capability_override(model: dict) -> dict | None:
