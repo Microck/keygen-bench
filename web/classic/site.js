@@ -814,9 +814,9 @@ export async function mount(root, ctx) {
           h("div", { class: "muted wanted" }, h("span", { style: { gridColumn: "1 / span 2" } }, "Model"), h("span", {}, "Price in/out"), h("span", { class: "we" }, "Est.")),
           ...SUPPORT.wanted.map((w) => {
             const accessOnly = w.accessOnly === true;
-            const range = accessOnly ? "Subscription-only access; no budget estimate set." : `3 typical runs ${usd(w.typical)}. 3 long runs ${usd(w.est)} (the estimate). 3 heavy runs ${usd(w.heavy)}.`;
+            const range = accessOnly ? "Access unavailable or unconfirmed; no budget estimate set." : `3 typical runs ${usd(w.typical)}. 3 long runs ${usd(w.est)} (the estimate). 3 heavy runs ${usd(w.heavy)}.`;
             const pct = accessOnly ? 0 : Math.min(100, (w.raised / w.est) * 100);
-            const raised = accessOnly ? "Muse Code access needed" : `${usd(w.raised)} of ${usd(w.est)} raised`;
+            const raised = accessOnly ? w.accessLabel : `${usd(w.raised)} of ${usd(w.est)} raised`;
             return h("div", { class: "wanted", ...(accessOnly ? { "data-access-only": "true" } : {}) },
               badge(w.maker),
               h("span", { class: "wn" }, w.model,
