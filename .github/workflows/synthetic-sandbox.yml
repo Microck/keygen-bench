@@ -41,6 +41,8 @@ jobs:
           KEYGEN_FT2_ANALYSIS: ${{ runner.temp }}/keygen-ft2-analysis
           LITELLM_LOCAL_MODEL_COST_MAP: 'True'
         run: python benchmark/contrib/cli.py setup --home "$RUNNER_TEMP/keygen-setup"
+      - name: Verify scorer fingerprint initialization
+        run: '"$RUNNER_TEMP/keygen-setup/venv/bin/python" -m unittest benchmark.tests.test_score.ScoreTests.test_numerical_identity_initializes_mmap_before_fingerprinting'
       - name: Generate a synthetic tracker module
         run: |
           "$RUNNER_TEMP/keygen-setup/venv/bin/python" - <<'PY'
