@@ -201,6 +201,8 @@ class RunsBuilderTests(unittest.TestCase):
                             "cached_input_usd_per_m": .1, "output_usd_per_m": 7.5}]}
         self.assertAlmostEqual(sum(estimate_request_cost(row, price) for row in requests), .1025)
         self.assertIsNone(response_usage(directory, {**totals, "requests": 3}))
+        self.assertEqual(response_usage(directory, {**totals, "requests": 3}, allow_partial=True), requests)
+        self.assertIsNone(response_usage(directory, {**totals, "requests": 1}, allow_partial=True))
         self.assertIsNone(response_usage(directory, {**totals, "prompt_tokens": 400001}))
 
     def tearDown(self):

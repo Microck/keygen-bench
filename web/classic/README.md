@@ -95,6 +95,8 @@ ranked-only export.
 The Fable 5.2 campaign used Claude subscription OAuth through CLIProxyAPI 8.0.62 with a temporary Claude Code version-header override (2.1.293). Captured controller-to-bridge settings and model identity do not establish the exact prompt or settings received upstream. Historical OAuth runs also lack complete upstream prompt evidence, so differences in bridge-added instructions cannot be ruled out; this is not proof that they differed.
 
 The GPT-6.1 Sol Pro addition records the three attempts and readiness pilot at OpenAI API list prices; these estimates are not a provider bill.
+The GPT-6 Sol Pro addition records the three attempts and readiness pilot at OpenAI API list prices; these estimates are not a provider bill.
+The GPT-6 Luna Pro ledger includes three attempts and its readiness pilot. One interrupted response has unknown usage, so its recorded per-response cost is a lower bound, not a complete charge.
 
 The Fable 5.2 addition uses `data/site/fable52-spend-usage.json` for the three attempts and readiness pilot. Cache-write TTL is unavailable in the receipts, so the builder retains conservative bounds. Subscription usage is not an API bill.
 
