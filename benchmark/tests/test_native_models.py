@@ -657,6 +657,19 @@ class OpenAIReasoningModeTests(unittest.TestCase):
 
 
 class NativePolicyTests(unittest.TestCase):
+    def test_sdk_opt_ins_are_route_protocol_and_field_scoped(self):
+        for provider in ("go", "custom"):
+            model = {"provider": provider, "api": "messages", "generation": {"thinking": {}}}
+            self.assertEqual(native.sdk_controls(model), {"allowed_openai_params": ["thinking"]})
+            model["api"] = "chat"
+            self.assertEqual(native.sdk_controls(model), {})
+        model = {"provider": "mistral", "api": "chat", "generation": {"reasoning_effort": "high"}}
+        self.assertEqual(native.sdk_controls(model), {"allowed_openai_params": ["reasoning_effort"]})
+        model["generation"] = {}
+        self.assertEqual(native.sdk_controls(model), {})
+        model = {"provider": "openai", "api": "chat", "generation": {"reasoning_effort": "high"}}
+        self.assertEqual(native.sdk_controls(model), {})
+
     def test_direct_provider_route_and_protocol_restrictions(self):
         routes = (("openai", "https://api.openai.com/v1", {"chat", "responses"}),
                   ("anthropic", "https://api.anthropic.com/v1", {"messages"}))
