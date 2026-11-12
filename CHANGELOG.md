@@ -8,6 +8,7 @@
 
 ### Added
 
+- Add three GPT-6 Sol Pro benchmark attempts.
 - Add three GPT-6 Luna Pro benchmark attempts.
 
 - Add Gemini 4 Carbon benchmark attempts and the separately retained infrastructure retry.
