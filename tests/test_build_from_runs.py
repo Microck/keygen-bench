@@ -371,6 +371,15 @@ class RunsBuilderTests(unittest.TestCase):
             "prompt_tokens": 957, "cached_tokens": 186, "completion_tokens": 100,
         }, published, round_digits=None), 0.00017844)
 
+    def test_google_launch_source_keeps_hydrogen_prices(self):
+        source = "https://blog.google/innovation-and-ai/models-and-research/gemini-models/introducing-gemini-4-hydrogen/"
+        price = {"id": "gemini-4-hydrogen", "maker": "Google", "source_url": source,
+                 "input_usd_per_m": 1.5, "cached_input_usd_per_m": 0.075, "output_usd_per_m": 7.5}
+        self.assertEqual(builder.public_price(price), {
+            "input_usd_per_m": 1.5, "cached_input_usd_per_m": 0.075,
+            "output_usd_per_m": 7.5, "source_url": source,
+        })
+
     def test_new_attempt_uses_existing_model_metadata(self):
         self.identities.clear()
         self.write_site()
