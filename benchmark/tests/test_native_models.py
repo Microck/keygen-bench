@@ -469,6 +469,19 @@ class NativeProtocolTests(unittest.TestCase):
         self.assertEqual(mapped["thinkingConfig"], {"thinkingLevel": "high", "includeThoughts": True})
         self.assertEqual(mapped["max_output_tokens"], 65536)
 
+    def test_gemini_native_xhigh_preserves_thinking_and_output_cap(self):
+        spec = model_spec("chat", "google", native.GOOGLE_BASE)
+        spec["model"] = spec["response_model"] = "gemini-4-hydrogen"
+        native_body = {"generationConfig": {"thinkingConfig": {"thinkingLevel": "XHIGH", "includeThoughts": True}}}
+        spec["generation"] = {"max_tokens": 65536, "extra_body": native_body}
+        spec["tier"] = {"level": "xhigh", "reasoning": {"extra_body": native_body}, "spec_sha256": "0" * 64}
+        effective = native.validate_model({"native": {"timeout_seconds": 60, "retries": 2}}, spec)
+        self.assertEqual(effective["expected_transmitted_generation"]["thinkingConfig"], native_body["generationConfig"]["thinkingConfig"])
+        self.assertEqual(effective["expected_transmitted_generation"]["max_output_tokens"], 65536)
+        spec["generation"]["reasoning_effort"] = "high"
+        with self.assertRaises(ValueError):
+            native.validate_model({"native": {"timeout_seconds": 60, "retries": 2}}, spec)
+
     def test_gemini_4_carbon_sends_high_thinking_and_output_cap(self):
         spec = model_spec("chat", "google", native.GOOGLE_BASE)
         spec["model"] = spec["response_model"] = "gemini-4-carbon"

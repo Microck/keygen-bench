@@ -48,7 +48,7 @@ FLAG_RULES = {
 # Access routes (proxies, subscriptions, relays) are private: nothing below may reach data.json.
 PROVIDER_PREFIX = r"^(devin/|go-|vercel-[a-z]+/)"
 PUBLIC_PRICE_HOSTS = (  # reviewed maker pricing and explicitly supported provider catalogs
-    "developers.openai.com", "openai.com", "platform.claude.com", "ai.google.dev", "docs.x.ai", "api-docs.deepseek.com",
+    "developers.openai.com", "openai.com", "platform.claude.com", "ai.google.dev", "blog.google", "docs.x.ai", "api-docs.deepseek.com",
     "docs.z.ai", "platform.kimi.ai", "alibabacloud.com", "mimo.mi.com", "platform.minimax.io", "minimax.io",
     "dev.meta.ai", "docs.mistral.ai", "docs.devin.ai", "tencentcloud.com",
     "longcat.chat", "cohere.com", "api.inceptionlabs.ai", "platform.stepfun.ai", "docs.arcee.ai",

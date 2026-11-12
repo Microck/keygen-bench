@@ -316,6 +316,9 @@ def transmitted_reasoning(model: dict) -> dict:
     """
     generation = model["generation"]
     if model.get("provider") == "google":
+        native = (generation.get("extra_body") or {}).get("generationConfig", {}).get("thinkingConfig")
+        if native is not None:
+            return {"thinkingConfig": native}
         effort = generation.get("reasoning_effort")
         return {} if effort is None else {"thinkingConfig": {"thinkingLevel": effort, "includeThoughts": True}}
     wire = {key: generation[key] for key in REASONING_FIELDS[model["api"]]
@@ -332,6 +335,10 @@ def generation_tier(api: str, generation: dict) -> str | None:
     if api == "chat":
         template = wire.get("chat_template_kwargs") or {}
         effort = wire.get("reasoning_effort", template.get("reasoning_effort"))
+        if effort is None:
+            native = (wire.get("generationConfig") or {}).get("thinkingConfig") or {}
+            level = native.get("thinkingLevel")
+            effort = level.lower() if isinstance(level, str) else None
         if effort is None and (template.get("thinking") is True or template.get("enable_thinking") is True):
             effort = "thinking-on"
     elif api == "responses":
@@ -378,6 +385,16 @@ def _check_thinking(thinking: Any, max_tokens: int) -> None:
 
 
 def _check_extra_body(model: dict, extra: Any) -> None:
+    if (model["provider"], model["api"]) == ("google", "chat"):
+        # Gemini supports native thinking levels in generationConfig. The SDKs
+        # extra_body is its documented way to pass provider-native fields.
+        config = extra.get("generationConfig") if isinstance(extra, dict) and set(extra) == {"generationConfig"} else None
+        thinking = config.get("thinkingConfig") if isinstance(config, dict) and set(config) == {"thinkingConfig"} else None
+        if (not isinstance(thinking, dict) or set(thinking) != {"thinkingLevel", "includeThoughts"}
+                or thinking["thinkingLevel"] not in {"LOW", "MEDIUM", "HIGH", "XHIGH"}
+                or thinking["includeThoughts"] is not True):
+            raise ValueError("Google native thinking requires a supported level and includeThoughts")
+        return
     allowed = EXTRA_BODY.get((model["provider"], model["api"]))
     if allowed is None:
         raise ValueError("extra_body pass-through is only approved for NIM Chat")
@@ -435,14 +452,18 @@ def _generation(model: dict) -> dict:
         raise ValueError("Declare one NIM reasoning control: top-level reasoning_effort or chat_template_kwargs")
     if model.get("provider") == "google":
         # Gemini: one output cap and one thinkingLevel effort; nothing else is declared.
-        if set(value) - {"max_tokens", "reasoning_effort"} or "max_tokens" not in value:
-            raise ValueError("Google routes declare exactly max_tokens and optionally reasoning_effort")
+        if set(value) - {"max_tokens", "reasoning_effort", "extra_body"} or "max_tokens" not in value:
+            raise ValueError("Google routes require max_tokens and one supported reasoning control")
+        if "reasoning_effort" in value and "extra_body" in value:
+            raise ValueError("Google routes declare only one thinking control")
         if "reasoning_effort" in value and value["reasoning_effort"] not in GOOGLE_EFFORTS:
             raise ValueError("Gemini thinkingLevel supports only minimal, low, medium and high")
     check_tier(model)
     # The native converter must not silently cap, translate or drop declared settings.
     mapped = _map_generation(model, value)
     wire = mapped | mapped.get("extra_body", {})
+    if model.get("provider") == "google" and isinstance(wire.get("generationConfig"), dict):
+        wire = wire | wire["generationConfig"]
     if any(wire.get(key) != declared for key, declared in transmitted_reasoning(model).items()):
         raise ValueError("Native SDK would alter or drop the declared reasoning control")
     if model.get("provider") == "google" and wire.get("max_output_tokens") != value["max_tokens"]:
@@ -645,6 +666,8 @@ def validate_model(config: dict, model: dict) -> dict:
     # SDK optional params include transport defaults and an extra_body envelope.
     # Both SDK paths expand extra_body into the wire body; it is not a generation field.
     wire_parameters = effective_generation | effective_generation.get("extra_body", {})
+    if provider == "google" and isinstance(wire_parameters.get("generationConfig"), dict):
+        wire_parameters = wire_parameters | wire_parameters["generationConfig"]
     transmitted_generation = {key: wire_parameters[key] for key in WIRE_GENERATION_FIELDS
                               if key in wire_parameters}
     effective = {
