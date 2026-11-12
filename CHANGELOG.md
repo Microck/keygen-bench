@@ -2,9 +2,13 @@
 
 ## Unreleased
 
+- Show the recorded lower-bound cost when an interrupted response leaves usage incomplete.
+
 - Show bounded cost estimates in benchmark video footers.
 
 ### Added
+
+- Add three GPT-6 Luna Pro benchmark attempts.
 
 - Add Gemini 4 Carbon benchmark attempts and the separately retained infrastructure retry.
 

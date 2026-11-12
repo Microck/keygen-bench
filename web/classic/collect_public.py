@@ -27,7 +27,7 @@ from build import FLAG_RULES, compact_trace, estimate_cost, estimate_cost_range,
 SCORE_VERSION = re.search(r'^SCORE_VERSION = "([^"]+)"$', (ROOT / "benchmark/score.py").read_text(), re.M)[1]
 
 
-def response_usage(directory: Path, totals: dict) -> list[dict] | None:
+def response_usage(directory: Path, totals: dict, *, allow_partial: bool = False) -> list[dict] | None:
     """Use complete Responses receipts, not the controller's lossy cache totals.
 
     Other protocols retain their existing aggregate accounting. Reconcile the
@@ -53,7 +53,8 @@ def response_usage(directory: Path, totals: dict) -> list[dict] | None:
                 raise ValueError(f"{path}: invalid response cache usage")
             requests.append({"prompt_tokens": prompt, "completion_tokens": output,
                              "cached_tokens": cached, "cache_write_tokens": writes})
-    if (not requests or len(requests) != totals.get("requests")
+    if (not requests or (not allow_partial and len(requests) != totals.get("requests"))
+            or len(requests) > totals.get("requests", 0)
             or any(sum(request[key] for request in requests) != totals.get(key)
                    for key in ("prompt_tokens", "completion_tokens"))):
         return None
