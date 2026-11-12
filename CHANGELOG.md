@@ -6,6 +6,8 @@
 
 ### Added
 
+- Add three GPT-6.1 Sol Pro benchmark attempts.
+
 - Add Gemini 4 Carbon benchmark attempts and the separately retained infrastructure retry.
 
 - Add o3 benchmark attempts and their recorded usage.
