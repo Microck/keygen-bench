@@ -365,6 +365,7 @@ def copy_frontend(publish_root: Path) -> None:
     """Copy the canonical frontend's public asset allowlist."""
     assets = ["index.html", "crypto.html", "app.js", "site.js"]
     assets += [str(path.relative_to(HERE)) for path in (HERE / "core").glob("*.js")]
+    assets += ["core/vendor/foresight.js", "core/vendor/foresight-LICENSE.txt"]
     assets += ["core/ft2.css", "core/ft2gfx/tables.json", "core/ft2gfx/LICENSE-gfx.txt"]
     assets += [str(path.relative_to(HERE)) for path in (HERE / "core/fonts").glob("*.woff2")]
     assets += [str(path.relative_to(HERE)) for path in (HERE / "core/ft2gfx").glob("*.png")]

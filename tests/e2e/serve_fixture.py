@@ -4,7 +4,6 @@ import http.server
 import json
 import math
 from pathlib import Path
-import shutil
 import signal
 import struct
 import sys
@@ -13,15 +12,14 @@ import wave
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / 'web/classic'))
 from serve import Handler
+from build import copy_frontend
 
 def stop(*_):
     raise KeyboardInterrupt
 signal.signal(signal.SIGTERM, stop)
 with tempfile.TemporaryDirectory(prefix='keygen-browser-fixture-') as temp:
     root = Path(temp)
-    for name in ['index.html', 'app.js', 'site.js', 'crypto.html']:
-        shutil.copy2(ROOT / 'web/classic' / name, root / name)
-    shutil.copytree(ROOT / 'web/classic/core', root / 'core')
+    copy_frontend(root)
     dist = root / 'dist'
     dist.mkdir()
     xm = bytearray(345)

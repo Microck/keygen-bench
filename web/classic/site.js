@@ -7,6 +7,7 @@ import { drawPatternFit, drawScopes } from "./core/pattern.js";
 import { Player } from "./core/player.js";
 import { loadXM, loadTrace, prefetchXM, mediaUrl, money, usd, tokens, mmss, rankingRows } from "./core/data.js";
 import { h, badge, dropdown, makerItems, modelItems, scoreColor } from "./core/ui.js";
+import { observeIntent } from "./core/prefetch.js";
 import { SCORING, SCORING_NOTES, DISCLAIMER, KEYGEN, OVERVIEW, LISTENER_MODEL, SETUP, PROMPTS, SUPPORT, SITE, PAGES } from "./core/content.js";
 import { fmt } from "./core/xm.js";
 import { slide, TRANSITION_CSS } from "./core/transitions.js";
@@ -219,6 +220,7 @@ export async function mount(root, ctx) {
         h("a", { href: SITE.repo, target: "_blank", rel: "noopener", title: "Microck/keygen-bench on GitHub", "aria-label": "Source on GitHub" }, h("img", { src: linkIcon("github"), alt: "" })))), tabs);
   const shell = h("div", { class: "ft2 vb" }, bar, main);
   root.append(shell);
+  const stopPrefetch = observeIntent(shell);
   let raf = 0, k = 1;
   const cmParam = new URLSearchParams(location.search).get("cm");
   const S = { sort: "score", asc: false, maker: "All", sel: slug, exh: true, scoringTab: "keygen", view: "best", mode: ctx.mode ?? "best", cm: MARKERS.some((m) => m.id === cmParam) ? cmParam : MARKERS[0].id };
@@ -244,7 +246,9 @@ export async function mount(root, ctx) {
   addEventListener("resize", fit);
 
   function renderTabs() {
-    tabs.replaceChildren(...PAGES.map((p) => h("button", { class: "btn", "aria-current": p.id === page ? "page" : null, onclick: () => ctx.go({ page: p.id }) }, p.label)));
+    tabs.replaceChildren(...PAGES.map((p) => h("button", { class: "btn", "aria-current": p.id === page ? "page" : null,
+      onintent: p.id === "viewer" ? () => prefetchXM(data, data.bySlug[slug]) : null,
+      onclick: () => ctx.go({ page: p.id }) }, p.label)));
   }
   const meter = (v, max, color) => h("div", { class: "meter sunken" }, h("i", { style: { width: `calc(${Math.max(0, Math.min(1, v / max)) * 100}% - 1px)`, background: color ?? "var(--pattext)" } }));
 
@@ -603,11 +607,11 @@ export async function mount(root, ctx) {
         select(r.slug); renderTable(); renderDetail();
         if (focusSelector) [...main.querySelectorAll(focusSelector)].find((el) => el.dataset.slug === r.slug)?.focus({ preventScroll: true });
       };
-      tbody.replaceChildren(...list.map((r) => h("tr", { class: (r.slug === S.sel ? "sel " : "") + (r.exhibition ? "exh" : ""), onclick: () => selectRow(r), ondblclick: () => ctx.go({ page: "viewer", run: r.slug }) },
+      tbody.replaceChildren(...list.map((r) => h("tr", { class: (r.slug === S.sel ? "sel " : "") + (r.exhibition ? "exh" : ""), onintent: () => prefetchXM(data, r), onclick: () => selectRow(r), ondblclick: () => ctx.go({ page: "viewer", run: r.slug }) },
         ...cols.map((c) => h("td", { class: [c.num ? "num" : "", c.cls ?? ""].join(" ") }, c.cell(r, selectRow))))));
       const podium = average ? rankingRows(data, { mode: S.mode, maker: S.maker, sort: "rank", asc: true }).filter((r) => r.rank)
         : data.runs.filter((r) => r.rank && (S.maker === "All" || r.maker === S.maker)).sort((a, b) => a.rank - b.rank);
-      top3.replaceChildren(...podium.slice(0, 3).map((r) => h("button", { class: "panel raised podium-choice", type: "button", "data-slug": r.slug, title: `${S.mode === "average" ? "Average" : "Best"} position ${r.rank}. ${attemptScoreTitle(r)}`, "aria-label": `Select ${r.label}. ${S.mode === "average" ? "Average" : "Best"} position ${r.rank}. ${attemptScoreTitle(r)}`, style: { flexDirection: "row", alignItems: "center", gap: "5px", cursor: "pointer" }, onclick: () => selectRow(r) },
+      top3.replaceChildren(...podium.slice(0, 3).map((r) => h("button", { class: "panel raised podium-choice", type: "button", "data-slug": r.slug, title: `${S.mode === "average" ? "Average" : "Best"} position ${r.rank}. ${attemptScoreTitle(r)}`, "aria-label": `Select ${r.label}. ${S.mode === "average" ? "Average" : "Best"} position ${r.rank}. ${attemptScoreTitle(r)}`, style: { flexDirection: "row", alignItems: "center", gap: "5px", cursor: "pointer" }, onintent: () => prefetchXM(data, r), onclick: () => selectRow(r) },
         h("div", { class: "grow", style: { display: "grid", gap: "2px", minWidth: "0" } },
           h("div", { class: "row", style: { gap: "4px" } },
             h("span", { class: "big" }, String(r.rank)),
@@ -624,11 +628,11 @@ export async function mount(root, ctx) {
       const m = r.model;
       detail.replaceChildren(
         h("section", { class: "panel raised" }, ...scoreCard(r, { compact: true }),
-          h("button", { class: "btn", style: { height: "16px" }, onclick: () => ctx.go({ page: "viewer", run: r.slug }) }, "Open in tracker")),
+          h("button", { class: "btn", style: { height: "16px" }, onintent: () => prefetchXM(data, r), onclick: () => ctx.go({ page: "viewer", run: r.slug }) }, "Open in tracker")),
         ...(m.declared > 1 ? [h("section", { class: "panel raised" }, h("h2", {}, "Attempts"),
           h("div", { class: "attempts sunken", title: consistencyTitle(m) },
             ...m.slots.flatMap((s) => [
-              s.slug ? h("button", { class: "btn", "aria-pressed": String(s.slug === r.slug), onclick: () => { select(s.slug); if (!average && S.view === "best" && !data.bySlug[s.slug].isBest) S.view = "all"; ranking(); } }, "#" + s.ordinal) : h("span", { class: "muted" }, "#" + s.ordinal),
+              s.slug ? h("button", { class: "btn", "aria-pressed": String(s.slug === r.slug), onintent: () => prefetchXM(data, data.bySlug[s.slug]), onclick: () => { select(s.slug); if (!average && S.view === "best" && !data.bySlug[s.slug].isBest) S.view = "all"; ranking(); } }, "#" + s.ordinal) : h("span", { class: "muted" }, "#" + s.ordinal),
               h("span", { class: s.state === "ok" ? "on" : "muted" }, s.state === "ok" ? (s.slug === m.best.slug ? "best" : "") : s.state === "failed" ? `failed (${s.status.toLowerCase().replaceAll("_", " ")})` : s.state),
               h("span", { class: "on", style: { textAlign: "right" } }, s.state === "ok" ? s.score.toFixed(1) : "")])),
           h("div", { class: "row", style: { padding: "0 2px" } }, h("span", { class: "muted grow" }, "Consistency"), marker().render(m)))] : []),
@@ -697,11 +701,12 @@ export async function mount(root, ctx) {
         h("div", { class: "dist sunken", onmouseleave: () => show(focused) },
           ...pool.map((r) => h("button", { type: "button", style: { left: pct(get(r)), background: scoreColor((get(r) / max) * 100) }, "aria-label": `${r.label}, ${m.title}: ${fmtV(get(r))}. Open in the tracker.`,
             onmouseenter: () => show(r), onfocus: () => { focused = r; show(r); }, onblur: () => { focused = null; show(null); },
+            onintent: () => prefetchXM(data, r),
             onclick: () => ctx.go({ page: "viewer", run: r.slug }) }))),
         h("div", { class: "row muted", style: { justifyContent: "space-between" } }, h("span", {}, "0"), readout, h("span", {}, String(m.max))),
         ...(get(hi) === get(lo) ? [h("div", { class: "muted" }, `Every ranked model gets ${fmtV(get(hi))} here.`)] : [["Highest", hi], ["Lowest", lo]].map(([k, r]) => h("div", { class: "row" }, h("span", { class: "muted", style: { width: "44px" } }, k), badge(r.maker), h("span", { class: "grow" }, r.label), h("span", {}, fmtV(get(r))), listen(r)))));
     }
-    const listen = (r) => h("button", { class: "btn", style: { height: "14px" }, title: "Open in the tracker", onclick: () => ctx.go({ page: "viewer", run: r.slug }) }, "Listen");
+    const listen = (r) => h("button", { class: "btn", style: { height: "14px" }, title: "Open in the tracker", onintent: () => prefetchXM(data, r), onclick: () => ctx.go({ page: "viewer", run: r.slug }) }, "Listen");
     const exampleRun = () => (data.bySlug[slug].failed ? data.runs.find((r) => r.name === "minimax-m3") ?? data.runs[0] : data.bySlug[slug]);
     const subjects = [
       { id: "keygen", label: "What is a keygen?", render: () => [head(KEYGEN.title), ...KEYGEN.lines.map(para), head(DISCLAIMER.title), ...DISCLAIMER.lines.map(para)] },
@@ -846,7 +851,7 @@ export async function mount(root, ctx) {
     main.style.gridTemplateRows = "minmax(0,1fr)";
     const { dated, undated } = modelChangelog(data.byModel);
     const modelButtons = (models) => h("div", { class: "change-models" }, ...models.map((model) =>
-      h("button", { class: "btn", onclick: () => ctx.go({ page: "viewer", run: model.best.slug }) }, model.best.label)));
+      h("button", { class: "btn", onintent: () => prefetchXM(data, model.best), onclick: () => ctx.go({ page: "viewer", run: model.best.slug }) }, model.best.label)));
     main.replaceChildren(h("section", { class: "panel raised" },
       h("h2", {}, "MODEL CHANGELOG"),
       h("div", { class: "well sunken ft2-scroll changelog-list" },
@@ -917,6 +922,6 @@ export async function mount(root, ctx) {
       else if (runChanged && page === "viewer") loadRun(slug);
       else if (runChanged || modeChanged) renderPage();
     },
-    destroy() { cancelAnimationFrame(raf); V?.player?.destroy(); removeEventListener("resize", fit); },
+    destroy() { stopPrefetch(); cancelAnimationFrame(raf); V?.player?.destroy(); removeEventListener("resize", fit); },
   };
 }
