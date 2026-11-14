@@ -153,12 +153,12 @@ export function loadTrace(data, run, priority = "high") {
   if (!run || Array.isArray(run.trace) || !run.media.trace) return Promise.resolve();
   if (!traceCache.has(run.slug)) {
     const trace = fetch(mediaUrl(data, run.media.trace), { priority })
-      .then((r) => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
-      .then((t) => { run.trace = t; });
+      .then((r) => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); });
     trace.catch(() => traceCache.delete(run.slug));
     traceCache.set(run.slug, trace);
   }
-  return traceCache.get(run.slug);
+  // Ranking rows can be copies: every caller needs the cached trace on its own run.
+  return traceCache.get(run.slug).then((trace) => { run.trace = trace; });
 }
 // Warm the caches for a run the visitor is likely to open next, without competing with visible work.
 export function prefetchXM(data, run) {

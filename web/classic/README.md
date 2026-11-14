@@ -23,6 +23,8 @@ callbacks. Hover, keyboard focus/highlighting and touch remain fallback triggers
 Prediction warms only the existing parsed XM and playback-trace caches at low
 fetch priority. It does not navigate, start playback or preload MP3/FLAC audio.
 Actual selection reuses in-flight/completed loads and retries failed preloads.
+Trace cache hits populate each requesting run, including the canonical tracker
+run after an Average-ranking row has warmed the same slug.
 All speculative paths, including neighboring-run warming, skip offline,
 Save-Data and `slow-2g`/`2g` connections when the browser exposes that information;
 explicit selection still loads normally. Scroll and tab-ahead prediction are

@@ -35,6 +35,8 @@
 
 ### Fixed
 
+- Preserve tracker playback traces when an Average-ranking row prefetches them before the tracker opens.
+
 - Group model changelog entries by date and update untested GPT Pro estimates using recorded GPT-5 Pro usage.
 
 - Retry transient LiteLLM connection errors within the existing bounded policy.

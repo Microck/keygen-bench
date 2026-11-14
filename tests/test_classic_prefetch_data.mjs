@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { loadXM, loadTrace, prefetchXM } from "../web/classic/core/data.js";
+import { loadXM, loadTrace, prefetchXM, rankingRows } from "../web/classic/core/data.js";
 
 const data = { base: "/prefetch/" };
 const trace = [[0, 0, 0, 0], [44100, 0, 1, 0]];
@@ -69,6 +69,36 @@ test("prediction and activation share pending and completed XM/trace loads witho
   await loadTrace(data, target);
   assert.equal(requests.length, 2);
 });
+
+for (const pending of [true, false]) {
+  test(`Average ranking prefetch populates the tracker run from a ${pending ? "pending" : "completed"} trace`, async (t) => {
+    const requests = [];
+    let releaseTrace;
+    environment(t, { onLine: true }, (url, options) => {
+      requests.push([url, options.priority]);
+      if (url.endsWith(".json")) return new Promise((resolve) => { releaseTrace = () => resolve(response(url)); });
+      return Promise.resolve(response(url));
+    });
+    const canonical = { ...run(`average-${pending}`), isBest: true, score: 50, attempt: 1 };
+    canonical.model = { key: canonical.slug, averageScore: 50, averageComplete: true, averageRank: 1 };
+    const publication = { ...data, runs: [canonical], bySlug: { [canonical.slug]: canonical } };
+    const [row] = rankingRows(publication, { mode: "average" });
+    assert.notEqual(row, canonical);
+    const prediction = prefetchXM(publication, row);
+    if (!pending) {
+      releaseTrace();
+      await prediction;
+    }
+    const activation = loadTrace(publication, publication.bySlug[row.slug]);
+    if (pending) releaseTrace();
+    await Promise.all([prediction, activation]);
+    assert.deepEqual(canonical.trace, trace);
+    assert.deepEqual(row.trace, trace);
+    assert.deepEqual(requests, [
+      [`/prefetch/average-${pending}.xm`, "low"], [`/prefetch/average-${pending}.json`, "low"],
+    ]);
+  });
+}
 
 test("failed speculation settles harmlessly and activation retries both files at high priority", async (t) => {
   let fail = true;
