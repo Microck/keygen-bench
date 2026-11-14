@@ -8,6 +8,28 @@ from pathlib import Path
 
 
 class ExportVersionTest(unittest.TestCase):
+    def test_publication_includes_self_hosted_predictor_and_licenses(self):
+        root = Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary)
+            script = """
+import sys
+from pathlib import Path
+sys.path.insert(0, 'web/classic')
+from build import copy_frontend
+copy_frontend(Path(sys.argv[1]))
+"""
+            process = subprocess.run([sys.executable, "-c", script, str(output)],
+                                     cwd=root, capture_output=True, text=True, timeout=30)
+            self.assertEqual(process.returncode, 0, process.stderr)
+            for relative in ("core/prefetch.js", "core/vendor/foresight.js",
+                             "core/vendor/foresight-LICENSE.txt"):
+                with self.subTest(relative=relative):
+                    self.assertEqual((output / relative).read_bytes(),
+                                     (root / "web/classic" / relative).read_bytes())
+            self.assertFalse((output / "build.py").exists())
+            self.assertFalse((output / "node_modules").exists())
+
     def test_incompatible_evaluation_stops_before_writing_media(self):
         root = Path(__file__).resolve().parents[1]
         with tempfile.TemporaryDirectory() as temporary:
@@ -96,7 +118,7 @@ class DemoCostTest(unittest.TestCase):
         spec = importlib.util.spec_from_file_location("make_demo", path)
         demo = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(demo)
-        run = {"model_key": "test", "score": 1, "maker": "test", "attempt": 1}
+        run = {"model_key": "test", "name": "Test", "score": 1, "maker": "test", "attempt": 1}
         self.assertIn("cost $23.66", demo.bar_html(720, 46, {**run, "cost_range_usd": {"min": 20.46, "max": 23.6576}}, 1))
         self.assertIn("cost $1.25", demo.bar_html(720, 46, {**run, "cost_usd": 1.25}, 1))
         self.assertIn("cost $0.00", demo.bar_html(720, 46, {**run, "cost_usd": 0}, 1))

@@ -10,6 +10,8 @@
 
 ### Added
 
+- Predict tracker selections from pointer movement with self-hosted ForesightJS, warming the existing XM and playback-trace caches before activation. Hover, keyboard and touch fallbacks share the cache; speculative loading respects offline, Data Saver and slow connections.
+
 - Add three Gemini 4 Hydrogen benchmark attempts.
 
 - Add three GPT-6.1 Sol Pro benchmark attempts.

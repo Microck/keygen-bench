@@ -162,8 +162,13 @@ export function loadTrace(data, run, priority = "high") {
 }
 // Warm the caches for a run the visitor is likely to open next, without competing with visible work.
 export function prefetchXM(data, run) {
-  if (run?.media.xm && !xmCache.has(run.slug)) loadXM(data, run, "low").catch(() => {});
-  loadTrace(data, run, "low").catch(() => {});
+  // Check on every attempt so a changed connection also gates hover and idle prefetches.
+  // Explicit loads bypass this guard: selecting a run must always be allowed to retry it.
+  const connection = globalThis.navigator?.connection;
+  if (globalThis.navigator?.onLine === false || connection?.saveData
+      || ["slow-2g", "2g"].includes(connection?.effectiveType)) return Promise.resolve();
+  // Return both requests so a predictive scheduler can wait for the work it started.
+  return Promise.allSettled([loadXM(data, run, "low"), loadTrace(data, run, "low")]);
 }
 
 // Media paths are relative to data.json, or absolute when a publication serves media from another host.

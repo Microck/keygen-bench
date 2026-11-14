@@ -1,5 +1,6 @@
 // DOM widgets in FT2 dress (dropdown, badge, nav buttons).
 import { logoURL } from "./logos.js";
+import { prefetchOnIntent } from "./prefetch.js";
 
 export function h(tag, attrs = {}, ...kids) {
   const el = document.createElement(tag);
@@ -7,6 +8,7 @@ export function h(tag, attrs = {}, ...kids) {
     if (v == null || v === false) continue;
     if (k === "class") el.className = v;
     else if (k === "style" && typeof v === "object") Object.assign(el.style, v);
+    else if (k === "onintent") prefetchOnIntent(el, v);
     else if (k.startsWith("on")) el.addEventListener(k.slice(2), v);
     else el.setAttribute(k, v === true ? "" : v);
   }
@@ -20,7 +22,7 @@ export function badge(maker, size = 16) {
 
 // FT2-looking dropdown: sunken face + arrow pushbutton, popup list styled like the Disk Op file list.
 // items: [{ value, label, badge?, right? }]
-// `onHover(value)`: an item is pointed at or keyboard-highlighted (lets callers prefetch what it opens).
+// `onHover(value)`: an item is predicted, pointed at or keyboard-highlighted (safe prefetch only).
 export function dropdown({ items, value, onChange, onHover, label, width }) {
   let open = false, active = Math.max(0, items.findIndex((i) => i.value === value));
   const face = h("div", { class: "dd-face sunken", role: "combobox", tabindex: "0", "aria-expanded": "false", "aria-label": label });
@@ -38,6 +40,7 @@ export function dropdown({ items, value, onChange, onHover, label, width }) {
       class: "list-row" + (it.value === value ? " sel" : "") + (i === active ? " hl" : ""), role: "option",
       "aria-selected": String(it.value === value), onmousedown: (e) => { e.preventDefault(); pick(it.value); },
       onmouseenter: onHover && (() => onHover(it.value)),
+      onintent: onHover && (() => onHover(it.value)),
     }, it.badge ? badge(it.badge) : null, h("span", { style: { flex: "1", overflow: "hidden" } }, it.label), it.right ? h("span", { class: "muted" }, it.right) : null)));
     // Keep the active row visible by scrolling the popup only; scrollIntoView would also scroll every
     // scrollable ancestor (the page wells), which shoves the page around.

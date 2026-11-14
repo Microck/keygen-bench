@@ -11,6 +11,40 @@ remain in the undated group. Keep evidence and tests current when editing histor
 
 The hosted FT2 interface is the main design. Maintain it here; updating campaign data does not authorize a redesign. Legacy and current results should use this same frontend with distinct cohort labels and provenance.
 
+### Predictive tracker loading
+
+The site uses [ForesightJS](https://foresightjs.com/) to predict pointer movement
+toward tracker selections: model/company options, ranking rows and attempts,
+podium buttons, scoring examples, changelog models, and the Tracker tab.
+`core/prefetch.js` registers controls marked with the `h()` helper's `onintent`
+callback and unregisters removed or hidden controls. Transition ghosts carry no
+callbacks. Hover, keyboard focus/highlighting and touch remain fallback triggers.
+
+Prediction warms only the existing parsed XM and playback-trace caches at low
+fetch priority. It does not navigate, start playback or preload MP3/FLAC audio.
+Actual selection reuses in-flight/completed loads and retries failed preloads.
+All speculative paths, including neighboring-run warming, skip offline,
+Save-Data and `slow-2g`/`2g` connections when the browser exposes that information;
+explicit selection still loads normally. Scroll and tab-ahead prediction are
+disabled so browsing a long results list does not preload every visible run.
+The page code is already loaded, so this targets tracker data rather than adding
+a route framework. The saved wait depends on pointer behavior, cache and network.
+
+The optional predictor loads asynchronously from the checked-in
+`core/vendor/foresight.js`; no CDN request or JavaScript build is needed to serve
+the site. To update it, change the pinned npm dependencies and lockfile, then run:
+
+```sh
+npm ci
+npm run vendor:foresight
+npm run test:web
+npm run test:e2e
+```
+
+Commit the regenerated bundle and `core/vendor/foresight-LICENSE.txt` together.
+The publication builder copies both files. The bundle includes MIT-licensed
+`js.foresight`, `position-observer` and `tabbable`; see [NOTICE.md](../../NOTICE.md).
+
 An archived `dist/` directory holds a generated dataset and media, not the frontend implementation. Older frontend revisions belong in a separate private archive or retained history, not a second active source tree. Preserve their associated run evidence before removing an operational checkout. Neither this source repository nor a published results snapshot is a complete backup of all attempts.
 
 All commands below run from the repository root. Use your own local campaign and dedicated output directories. The tools do not contact a private host, discover campaigns, or fetch results from remote storage.
