@@ -11,7 +11,12 @@ type PrefetchProbe = {
   audioCreated: number;
   played: number;
 };
-declare global { interface Window { __prefetchProbe: PrefetchProbe } }
+declare global {
+  interface Window {
+    __prefetchProbe: PrefetchProbe;
+    __observerCleanup: () => { retained: boolean; retiredReads: number; keeperReads: number };
+  }
+}
 
 // Keep the real frontend and Foresight manager. Only the fixture data and media responses change.
 function installFixture({ saveData }: { saveData: boolean }) {
@@ -157,4 +162,74 @@ test("Save-Data blocks speculative hover and focus but explicit activation loads
     { url: "/dist/predictive-trace.json", priority: "high" },
   ]);
   expect(await browser.evaluate(() => window.__prefetchProbe.played)).toBe(0);
+});
+
+test("unregister releases removed controls while other predictions remain active", async ({ app, browser }) => {
+  await browser.setViewport({ width: 1280, height: 844 });
+  await browser.addInitScript(installFixture, { saveData: false });
+  await app.open("/changelog");
+  await predictionTarget(browser);
+  await browser.evaluate(async () => {
+    // This callback runs in Chromium, so a Node-side static import cannot access its module instance.
+    const moduleURL = new URL("/core/vendor/foresight.js", location.href).href;
+    const { ForesightManager } = await import(moduleURL);
+    // Instrument real observers without replacing their browser behavior.
+    const observed = new Map<ResizeObserver, Set<Element>>();
+    const { observe, unobserve, disconnect } = ResizeObserver.prototype;
+    ResizeObserver.prototype.observe = function (target, options) {
+      if (!observed.has(this)) observed.set(this, new Set());
+      observed.get(this)!.add(target);
+      return observe.call(this, target, options);
+    };
+    ResizeObserver.prototype.unobserve = function (target) {
+      observed.get(this)?.delete(target);
+      return unobserve.call(this, target);
+    };
+    ResizeObserver.prototype.disconnect = function () {
+      observed.delete(this);
+      return disconnect.call(this);
+    };
+    const retired = document.createElement("button"), keeper = document.createElement("button");
+    let retiredReads = 0, keeperReads = 0;
+    for (const [element, left] of [[retired, 30], [keeper, 160]] as const) {
+      element.textContent = "Observer fixture";
+      element.style.cssText = `position:fixed;top:100px;left:${left}px;z-index:10000`;
+      const bounds = element.getBoundingClientRect.bind(element);
+      element.getBoundingClientRect = () => {
+        if (element === retired) retiredReads++; else keeperReads++;
+        return bounds();
+      };
+      document.body.append(element);
+    }
+    const manager = ForesightManager.instance;
+    const registration = manager.register({ element: retired, callback: () => {} });
+    manager.register({ element: keeper, callback: () => {} });
+    const isObserved = (element: Element) => [...observed.values()].some((targets) => targets.has(element));
+    const deadline = performance.now() + 5000;
+    while (!isObserved(retired) || !isObserved(keeper)) {
+      if (performance.now() >= deadline) throw new Error("Fixture controls were not observed");
+      const frame = Promise.withResolvers<number>();
+      requestAnimationFrame(frame.resolve);
+      await frame.promise;
+    }
+    registration.unregister();
+    retired.remove();
+    retiredReads = keeperReads = 0;
+    window.__observerCleanup = () => ({ retained: isObserved(retired), retiredReads, keeperReads });
+    return null;
+  });
+  await browser.setViewport({ width: 1200, height: 800 });
+  const result = await browser.evaluate(async () => {
+    const deadline = performance.now() + 5000;
+    while (!window.__observerCleanup().keeperReads) {
+      if (performance.now() >= deadline) throw new Error("Remaining control did not respond to viewport resize");
+      const frame = Promise.withResolvers<number>();
+      requestAnimationFrame(frame.resolve);
+      await frame.promise;
+    }
+    return window.__observerCleanup();
+  });
+  expect(result.retained).toBe(false);
+  expect(result.retiredReads).toBe(0);
+  expect(result.keeperReads > 0).toBe(true);
 });

@@ -36,6 +36,7 @@
 ### Fixed
 
 - Preserve tracker playback traces when an Average-ranking row prefetches them before the tracker opens.
+- Release removed predictive controls from position and resize observation without waiting for all controls to disappear.
 
 - Group model changelog entries by date and update untested GPT Pro estimates using recorded GPT-5 Pro usage.
 

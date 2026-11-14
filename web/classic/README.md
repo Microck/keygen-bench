@@ -46,6 +46,11 @@ npm run test:e2e
 Commit the regenerated bundle and `core/vendor/foresight-LICENSE.txt` together.
 The publication builder copies both files. The bundle includes MIT-licensed
 `js.foresight`, `position-observer` and `tabbable`; see [NOTICE.md](../../NOTICE.md).
+The vendor build patches `position-observer@1.0.3` to release its per-element
+map entry and ResizeObserver registration on `unobserve`. It fails if the patch
+no longer matches. Remove the patch when a pinned upstream release includes
+both cleanup operations; the browser regression checks partial cleanup while
+another control remains observed.
 
 An archived `dist/` directory holds a generated dataset and media, not the frontend implementation. Older frontend revisions belong in a separate private archive or retained history, not a second active source tree. Preserve their associated run evidence before removing an operational checkout. Neither this source repository nor a published results snapshot is a complete backup of all attempts.
 
