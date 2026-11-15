@@ -497,7 +497,8 @@ def numerical_identity() -> dict:
     # Initialize all scorer dependencies before observing mapped DSOs. In
     # particular scipy.fft's pocketfft backend and gzip must not load only after
     # the initial profile fingerprint has been recorded.
-    for name in ("scipy.signal", "scipy.fft._pocketfft", "scipy.ndimage",
+    # scipy.io.wavfile may load mmap during analysis. Fingerprint it up front.
+    for name in ("mmap", "scipy.signal", "scipy.fft._pocketfft", "scipy.ndimage",
                  "score_audio", "score_structure", "score_mix", "score_loop"):
         check_deadline("numerical dependency initialization")
         importlib.import_module(name)

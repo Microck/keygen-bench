@@ -2,7 +2,11 @@
 // which a run was archived. They are not model release dates or verified first
 // website addition dates. Unknown models remain in the undated group.
 export const MODEL_HISTORY = [
-  { date: "2026-11-12", kind: "repository", commits: ["6f5d5807da09"], keys: ["gpt-6.1-terra-pro"], note: "Two completed attempts; third stopped after credits exhausted" },
+  { date: "2026-11-12", kind: "repository", commits: ["6f5d5807da09"], keys: ["gpt-6.1-terra-pro"], note: "Initial run archive added; publication date may differ" },
+  { date: "2026-11-12", kind: "repository", commits: ["8deb1eba8702"], keys: ["gemini-4-hydrogen"], note: "Run archive added; publication date may differ" },
+  { date: "2026-11-12", kind: "repository", commits: ["e57951647cdc"], keys: ["gpt-6.1-sol-pro"], note: "Run archive added; publication date may differ" },
+  { date: "2026-11-12", kind: "repository", commits: ["f534816fd924"], keys: ["gpt-6-sol-pro"], note: "Run archive added; publication date may differ" },
+  { date: "2026-11-11", kind: "repository", commits: ["1d156389a579"], keys: ["gpt-6-luna-pro"], note: "Run archive added; publication date may differ" },
   { date: "2026-11-10", kind: "repository", commits: ["0a0dae9"], keys: ["gemini-4-carbon"], note: "Run archive added; publication date may differ" },
   { date: "2026-11-10", kind: "repository", commits: ["675d5cda8791"], keys: ["claude-fable-5-2"], note: "Run archive added; publication date may differ" },
   { date: "2026-11-09", kind: "repository", commits: ["1085e05cecd6"], keys: ["o3"], note: "Run archive added; publication date may differ" },

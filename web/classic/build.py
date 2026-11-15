@@ -48,7 +48,7 @@ FLAG_RULES = {
 # Access routes (proxies, subscriptions, relays) are private: nothing below may reach data.json.
 PROVIDER_PREFIX = r"^(devin/|go-|vercel-[a-z]+/)"
 PUBLIC_PRICE_HOSTS = (  # reviewed maker pricing and explicitly supported provider catalogs
-    "developers.openai.com", "openai.com", "platform.claude.com", "ai.google.dev", "docs.x.ai", "api-docs.deepseek.com",
+    "developers.openai.com", "openai.com", "platform.claude.com", "ai.google.dev", "blog.google", "docs.x.ai", "api-docs.deepseek.com",
     "docs.z.ai", "platform.kimi.ai", "alibabacloud.com", "mimo.mi.com", "platform.minimax.io", "minimax.io",
     "dev.meta.ai", "docs.mistral.ai", "docs.devin.ai", "tencentcloud.com",
     "longcat.chat", "cohere.com", "api.inceptionlabs.ai", "platform.stepfun.ai", "docs.arcee.ai",
@@ -365,6 +365,7 @@ def copy_frontend(publish_root: Path) -> None:
     """Copy the canonical frontend's public asset allowlist."""
     assets = ["index.html", "crypto.html", "app.js", "site.js"]
     assets += [str(path.relative_to(HERE)) for path in (HERE / "core").glob("*.js")]
+    assets += ["core/vendor/foresight.js", "core/vendor/foresight-LICENSE.txt"]
     assets += ["core/ft2.css", "core/ft2gfx/tables.json", "core/ft2gfx/LICENSE-gfx.txt"]
     assets += [str(path.relative_to(HERE)) for path in (HERE / "core/fonts").glob("*.woff2")]
     assets += [str(path.relative_to(HERE)) for path in (HERE / "core/ft2gfx").glob("*.png")]

@@ -339,6 +339,13 @@ class RunsBuilderTests(unittest.TestCase):
         self.assertTrue((self.root / "publication/dist/data.json").is_file())
         self.assertFalse((self.root / "publication/dist/.verified").exists())
 
+    def test_reviewed_display_name_preserves_identity_and_attempt_suffix(self):
+        metadata = {"gpt-6-pro": {"display_name": "gpt-6-astra-pro"}}
+        self.assertEqual(builder.public_display_name("gpt-6-pro (max-tier, attempt 2)", "gpt-6-pro", metadata),
+                         "gpt-6-astra-pro (max-tier, attempt 2)")
+        self.assertEqual(builder.public_display_name("gpt-5-pro (max-tier)", "gpt-5-pro", metadata),
+                         "gpt-5-pro (max-tier)")
+
     def test_display_names_drop_route_free_and_contributor_tags(self):
         self.assertEqual(builder.display_name("meta/muse-spark-1.13-contributor:free"), "muse-spark-1.13")
         self.assertEqual(builder.display_name("stepfun/step-3.7-flash:free"), "step-3.7-flash")
@@ -363,6 +370,15 @@ class RunsBuilderTests(unittest.TestCase):
         self.assertAlmostEqual(builder.estimate_cost({
             "prompt_tokens": 957, "cached_tokens": 186, "completion_tokens": 100,
         }, published, round_digits=None), 0.00017844)
+
+    def test_google_launch_source_keeps_hydrogen_prices(self):
+        source = "https://blog.google/innovation-and-ai/models-and-research/gemini-models/introducing-gemini-4-hydrogen/"
+        price = {"id": "gemini-4-hydrogen", "maker": "Google", "source_url": source,
+                 "input_usd_per_m": 1.5, "cached_input_usd_per_m": 0.075, "output_usd_per_m": 7.5}
+        self.assertEqual(builder.public_price(price), {
+            "input_usd_per_m": 1.5, "cached_input_usd_per_m": 0.075,
+            "output_usd_per_m": 7.5, "source_url": source,
+        })
 
     def test_new_attempt_uses_existing_model_metadata(self):
         self.identities.clear()

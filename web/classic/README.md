@@ -11,6 +11,47 @@ remain in the undated group. Keep evidence and tests current when editing histor
 
 The hosted FT2 interface is the main design. Maintain it here; updating campaign data does not authorize a redesign. Legacy and current results should use this same frontend with distinct cohort labels and provenance.
 
+### Predictive tracker loading
+
+The site uses [ForesightJS](https://foresightjs.com/) to predict pointer movement
+toward tracker selections: model/company options, ranking rows and attempts,
+podium buttons, scoring examples, changelog models, and the Tracker tab.
+`core/prefetch.js` registers controls marked with the `h()` helper's `onintent`
+callback and unregisters removed or hidden controls. Transition ghosts carry no
+callbacks. Hover, keyboard focus/highlighting and touch remain fallback triggers.
+
+Prediction warms only the existing parsed XM and playback-trace caches at low
+fetch priority. It does not navigate, start playback or preload MP3/FLAC audio.
+Actual selection reuses in-flight/completed loads and retries failed preloads.
+Trace cache hits populate each requesting run, including the canonical tracker
+run after an Average-ranking row has warmed the same slug.
+All speculative paths, including neighboring-run warming, skip offline,
+Save-Data and `slow-2g`/`2g` connections when the browser exposes that information;
+explicit selection still loads normally. Scroll and tab-ahead prediction are
+disabled so browsing a long results list does not preload every visible run.
+The page code is already loaded, so this targets tracker data rather than adding
+a route framework. The saved wait depends on pointer behavior, cache and network.
+
+The optional predictor loads asynchronously from the checked-in
+`core/vendor/foresight.js`; no CDN request or JavaScript build is needed to serve
+the site. To update it, change the pinned npm dependencies and lockfile, then run:
+
+```sh
+npm ci
+npm run vendor:foresight
+npm run test:web
+npm run test:e2e
+```
+
+Commit the regenerated bundle and `core/vendor/foresight-LICENSE.txt` together.
+The publication builder copies both files. The bundle includes MIT-licensed
+`js.foresight`, `position-observer` and `tabbable`; see [NOTICE.md](../../NOTICE.md).
+The vendor build patches `position-observer@1.0.3` to release its per-element
+map entry and ResizeObserver registration on `unobserve`. It fails if the patch
+no longer matches. Remove the patch when a pinned upstream release includes
+both cleanup operations; the browser regression checks partial cleanup while
+another control remains observed.
+
 An archived `dist/` directory holds a generated dataset and media, not the frontend implementation. Older frontend revisions belong in a separate private archive or retained history, not a second active source tree. Preserve their associated run evidence before removing an operational checkout. Neither this source repository nor a published results snapshot is a complete backup of all attempts.
 
 All commands below run from the repository root. Use your own local campaign and dedicated output directories. The tools do not contact a private host, discover campaigns, or fetch results from remote storage.
@@ -94,7 +135,10 @@ ranked-only export.
 
 The Fable 5.2 campaign used Claude subscription OAuth through CLIProxyAPI 8.0.62 with a temporary Claude Code version-header override (2.1.293). Captured controller-to-bridge settings and model identity do not establish the exact prompt or settings received upstream. Historical OAuth runs also lack complete upstream prompt evidence, so differences in bridge-added instructions cannot be ruled out; this is not proof that they differed.
 
-The GPT-6.1 Terra Pro ledger includes three started attempts and the readiness pilot. Attempt 3 stopped when the API reported no remaining credits. Two attempts have incomplete usage records, so their recorded costs are lower bounds.
+The metadata catalog can provide a display name without changing a retained model identity or public route.
+The GPT-6.1 Sol Pro addition records the three attempts and readiness pilot at OpenAI API list prices; these estimates are not a provider bill.
+The GPT-6 Sol Pro addition records the three attempts and readiness pilot at OpenAI API list prices; these estimates are not a provider bill.
+The GPT-6 Luna Pro ledger includes three attempts and its readiness pilot. One interrupted response has unknown usage, so its recorded per-response cost is a lower bound, not a complete charge.
 
 The Fable 5.2 addition uses `data/site/fable52-spend-usage.json` for the three attempts and readiness pilot. Cache-write TTL is unavailable in the receipts, so the builder retains conservative bounds. Subscription usage is not an API bill.
 
@@ -434,7 +478,9 @@ providers, submitted music quality, native FT2 rendering or production publicati
 
 `SUPPORT.wanted` entries with `accessOnly: true` omit numeric cost estimates and monetary
 progress values, but retain the same row and sunken progress-track styling. Their
-track is labelled "Muse Code access needed", not a fabricated $0 goal.
+track describes the access blocker, not a fabricated $0 goal.
 They are access requests, not free or funded runs.
 See [Muse Wonder Full access](../../docs/muse-wonder-full-access.md) for the current
 SDK/MCP route and its unverified fairness constraints.
+
+The GPT-6.1 Terra Pro ledger includes the readiness pilot, three original attempts, and a separate retry after credits ran out. Two original responses lack usage. Cache-write retention is unknown, so the known-cost range is not a complete bill.

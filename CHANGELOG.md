@@ -2,13 +2,23 @@
 
 ## Unreleased
 
-- Classify provider responses reporting no remaining credits as quota failures.
+- Rename GPT-6 Pro to GPT-6 Astra Pro in published labels.
+- Centralize approved route destinations, protocols, SDK prefixes and runner request policies in explicit native adapter declarations without changing frozen controls.
+- Show the recorded lower-bound cost when an interrupted response leaves usage incomplete.
 
 - Show bounded cost estimates in benchmark video footers.
 
 ### Added
 
-- Add GPT-6.1 Terra Pro benchmark attempts, including the credit-exhausted third attempt.
+- Add GPT-6.1 Terra Pro benchmark results and the separate infrastructure retry for its third attempt.
+
+- Predict tracker selections from pointer movement with self-hosted ForesightJS, warming the existing XM and playback-trace caches before activation. Hover, keyboard and touch fallbacks share the cache; speculative loading respects offline, Data Saver and slow connections.
+
+- Add three Gemini 4 Hydrogen benchmark attempts.
+
+- Add three GPT-6.1 Sol Pro benchmark attempts.
+- Add three GPT-6 Sol Pro benchmark attempts.
+- Add three GPT-6 Luna Pro benchmark attempts.
 
 - Add Gemini 4 Carbon benchmark attempts and the separately retained infrastructure retry.
 
@@ -26,6 +36,9 @@
 - Add a model changelog tab showing source-backed history dates and an undated group for models without historical evidence.
 
 ### Fixed
+
+- Preserve tracker playback traces when an Average-ranking row prefetches them before the tracker opens.
+- Release removed predictive controls from position and resize observation without waiting for all controls to disappear.
 
 - Group model changelog entries by date and update untested GPT Pro estimates using recorded GPT-5 Pro usage.
 

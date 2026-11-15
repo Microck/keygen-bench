@@ -20,24 +20,66 @@ import re
 import socket
 import threading
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
 LITELLM_VERSION = "1.102.1"
-PROVIDERS = {"go", "vercel", "nim", "google", "mistral", "cohere", "devin", "anthropic_oauth", "codex_oauth", "xai_oauth", "openai", "anthropic", "custom"}
-BRIDGE_PROVIDERS = {"devin", "anthropic_oauth", "codex_oauth", "xai_oauth"}
-# Protocol selection controls the native SDK, never a provider-name heuristic.
-PROTOCOLS = {"go": {"chat", "responses", "messages"}, "vercel": {"chat", "responses"}, "nim": {"chat"},
-             "google": {"chat"}, "mistral": {"chat"}, "cohere": {"chat"}, "devin": {"chat"}, "anthropic_oauth": {"messages"}, "codex_oauth": {"responses"},
-             "xai_oauth": {"responses"},
-             "openai": {"chat", "responses"}, "anthropic": {"messages"},
-             "custom": {"chat", "responses", "messages"}}
-# LiteLLM provider prefix per route; Google AI Studio uses LiteLLM's native Gemini provider
-# (generateContent), never an OpenAI-compatible shim.
-# Mistral uses LiteLLM's native Mistral provider: it parses Mistral's thinking content chunks into
-# reasoning_content, which the OpenAI-compatible path rejects as an invalid response object.
-SDK_PREFIX = {"google": "gemini", "mistral": "mistral"}
+@dataclass(frozen=True)
+class RouteAdapter:
+    """Explicit route contract; model IDs and credentials remain campaign data."""
+    protocols: frozenset[str]
+    destination: str  # fixed, bridge, or custom
+    endpoint: tuple[str, str] | None = None
+    sdk_prefix: str | None = None
+    policies: frozenset[str] = frozenset()
+    omit_api_base: bool = False
+    user_agent: str | None = None
+    strict_tools: bool = False
+    encrypted_reasoning: bool = False
+    probe_session_header: str | None = None
+    sdk_opt_ins: tuple[tuple[str, str], ...] = ()
+
+
+# One auditable declaration per route. Never infer trust, policy, or SDK from
+# an arbitrary endpoint hostname or model name. Protocol and destination checks
+# remain mandatory even when a new adapter is added.
+ROUTE_ADAPTERS = {
+    "go": RouteAdapter(frozenset({"chat", "responses", "messages"}), "fixed", ("opencode.ai", "/zen/go/v1"), policies=frozenset({"upstream_outage"}), user_agent="keygen-benchmark/mini-swe-agent-2.4.6", probe_session_header="x-opencode-session", sdk_opt_ins=(("messages", "thinking"),)),
+    "vercel": RouteAdapter(frozenset({"chat", "responses"}), "fixed", ("ai-gateway.vercel.sh", "/v1")),
+    "nim": RouteAdapter(frozenset({"chat"}), "fixed", ("integrate.api.nvidia.com", "/v1")),
+    "google": RouteAdapter(frozenset({"chat"}), "fixed", ("generativelanguage.googleapis.com", "/v1beta"), "gemini", omit_api_base=True),
+    "mistral": RouteAdapter(frozenset({"chat"}), "fixed", ("api.mistral.ai", "/v1"), "mistral", sdk_opt_ins=(("chat", "reasoning_effort"),)),
+    "cohere": RouteAdapter(frozenset({"chat"}), "fixed", ("api.cohere.ai", "/compatibility/v1"), strict_tools=True),
+    "openai": RouteAdapter(frozenset({"chat", "responses"}), "fixed", ("api.openai.com", "/v1")),
+    "anthropic": RouteAdapter(frozenset({"messages"}), "fixed", ("api.anthropic.com", "/v1"), policies=frozenset({"content_filter"})),
+    "devin": RouteAdapter(frozenset({"chat"}), "bridge"),
+    "anthropic_oauth": RouteAdapter(frozenset({"messages"}), "bridge", policies=frozenset({"content_filter"})),
+    "codex_oauth": RouteAdapter(frozenset({"responses"}), "bridge", encrypted_reasoning=True),
+    "xai_oauth": RouteAdapter(frozenset({"responses"}), "bridge"),
+    "custom": RouteAdapter(frozenset({"chat", "responses", "messages"}), "custom", sdk_opt_ins=(("messages", "thinking"),)),
+}
+PROVIDERS = set(ROUTE_ADAPTERS)
+BRIDGE_PROVIDERS = {name for name, adapter in ROUTE_ADAPTERS.items() if adapter.destination == "bridge"}
+PROTOCOLS = {name: set(adapter.protocols) for name, adapter in ROUTE_ADAPTERS.items()}
+SDK_PREFIX = {name: adapter.sdk_prefix for name, adapter in ROUTE_ADAPTERS.items() if adapter.sdk_prefix}
+CONTENT_FILTER_PROVIDERS = frozenset(name for name, adapter in ROUTE_ADAPTERS.items() if "content_filter" in adapter.policies)
+UPSTREAM_WAIT_PROVIDERS = frozenset(name for name, adapter in ROUTE_ADAPTERS.items() if "upstream_outage" in adapter.policies)
+
+
+def route_policy(provider: str) -> frozenset[str]:
+    """Return the explicitly configured request policies for a validated route."""
+    if provider not in PROVIDERS:
+        raise ValueError("Unsupported model provider")
+    return ROUTE_ADAPTERS[provider].policies
+
+
+def route_probe_headers(provider: str, new_session) -> dict[str, str]:
+    """Construct only the approved route's per-probe session header."""
+    route_policy(provider)  # Fail closed for unknown providers.
+    name = ROUTE_ADAPTERS[provider].probe_session_header
+    return {name: new_session().hex} if name else {}
 GOOGLE_BASE = "https://generativelanguage.googleapis.com/v1beta"
 # Gemini 3.x thinkingLevel values (Google thinking docs); LiteLLM maps reasoning_effort onto them.
 GOOGLE_EFFORTS = {"minimal", "low", "medium", "high"}
@@ -194,17 +236,10 @@ def validate_url(url: str, provider: str | None = None, api: str | None = None) 
             raise ValueError("Credential bridge must use explicit http://127.0.0.1:PORT")
         if path != "/v1":
             raise ValueError("Credential bridge base_url must end in /v1")
-    elif provider in {"go", "vercel", "nim", "google", "mistral", "cohere", "openai", "anthropic"}:
-        expected = {
-            "go": ("opencode.ai", "/zen/go/v1"),
-            "vercel": ("ai-gateway.vercel.sh", "/v1"),
-            "nim": ("integrate.api.nvidia.com", "/v1"),
-            "google": ("generativelanguage.googleapis.com", "/v1beta"),
-            "mistral": ("api.mistral.ai", "/v1"),
-            "cohere": ("api.cohere.ai", "/compatibility/v1"),
-            "openai": ("api.openai.com", "/v1"),
-            "anthropic": ("api.anthropic.com", "/v1"),
-        }[provider]
+    elif provider in ROUTE_ADAPTERS and ROUTE_ADAPTERS[provider].destination == "fixed":
+        expected = ROUTE_ADAPTERS[provider].endpoint
+        if expected is None:
+            raise ValueError("Fixed route is missing its approved endpoint")
         if (u.scheme, u.hostname, port, path) != ("https", expected[0], None, expected[1]):
             raise ValueError(f"{provider} requires https://{expected[0]}{expected[1]}")
     elif provider == "custom":
@@ -281,6 +316,9 @@ def transmitted_reasoning(model: dict) -> dict:
     """
     generation = model["generation"]
     if model.get("provider") == "google":
+        native = (generation.get("extra_body") or {}).get("generationConfig", {}).get("thinkingConfig")
+        if native is not None:
+            return {"thinkingConfig": native}
         effort = generation.get("reasoning_effort")
         return {} if effort is None else {"thinkingConfig": {"thinkingLevel": effort, "includeThoughts": True}}
     wire = {key: generation[key] for key in REASONING_FIELDS[model["api"]]
@@ -297,6 +335,10 @@ def generation_tier(api: str, generation: dict) -> str | None:
     if api == "chat":
         template = wire.get("chat_template_kwargs") or {}
         effort = wire.get("reasoning_effort", template.get("reasoning_effort"))
+        if effort is None:
+            native = (wire.get("generationConfig") or {}).get("thinkingConfig") or {}
+            level = native.get("thinkingLevel")
+            effort = level.lower() if isinstance(level, str) else None
         if effort is None and (template.get("thinking") is True or template.get("enable_thinking") is True):
             effort = "thinking-on"
     elif api == "responses":
@@ -343,9 +385,20 @@ def _check_thinking(thinking: Any, max_tokens: int) -> None:
 
 
 def _check_extra_body(model: dict, extra: Any) -> None:
+    if (model["provider"], model["api"]) == ("google", "chat"):
+        # Gemini supports native thinking levels in generationConfig. The SDKs
+        # extra_body is its documented way to pass provider-native fields.
+        config = extra.get("generationConfig") if isinstance(extra, dict) and set(extra) == {"generationConfig"} else None
+        thinking = config.get("thinkingConfig") if isinstance(config, dict) and set(config) == {"thinkingConfig"} else None
+        if (not isinstance(thinking, dict) or set(thinking) != {"thinkingLevel", "includeThoughts"}
+                or not isinstance(thinking["thinkingLevel"], str)
+                or thinking["thinkingLevel"] not in {"LOW", "MEDIUM", "HIGH", "XHIGH"}
+                or thinking["includeThoughts"] is not True):
+            raise ValueError("Google native thinking requires a supported level and includeThoughts")
+        return
     allowed = EXTRA_BODY.get((model["provider"], model["api"]))
     if allowed is None:
-        raise ValueError("extra_body pass-through is only approved for NIM Chat")
+        raise ValueError("extra_body pass-through is only approved for Google and NIM Chat")
     if not isinstance(extra, dict) or not extra or set(extra) - allowed:
         raise ValueError("extra_body may contain only this route's approved reasoning fields")
     template = extra["chat_template_kwargs"]
@@ -400,14 +453,18 @@ def _generation(model: dict) -> dict:
         raise ValueError("Declare one NIM reasoning control: top-level reasoning_effort or chat_template_kwargs")
     if model.get("provider") == "google":
         # Gemini: one output cap and one thinkingLevel effort; nothing else is declared.
-        if set(value) - {"max_tokens", "reasoning_effort"} or "max_tokens" not in value:
-            raise ValueError("Google routes declare exactly max_tokens and optionally reasoning_effort")
+        if set(value) - {"max_tokens", "reasoning_effort", "extra_body"} or "max_tokens" not in value:
+            raise ValueError("Google routes require max_tokens and one supported reasoning control")
+        if "reasoning_effort" in value and "extra_body" in value:
+            raise ValueError("Google routes declare only one thinking control")
         if "reasoning_effort" in value and value["reasoning_effort"] not in GOOGLE_EFFORTS:
             raise ValueError("Gemini thinkingLevel supports only minimal, low, medium and high")
     check_tier(model)
     # The native converter must not silently cap, translate or drop declared settings.
     mapped = _map_generation(model, value)
     wire = mapped | mapped.get("extra_body", {})
+    if model.get("provider") == "google" and isinstance(wire.get("generationConfig"), dict):
+        wire = wire | wire["generationConfig"]
     if any(wire.get(key) != declared for key, declared in transmitted_reasoning(model).items()):
         raise ValueError("Native SDK would alter or drop the declared reasoning control")
     if model.get("provider") == "google" and wire.get("max_output_tokens") != value["max_tokens"]:
@@ -456,13 +513,9 @@ def sdk_controls(model: dict) -> dict:
     LiteLLM accepts Anthropic thinking only for Claude names unless the caller opts in with
     its documented allowed_openai_params flag. Go and custom Messages may serve other models.
     """
-    if model["provider"] in {"go", "custom"} and model["api"] == "messages" and "thinking" in model["generation"]:
-        return {"allowed_openai_params": ["thinking"]}
-    # LiteLLM's Mistral provider lists reasoning_effort only for "magistral" names, and for those it injects a
-    # system prompt instead of sending the field. The opt-in sends the declared field unaltered for any name.
-    if model["provider"] == "mistral" and "reasoning_effort" in model["generation"]:
-        return {"allowed_openai_params": ["reasoning_effort"]}
-    return {}
+    opt_ins = [field for api, field in ROUTE_ADAPTERS[model["provider"]].sdk_opt_ins
+               if model["api"] == api and field in model["generation"]]
+    return {"allowed_openai_params": opt_ins} if opt_ins else {}
 
 
 def capability_override(model: dict) -> dict | None:
@@ -550,7 +603,7 @@ def _map_generation(model: dict, value: dict) -> dict:
 def responses_options(model: dict) -> dict:
     """Fixed native Responses transport settings, shared by proof and execution."""
     return {"store": False, "stream": True,
-            **({"include": ["reasoning.encrypted_content"]} if model["provider"] == "codex_oauth" else {})}
+            **({"include": ["reasoning.encrypted_content"]} if ROUTE_ADAPTERS[model["provider"]].encrypted_reasoning else {})}
 
 
 def validate_model(config: dict, model: dict) -> dict:
@@ -598,13 +651,14 @@ def validate_model(config: dict, model: dict) -> dict:
         kwargs["api_base"] = base.removesuffix("/v1")
     if api == "responses":
         kwargs.update(responses_options(model))
-    if provider == "google":
+    adapter = ROUTE_ADAPTERS[provider]
+    if adapter.omit_api_base:
         # LiteLLM's Gemini provider builds the generateContent URL itself from GOOGLE_BASE;
         # a custom api_base would change its URL construction, so none is passed.
         kwargs.pop("api_base")
-    if provider == "go":
-        kwargs["extra_headers"] = {"User-Agent": "keygen-benchmark/mini-swe-agent-2.4.6"}
-    if provider == "cohere":
+    if adapter.user_agent:
+        kwargs["extra_headers"] = {"User-Agent": adapter.user_agent}
+    if adapter.strict_tools:
         # Cohere's Chat API rejects a whole reply (HTTP 400, "all generated tool calls were hallucinated") when
         # the model calls a function that is not declared, e.g. an FT2 tool name read from `ft2 list`. Other
         # routes return such a call to the agent as a format error. strict_tools constrains generation to the
@@ -613,6 +667,8 @@ def validate_model(config: dict, model: dict) -> dict:
     # SDK optional params include transport defaults and an extra_body envelope.
     # Both SDK paths expand extra_body into the wire body; it is not a generation field.
     wire_parameters = effective_generation | effective_generation.get("extra_body", {})
+    if provider == "google" and isinstance(wire_parameters.get("generationConfig"), dict):
+        wire_parameters = wire_parameters | wire_parameters["generationConfig"]
     transmitted_generation = {key: wire_parameters[key] for key in WIRE_GENERATION_FIELDS
                               if key in wire_parameters}
     effective = {

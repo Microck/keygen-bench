@@ -44,6 +44,12 @@ def display_name(name: str) -> str:
     return re.sub(r"-free(?=$| )", "", name.replace(":free", ""))
 
 
+def public_display_name(name: str, model_key: str, metadata: dict) -> str:
+    """Apply a reviewed display label without changing a retained model identity."""
+    label = metadata.get(model_key, {}).get("display_name", model_key)
+    return label + name[len(model_key):] if name.startswith(model_key) else name
+
+
 def publication_model_key(row: dict) -> str:
     """Keep a named execution mode distinct while retaining the upstream model in provenance."""
     settings = row.get("effective_settings") or {}
@@ -401,7 +407,8 @@ def build_from_runs(runs_root: Path, output: Path, listener_scores: Path,
                              no_media=no_media, verification=verification, lossless="flac")
             default_name = f"{key} community {community} (attempt {ordinal})" if community else f"{key} (max-tier, attempt {ordinal})"
             # Community routes differ from the model key, so carry the model's release date on the run.
-            run.update(model_key=public_key, name=identity.get("name", default_name), ranked=False, release_date=release)
+            run.update(model_key=public_key, name=public_display_name(identity.get("name", default_name), key, metadata),
+                       ranked=False, release_date=release)
             run["provenance"].update(selected_by="best eligible score among three predetermined ordinals; ties use the lowest ordinal",
                 evaluation_kind="listener-evidence" if xm_hash in evidence else "listener-local",
                 listener=listener_identity, source_evaluation=source_evaluation,

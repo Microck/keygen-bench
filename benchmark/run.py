@@ -32,7 +32,8 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 from native_models import (build_model, audit_messages, redact_credentials, classify_error, validate_url,
                            check_custom_destination, _native, PROVIDERS, PROTOCOLS, sdk_prefix, credential_target,
-                           TRANSPORT_RETRY_DELAYS_SECONDS)
+                           TRANSPORT_RETRY_DELAYS_SECONDS, route_policy, CONTENT_FILTER_PROVIDERS,
+                           UPSTREAM_WAIT_PROVIDERS, route_probe_headers)
 import campaign
 
 MINI_VERSION = "2.4.6"
@@ -432,7 +433,6 @@ SEQUENCE_STOPPING_FAILURES = {"QUOTA", "AUTH", "CONTENT_FILTER"}
 # "Output blocked by content filtering policy". A blocked reply never enters native history,
 # so the identical request is re-sent, at most CONTENT_FILTER_SENDS sends in total.
 CONTENT_FILTER_SENDS = 3
-CONTENT_FILTER_PROVIDERS = {"anthropic_oauth", "anthropic"}
 CONTENT_FILTER_MARKER = "output blocked by content filtering policy"
 # OpenCode Go answers HTTP 429 or 502 "Upstream request failed: Endpoint is unavailable" while one model's
 # upstream endpoint is briefly down. Measured 2026-10-12 with one key: step-5-preview-free answered 7 of 20
@@ -441,7 +441,6 @@ CONTENT_FILTER_MARKER = "output blocked by content filtering policy"
 # as QUOTA. The identical request is re-sent after UPSTREAM_WAIT_SECONDS, at most UPSTREAM_WAITS times
 # (10 minutes) per request; the wait counts toward the attempt's wall time.
 UPSTREAM_UNAVAILABLE_MARKER = "upstream request failed: endpoint is unavailable"
-UPSTREAM_WAIT_PROVIDERS = {"go"}
 UPSTREAM_WAIT_SECONDS = 15
 UPSTREAM_WAITS = 40
 
@@ -468,7 +467,7 @@ def bound_content_filter(native, model: dict, run_dir: Path):
     Each block is audited as a transport.jsonl ``content_filter_block`` record after its send.
     The instance keeps its original class, history handling and serialization.
     """
-    if model["provider"] not in CONTENT_FILTER_PROVIDERS:
+    if "content_filter" not in route_policy(model["provider"]):
         return native
     send = native._query
 
@@ -527,7 +526,7 @@ def wait_out_upstream_outage(native, model: dict, run_dir: Path, sleep=time.slee
     Each outage reply is audited as a transport.jsonl ``upstream_unavailable`` record after its send.
     The instance keeps its original class, history handling and serialization.
     """
-    if model["provider"] not in UPSTREAM_WAIT_PROVIDERS:
+    if "upstream_outage" not in route_policy(model["provider"]):
         return native
     send = native._query
     def query(messages, **kwargs):
@@ -1010,8 +1009,7 @@ def probe_provider(model: dict, credential: str, timeout: float = 120) -> dict:
                "User-Agent": "keygen-benchmark/queue-probe-1.0"}
     if model["api"] == "messages":
         headers.update({"x-api-key": credential, "anthropic-version": "2023-06-01"})
-    if model["provider"] == "go":
-        headers["x-opencode-session"] = uuid.uuid4().hex
+    headers.update(route_probe_headers(model["provider"], uuid.uuid4))
     request = urllib.request.Request(model["base_url"].rstrip("/") + path, data=json.dumps(body).encode(),
                                      headers=headers, method="POST")
     started = time.time()
