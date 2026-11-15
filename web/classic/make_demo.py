@@ -101,7 +101,9 @@ html, body { margin: 0; background: #000; }
 def bar_html(w: int, h: int, run: dict, total: int) -> str:
     """The site's own top bar already says KEYGEN BENCH; the footer adds the run, the score and the URL."""
     # Match the site: display a bounded estimate by its upper bound, rounded up.
-    if run.get("cost_range_usd"):
+    if run.get("cost_lower_bound") and run.get("cost_usd") is not None:
+        cost = f"≥${math.floor(run['cost_usd'] * 100) / 100:.2f}"
+    elif run.get("cost_range_usd"):
         cost = f"${math.ceil(run['cost_range_usd']['max'] * 100) / 100:.2f}"
     elif run.get("cost_usd") is not None:
         cost = f"${run['cost_usd']:.2f}"

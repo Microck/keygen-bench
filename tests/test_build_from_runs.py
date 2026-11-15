@@ -205,6 +205,15 @@ class RunsBuilderTests(unittest.TestCase):
         self.assertIsNone(response_usage(directory, {**totals, "requests": 1}, allow_partial=True))
         self.assertIsNone(response_usage(directory, {**totals, "prompt_tokens": 400001}))
 
+    def test_partial_receipt_lower_bound_handles_unknown_cache_retention(self):
+        price = {"input_usd_per_m": 1, "cached_input_usd_per_m": .05, "output_usd_per_m": 5,
+                 "cache_write_usd_per_m": 1.25, "cache_write_1h_usd_per_m": 2.5}
+        request = {"prompt_tokens": 100_000, "cached_tokens": 80_000,
+                   "cache_write_tokens": 10_000, "completion_tokens": 1_000}
+        self.assertIsNone(estimate_request_cost(request, price))
+        self.assertAlmostEqual(builder.known_usage_lower_bound([request], price), .0315)
+        self.assertIsNone(builder.known_usage_lower_bound([], price))
+
     def tearDown(self):
         self.temporary.cleanup()
 

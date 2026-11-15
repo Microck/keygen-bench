@@ -482,3 +482,5 @@ track describes the access blocker, not a fabricated $0 goal.
 They are access requests, not free or funded runs.
 See [Muse Wonder Full access](../../docs/muse-wonder-full-access.md) for the current
 SDK/MCP route and its unverified fairness constraints.
+
+The GPT-6.1 Terra Pro ledger includes the readiness pilot, three original attempts, and a separate retry after credits ran out. Two original responses lack usage. Cache-write retention is unknown, so the known-cost range is not a complete bill.
