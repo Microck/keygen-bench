@@ -17,7 +17,7 @@ import { groupChangelogDates, modelChangelog } from "./core/changelog.js";
 
 const SHORT = { SUSTAINED_NOISE: "NOISE", PHRASE_SAMPLE: "PHRASE", SAMPLE_HEAVY: "SMP", TAIL_SILENCE: "TAIL", MASKED: "MASK", SILENCE: "SIL" };
 const upperCostText = (range) => money(Math.ceil(range.max * 100) / 100);
-const costText = (run) => run.cost_range_usd ? upperCostText(run.cost_range_usd) : run.cost_usd != null ? money(run.cost_usd) : "Unknown";
+const costText = (run) => run.cost_lower_bound ? `≥${money(Math.floor(run.cost_usd * 100) / 100)}` : run.cost_range_usd ? upperCostText(run.cost_range_usd) : run.cost_usd != null ? money(run.cost_usd) : "Unknown";
 const modelCostText = (model) => costText(model.totalCost);
 const spendText = (ledger, amount) => ledger.recorded_usage_cost_range_usd ? upperCostText(ledger.recorded_usage_cost_range_usd) : amount != null ? money(amount) : "Unknown";
 
