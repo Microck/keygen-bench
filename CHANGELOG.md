@@ -10,6 +10,8 @@
 
 ### Added
 
+- Retain successful GPT-6.2 Astra retries for the two infrastructure-failed attempts.
+
 - Add GPT-6.2 Astra and Sol benchmark attempts, including retained infrastructure failures and retries.
 
 - Add GPT-6.1 Terra Pro benchmark results and the separate infrastructure retry for its third attempt.
