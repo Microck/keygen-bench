@@ -10,6 +10,8 @@
 
 ### Added
 
+- Add three Gemini 4 Neon XHIGH benchmark attempts and their recorded usage.
+
 - Retain successful GPT-6.2 Astra retries for the two infrastructure-failed attempts.
 
 - Add GPT-6.2 Astra and Sol benchmark attempts, including retained infrastructure failures and retries.

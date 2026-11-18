@@ -140,6 +140,8 @@ The GPT-6.1 Sol Pro addition records the three attempts and readiness pilot at O
 The GPT-6 Sol Pro addition records the three attempts and readiness pilot at OpenAI API list prices; these estimates are not a provider bill.
 The GPT-6 Luna Pro ledger includes three attempts and its readiness pilot. One interrupted response has unknown usage, so its recorded per-response cost is a lower bound, not a complete charge.
 
+The Gemini 4 Neon addition uses `data/site/neon-spend-usage.json` for three XHIGH attempts, the readiness pilot and a Vertex global probe. Per-response counts reconcile with attempt totals; each route uses its documented standard list price.
+
 The Fable 5.2 addition uses `data/site/fable52-spend-usage.json` for the three attempts and readiness pilot. Cache-write TTL is unavailable in the receipts, so the builder retains conservative bounds. Subscription usage is not an API bill.
 
 The GPT-5 Pro and GPT-6 Pro additions in `data/site/spend.json` use the
