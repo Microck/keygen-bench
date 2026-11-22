@@ -35,6 +35,9 @@ export KEYGEN_LISTENER_PYTHON="$PWD/.venv-listener/bin/python"
 
 The identity command downloads the pinned model revision once (about 415 MB) and verifies the weights' SHA-256. Without `KEYGEN_LISTENER_PYTHON`, evaluation marks attempts unscored, never zero.
 
+Community submission CI validates new and changed bundles against the current
+contract. It leaves unchanged historical bundles under their original contract.
+
 ## Execution contract
 
 The runner uses mini-swe-agent 2.4.6 with one Bash tool. Model commands execute in a network-disabled local Docker sandbox. Provider credentials stay in the controller's model worker, not in the command sandbox. Do not mount personal or company files into either environment.

@@ -3,6 +3,7 @@ import copy
 import importlib.util
 import json
 import os
+import shutil
 from pathlib import Path
 import subprocess
 import sys
@@ -78,6 +79,51 @@ class ContribTests(unittest.TestCase):
         mutate(value)
         validator.write_json(path, value)
         self.reseal()
+
+    def test_only_new_or_changed_bundles_are_validated(self):
+        root = self.bundle.parent
+        base = root / 'base'
+        incoming = root / 'incoming'
+        (base / 'model').mkdir(parents=True)
+        (incoming / 'model').mkdir(parents=True)
+        shutil.copytree(self.bundle, base / 'model' / 'old')
+        shutil.copytree(self.bundle, incoming / 'model' / 'old')
+        shutil.copytree(self.bundle, incoming / 'model' / 'new')
+        # A historic contract can differ without invalidating an unchanged bundle.
+        for path in (base / 'model' / 'old' / 'manifest.json', incoming / 'model' / 'old' / 'manifest.json'):
+            path.write_text('historical contract')
+        self.assertEqual(validator.validate_changes(base, incoming), 1)
+        (incoming / 'model' / 'old' / 'manifest.json').write_text('modified')
+        with self.assertRaises((ValueError, json.JSONDecodeError)):
+            validator.validate_changes(base, incoming)
+
+    def test_modified_existing_bundle_must_pass_current_validation(self):
+        root = self.bundle.parent
+        base = root / 'base'
+        incoming = root / 'incoming'
+        (base / 'model').mkdir(parents=True)
+        (incoming / 'model').mkdir(parents=True)
+        shutil.copytree(self.bundle, base / 'model' / 'run')
+        shutil.copytree(self.bundle, incoming / 'model' / 'run')
+        status = incoming / 'model' / 'run' / 'attempt-1' / 'status.json'
+        status.write_text(status.read_text() + ' ')
+        with self.assertRaisesRegex(ValueError, 'SHA-256'):
+            validator.validate_changes(base, incoming)
+        validator.seal(incoming / 'model' / 'run', json.loads((self.bundle / 'manifest.json').read_text()))
+        self.assertEqual(validator.validate_changes(base, incoming), 1)
+        status.unlink()
+        with self.assertRaises(ValueError):
+            validator.validate_changes(base, incoming)
+
+    def test_changed_bundle_selection_rejects_symlinks(self):
+        root = self.bundle.parent
+        base = root / 'base'
+        incoming = root / 'incoming'
+        base.mkdir()
+        (incoming / 'model').mkdir(parents=True)
+        (incoming / 'model' / 'linked').symlink_to(self.bundle, target_is_directory=True)
+        with self.assertRaises(ValueError):
+            validator.validate_changes(base, incoming)
 
     def test_preserves_all_outcomes(self):
         manifest = validator.validate(self.bundle)
