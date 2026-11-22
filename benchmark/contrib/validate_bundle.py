@@ -107,6 +107,37 @@ def inventory(root):
     return files
 
 
+def validate_changes(base, incoming):
+    """Validate new or modified bundles against the current contract.
+
+    An unchanged bundle is historical evidence, not a new run under today's pins.
+    Compare all file paths and bytes, including the manifest, before skipping it.
+    """
+    if incoming.is_symlink() or not incoming.is_dir():
+        raise ValueError("Invalid submissions root")
+    count = 0
+    for model in sorted(incoming.iterdir()):
+        if model.name == "README.md" and model.is_file() and not model.is_symlink():
+            continue
+        if model.is_symlink() or not model.is_dir():
+            raise ValueError("Invalid submission model directory")
+        for bundle in sorted(model.iterdir()):
+            if bundle.is_symlink() or not bundle.is_dir():
+                raise ValueError("Invalid submission bundle directory")
+            previous = base / model.name / bundle.name
+            files = inventory(bundle)
+            if previous.is_dir() and not previous.is_symlink():
+                old_files = inventory(previous)
+                if files.keys() == old_files.keys() and all(
+                    files[name].stat().st_size == old_files[name].stat().st_size
+                    and sha(files[name]) == sha(old_files[name]) for name in files
+                ):
+                    continue
+            validate(bundle)
+            count += 1
+    return count
+
+
 def seal(root, metadata):
     write_json(root / "manifest.json", {**metadata, "files": {
         name: sha(path) for name, path in inventory(root).items() if name != "manifest.json"}})
