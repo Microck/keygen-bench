@@ -1,0 +1,367 @@
+{
+  "schema": "keygen-community-1",
+  "attempts": [
+    "attempt-1",
+    "attempt-2",
+    "attempt-3"
+  ],
+  "environment": {
+    "contract": {
+      "base_image": "debian:bookworm-slim@sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2e3687004faa906251",
+      "ft2_commit": "6c2ffc0778d02a42286b4a87e4dc28793ccbdf4d",
+      "harness_version": "2.4.6",
+      "prompt": {
+        "version": "prompt-v2",
+        "system_template_sha256": "208f0608f60694b3a0ff68a30b260c881b4731ac74568db2e03527857ef7ef3f",
+        "task_sha256": "ca1bf032fc28d26e82045c96285336a6d154a74c159b5a42c929fdf9274c67b2",
+        "system": "You are composing music in an isolated workspace. Use the bash tool to run commands and complete the task.\nEach command runs in /workspace in a fresh bash shell; files and the FT2 session persist between commands. Budget: no limit on steps, 120 minutes; a step is one reply, and every tool call in it runs in order. Every tool result ends with <time_left>, the minutes remaining.\nA command still running after 120 seconds is stopped and returns exit code 124 (137 if it had to be killed). Command output over 20,000 bytes shows only its first and last 10,000 bytes.\nThe `ft2 list` command describes the tracker tools. `ft2 call TOOL 'JSON_OBJECT'` calls one tool. `ft2 batch FILE.json` executes a list of {\"name\": TOOL, \"arguments\": {...}} calls in order.\nThis FT2 build exposes samples, instruments by name, patterns, order, tempo, save and render. Envelopes and note-to-sample mapping are unavailable; shape sounds in the sample data itself.\nPython 3 and NumPy are available for creating original sound material, editing files, and analyzing renders. Writing the XM bytes yourself is allowed. Keep it a real tracker module, with instruments and patterns doing the work, not one long pre-rendered sample.\nThe workspace is offline: no network, no coding-agent client, no skill library. You cannot hear audio; render to WAV with module_render and inspect the result with NumPy to check your work, then revise.\nA keygen tune plays in a loop. Compose so the module loops cleanly from its end back to its restart position.\nSave the final editable module as /workspace/submission/tune.xm. A WAV preview and source scripts may accompany it. The submission directory may hold at most 128 MiB in at most 4096 regular files (subdirectories are fine; links and special files are not). If the accompanying files break these limits they are dropped and only tune.xm is kept. A trusted process renders the final XM separately.\nIf the time budget runs out, the session stops and the tune.xm saved at that moment is collected as the submission.\nSubmit by running exactly this command:\necho COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT\nSubmission ends the session. There is no second attempt or post-submission repair.\n",
+        "task": "You have FastTracker II and Python/NumPy at your disposal. Make an original keygen tune. Music only.\nChoose the sound, tempo, harmony, rhythm, instruments, length and arrangement yourself.\n"
+      },
+      "limits": {
+        "steps": 0,
+        "wall_seconds": 7200,
+        "request_seconds": 3600,
+        "command_seconds": 120,
+        "render_seconds": 300,
+        "video_seconds": 600,
+        "artifact_bytes": 134217728
+      },
+      "submission_files": 4096,
+      "render": {
+        "rate": 44100,
+        "bits": 16
+      },
+      "scorer": "listener-v1",
+      "native": {
+        "timeout_seconds": 3600,
+        "retries": 2
+      },
+      "attempt_selection": "independent_repetitions",
+      "sources": {
+        "run.py": "d20362668be2cbdb1cc547b8d9a4d6f8bc4eac62f9aaebeb7d119246bdcb1a9f",
+        "campaign.py": "36a03eafb02f0138a3c7554c60f641ba6967e3ee07e1c523e2705fc0a137f42a",
+        "native_models.py": "af379e41a7cfc626c3d938a6b12602a4bcc1a93fbdc69d328b42b777a5b9e399",
+        "artifacts.py": "de9598ea7312d0326717bf11b6aba594d4f0585c8bcbdc5d3811ebffa5fc3010",
+        "bridge.py": "eef4c6c9f85a2a3e57738c80c496307867e2d591063756873b85ba4e6633a9e1",
+        "visualize.sh": "a49f4bc09336202729902522294cfb02295186ff304b5847cac70d0602a7a3e8",
+        "Dockerfile": "0d9f981ae9ec842f1124f36561951146df504cf6e6e2ef49b2c442c35669f0a7",
+        "requirements.txt": "801050735b440facd833deaf8c25072e365fc892204733df0327711ed3214bfe"
+      },
+      "requirements_sha256": "801050735b440facd833deaf8c25072e365fc892204733df0327711ed3214bfe",
+      "build_script_sha256": "ff7d825a2e711aeca70332aaab357b24a274ea27d2975997a075bb6154d72c36"
+    },
+    "images": {
+      "agent": "sha256:5153ff2ba26e368449eff1630310d6679b2fb2884dda3a78b1221dbe8807b0cf",
+      "visualizer": "sha256:dab0bd9c85eae7342480c2779b03a835d9a2ee31f307b5a8f1dd78ff5f8e05fe"
+    },
+    "image_details": {
+      "agent": {
+        "architecture": "amd64",
+        "os": "linux",
+        "layers": [
+          "sha256:34467cc93912af891dfee8a3902adf9b4f355a9bca4eaa46f658d1181a21de0d",
+          "sha256:6be0c0f249454eb736995e02ec605a97f6a93e915f3ef2cfa30f1413dcc2cee1",
+          "sha256:829a2fe7d11bf0826b6ad13249642a5533c3e1cf5ede970197a6559616bb22ad",
+          "sha256:54a223b3661a17f3c46bd70ef665fa5090b68efbe5f30a8bfe1a9c21e5410f94",
+          "sha256:ecb5a63c85fa2ae7521980f0663430216e15c72eab031e7bf4dc54fdcdcb5e32",
+          "sha256:ba6297373741a83630ae69e6253a7b008980d0c044e44520ce3e581b1707edf7",
+          "sha256:d8147866f43d193b6a8d739839ed6c22f28264998ae33f91586bd29e179897ea",
+          "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef"
+        ]
+      },
+      "visualizer": {
+        "architecture": "amd64",
+        "os": "linux",
+        "layers": [
+          "sha256:34467cc93912af891dfee8a3902adf9b4f355a9bca4eaa46f658d1181a21de0d",
+          "sha256:6be0c0f249454eb736995e02ec605a97f6a93e915f3ef2cfa30f1413dcc2cee1",
+          "sha256:829a2fe7d11bf0826b6ad13249642a5533c3e1cf5ede970197a6559616bb22ad",
+          "sha256:54a223b3661a17f3c46bd70ef665fa5090b68efbe5f30a8bfe1a9c21e5410f94",
+          "sha256:ecb5a63c85fa2ae7521980f0663430216e15c72eab031e7bf4dc54fdcdcb5e32",
+          "sha256:ba6297373741a83630ae69e6253a7b008980d0c044e44520ce3e581b1707edf7",
+          "sha256:d8147866f43d193b6a8d739839ed6c22f28264998ae33f91586bd29e179897ea",
+          "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef",
+          "sha256:afda6f60b6d40afdd54e5aa0e2eda56a457ea3e5c1e205af343d65c76891920f",
+          "sha256:51937b13177b586af5b654273f930abd2124d79145fe831b44cebaf7129aa615"
+        ]
+      }
+    },
+    "base_layers": [
+      "sha256:34467cc93912af891dfee8a3902adf9b4f355a9bca4eaa46f658d1181a21de0d"
+    ],
+    "model": {
+      "id": "community-model",
+      "model": "inkling-2-mini-26.4b-iq4-nl",
+      "response_model": "inkling-2-mini-26.4b-iq4-nl",
+      "provider": "custom",
+      "base_url": "https://prometheus.gimeno.dev/v1",
+      "api": "chat",
+      "api_key_env": "KEYGEN_CONTRIB_API_KEY",
+      "generation": {
+        "reasoning_effort": "xhigh",
+        "max_tokens": 16384
+      },
+      "tier": {
+        "level": "xhigh",
+        "reasoning": {
+          "reasoning_effort": "xhigh"
+        },
+        "spec_sha256": "26d591428defad56973655cb3230659eccbcf549aa9ec080c883c0e5c3d87e7b"
+      }
+    },
+    "tier_source": "https://huggingface.co/blog/inkling2mini",
+    "handle": "GodGMN",
+    "runtime": {
+      "system": "Linux",
+      "architecture": "x86_64",
+      "python": "3.11.2",
+      "docker": "29.9.2"
+    },
+    "packages": [
+      [
+        "Jinja2",
+        "3.1.6"
+      ],
+      [
+        "MarkupSafe",
+        "3.0.3"
+      ],
+      [
+        "PyYAML",
+        "6.0.2"
+      ],
+      [
+        "aiohappyeyeballs",
+        "2.7.1"
+      ],
+      [
+        "aiohttp",
+        "3.14.3"
+      ],
+      [
+        "aiosignal",
+        "1.4.0"
+      ],
+      [
+        "annotated-types",
+        "0.8.0"
+      ],
+      [
+        "anyio",
+        "4.15.1"
+      ],
+      [
+        "attrs",
+        "26.1.0"
+      ],
+      [
+        "boto3",
+        "1.43.101"
+      ],
+      [
+        "botocore",
+        "1.43.101"
+      ],
+      [
+        "certifi",
+        "2026.7.22"
+      ],
+      [
+        "charset-normalizer",
+        "3.5.1"
+      ],
+      [
+        "click",
+        "8.5.0"
+      ],
+      [
+        "distro",
+        "1.9.0"
+      ],
+      [
+        "fastuuid",
+        "0.14.0"
+      ],
+      [
+        "filelock",
+        "4.0.3"
+      ],
+      [
+        "frozenlist",
+        "1.8.0"
+      ],
+      [
+        "fsspec",
+        "2026.6.0"
+      ],
+      [
+        "h11",
+        "0.16.0"
+      ],
+      [
+        "hf-xet",
+        "1.6.0"
+      ],
+      [
+        "httpcore",
+        "1.0.9"
+      ],
+      [
+        "httpx",
+        "0.28.1"
+      ],
+      [
+        "huggingface_hub",
+        "1.33.0"
+      ],
+      [
+        "idna",
+        "3.20"
+      ],
+      [
+        "importlib_metadata",
+        "8.9.0"
+      ],
+      [
+        "jiter",
+        "0.17.0"
+      ],
+      [
+        "jmespath",
+        "1.1.0"
+      ],
+      [
+        "jsonschema",
+        "4.26.0"
+      ],
+      [
+        "jsonschema-specifications",
+        "2025.9.1"
+      ],
+      [
+        "litellm",
+        "1.102.1"
+      ],
+      [
+        "mini-swe-agent",
+        "2.4.6"
+      ],
+      [
+        "multidict",
+        "6.9.1"
+      ],
+      [
+        "openai",
+        "2.54.0"
+      ],
+      [
+        "packaging",
+        "26.3"
+      ],
+      [
+        "propcache",
+        "0.5.4"
+      ],
+      [
+        "pydantic",
+        "2.13.5"
+      ],
+      [
+        "pydantic-settings",
+        "2.15.0"
+      ],
+      [
+        "pydantic_core",
+        "2.46.5"
+      ],
+      [
+        "python-dateutil",
+        "2.9.0.post0"
+      ],
+      [
+        "python-dotenv",
+        "1.2.3"
+      ],
+      [
+        "referencing",
+        "0.37.0"
+      ],
+      [
+        "regex",
+        "2026.9.10"
+      ],
+      [
+        "requests",
+        "2.34.2"
+      ],
+      [
+        "rpds-py",
+        "2026.6.3"
+      ],
+      [
+        "s3transfer",
+        "0.19.2"
+      ],
+      [
+        "scipy",
+        "1.17.1"
+      ],
+      [
+        "six",
+        "1.17.0"
+      ],
+      [
+        "sniffio",
+        "1.3.1"
+      ],
+      [
+        "tiktoken",
+        "0.14.0"
+      ],
+      [
+        "tokenizers",
+        "0.23.2"
+      ],
+      [
+        "tqdm",
+        "4.70.1"
+      ],
+      [
+        "typing-inspection",
+        "0.4.4"
+      ],
+      [
+        "typing_extensions",
+        "4.16.0"
+      ],
+      [
+        "urllib3",
+        "2.8.0"
+      ],
+      [
+        "yarl",
+        "1.25.1"
+      ],
+      [
+        "zipp",
+        "4.1.0"
+      ]
+    ]
+  },
+  "files": {
+    "attempt-2/environment.json": "a7557de07291918cfd73c38df40f827908c154e06af5a708f27f8e81612d6dcb",
+    "attempt-2/trajectory.json": "8127aa1914510251d24ce906c7d76e8040b276601e8ab10b8b0b6bd284063350",
+    "attempt-2/tune.xm": "e146009667bc3b9e22af986a8b31fb25e9dc894907ff4d6c2d1c9775e226b706",
+    "attempt-2/status.json": "8374e163c6ea1594f9b2539420d67c9b25a8e3c7536c5e59bfed895f9199ff90",
+    "attempt-2/transport.jsonl": "cb58b5fb32e5a614c8ec118bd5ed08a99de05ce1678df43e35431351d8be8195",
+    "attempt-1/environment.json": "a7557de07291918cfd73c38df40f827908c154e06af5a708f27f8e81612d6dcb",
+    "attempt-1/trajectory.json": "42e43fc665cf4197d90d8587d8b758114f728b74114520489a70a1284f7b6fc9",
+    "attempt-1/tune.xm": "3a8c13913398bfa5bc1a04a9a5f7b545bf33e32f1162462993ad4a442601b311",
+    "attempt-1/status.json": "6e02a753271b438ba78d8f3073b3cc7cba32a3f6d7530a95848018429722a683",
+    "attempt-1/transport.jsonl": "369a8ae14a01debd8f669da4e1bca3aa0dc7f52a23650d2c5823b20f9791172e",
+    "attempt-3/environment.json": "a7557de07291918cfd73c38df40f827908c154e06af5a708f27f8e81612d6dcb",
+    "attempt-3/trajectory.json": "67117e90848aeb9146d202840f0c61e4469f4aa4cafdc7c610dd7c4aa428c572",
+    "attempt-3/status.json": "c58e88891e61edc1cebdb46a1359ac4b3e856ef69183ef292c1723eddd566c33",
+    "attempt-3/transport.jsonl": "8cd265c088eada07b1008cdb24e2015da54c3b86083e3af601e13498b181d7bd"
+  }
+}
