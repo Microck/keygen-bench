@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Bound costs when Chat Completions receipts omit cached-token details.
+
 - Validate new and changed community bundles without rejecting unchanged historical runs.
 
 - Rename GPT-6 Pro to GPT-6 Astra Pro in published labels.
