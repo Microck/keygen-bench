@@ -31,7 +31,7 @@ export const MODEL_HISTORY = [
   { date: "2026-10-05", kind: "repository", commits: ["1fd64409c697", "465621850aed", "4ea80a049b19", "bbc82547c810"], keys: ["claude-opus-5-5", "deepseek-v4-flash", "glm-5-3", "glm-5-3-flash", "glm-5.2", "grok-4-5", "grok-4-7", "hy4-preview", "kimi-k2-6", "kimi-k2-7", "kimi-k3", "mimo-v2.6-pro", "minimax-m2.7", "minimax-m3", "nemotron-3-super-120b-a12b", "nemotron-3-ultra", "step-3.7-flash", "swe-1-6", "swe-1-7-lightning", "swe-2"] },
   { date: "2026-10-01", pr: 22, kind: "snapshot", note: "Documented in October 1 snapshots, including pilot entries; first addition dates are unverified", keys: [
     "claude-fable-5", "claude-fable-5-1", "claude-opus-4-5-20251101", "claude-opus-4-6", "claude-opus-4-7", "claude-opus-4-8", "claude-opus-5", "claude-sonnet-4-6", "claude-sonnet-5", "claude-sonnet-5-5",
-    "deepseek-v4-1-flash-0910-estimated", "deepseek-v4-pro", "gemini-3-flash-preview", "gemini-3.1-pro-preview", "gemini-3.5-flash", "gemini-3.6-flash", "gemini-3.7-flash", "gemini-3.8-flash",
+    "deepseek-v4-1-flash-0910", "deepseek-v4-pro", "gemini-3-flash-preview", "gemini-3.1-pro-preview", "gemini-3.5-flash", "gemini-3.6-flash", "gemini-3.7-flash", "gemini-3.8-flash",
     "gpt-5-3-codex", "gpt-5-4", "gpt-5-4-mini", "gpt-5.5", "gpt-5.6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-6-astra", "gpt-6-luna", "gpt-6-sol", "gpt-6.1-sol", "gpt-oss-120b", "grok-4-6", "hy3", "inkling", "kimi-k2.7-code", "mercury-2.5", "muse-spark-1.2", "muse-spark-1.3", "qwen3.7-plus", "qwen3.8-flash",
   ] },
 ];
