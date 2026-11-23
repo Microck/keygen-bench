@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 from datetime import datetime, timezone
+from decimal import Decimal, ROUND_CEILING, ROUND_FLOOR
 import hashlib
 import json
 from pathlib import Path
@@ -28,7 +29,7 @@ SCORE_VERSION = re.search(r'^SCORE_VERSION = "([^"]+)"$', (ROOT / "benchmark/sco
 
 
 def response_usage(directory: Path, totals: dict, *, allow_partial: bool = False) -> list[dict] | None:
-    """Use complete Responses receipts, not the controller's lossy cache totals.
+    """Use complete Responses or Chat receipts, not lossy controller cache totals.
 
     Other protocols retain their existing aggregate accounting. Reconcile the
     token/request totals before treating receipts as the whole attempt.
@@ -43,16 +44,24 @@ def response_usage(directory: Path, totals: dict, *, allow_partial: bool = False
             usage = receipt.get("usage")
             if not usage:
                 continue
-            details = usage.get("input_tokens_details") or {}
-            fields = (usage.get("input_tokens"), usage.get("output_tokens"),
-                      details.get("cached_tokens"), details.get("cache_write_tokens"))
-            if any(type(value) is not int or value < 0 for value in fields):
+            # Responses and Chat Completions use different field names. An omitted
+            # cache split is unknown, not proof that the cached amount was zero.
+            is_chat = "prompt_tokens" in usage
+            details = usage.get("prompt_tokens_details" if is_chat else "input_tokens_details") or {}
+            prompt = usage.get("prompt_tokens" if is_chat else "input_tokens")
+            output = usage.get("completion_tokens" if is_chat else "output_tokens")
+            cached = details.get("cached_tokens")
+            writes = details.get("cache_write_tokens")
+            if any(type(value) is not int or value < 0 for value in (prompt, output)):
                 return None
-            prompt, output, cached, writes = fields
-            if cached + writes > prompt:
+            if any(value is not None and (type(value) is not int or value < 0) for value in (cached, writes)):
+                return None
+            if (cached or 0) + (writes or 0) > prompt:
                 raise ValueError(f"{path}: invalid response cache usage")
-            requests.append({"prompt_tokens": prompt, "completion_tokens": output,
-                             "cached_tokens": cached, "cache_write_tokens": writes})
+            request = {"prompt_tokens": prompt, "completion_tokens": output, "cached_tokens": cached}
+            if writes is not None:
+                request["cache_write_tokens"] = writes
+            requests.append(request)
     if (not requests or (not allow_partial and len(requests) != totals.get("requests"))
             or len(requests) > totals.get("requests", 0)
             or any(sum(request[key] for request in requests) != totals.get(key)
@@ -207,12 +216,29 @@ def public_run(row: dict, group: dict, directory: Path, output: Path, campaign: 
     }
     requests = response_usage(directory, totals) if not row["usage_unknown"] else None
     if requests:
-        run["usage"]["cached_tokens"] = sum(request["cached_tokens"] for request in requests)
+        cached = [request["cached_tokens"] for request in requests]
+        run["usage"]["cached_tokens"] = sum(cached) if all(value is not None for value in cached) else None
         run["provenance"]["usage_source"] = "reconciled per-response transport receipts"
         amounts = [estimate_request_cost(request, pub_price) for request in requests]
         run["cost_usd"] = round(sum(amounts), 4) if all(amount is not None for amount in amounts) else None
-        totals = {**totals, **{key: sum(request[key] for request in requests) for key in requests[0]}}
-    if run["cost_usd"] is None and not row["usage_unknown"]:
+        if run["cost_usd"] is None:
+            intervals = [{"min": amount, "max": amount} if amount is not None else
+                         estimate_cost_range(request, pub_price, per_request=True)
+                         for request, amount in zip(requests, amounts)]
+            if all(interval is not None for interval in intervals):
+                run["cost_range_usd"] = {"min": float(sum(Decimal(str(interval["min"])) for interval in intervals).quantize(Decimal("0.0001"), rounding=ROUND_FLOOR)),
+                                         "max": float(sum(Decimal(str(interval["max"])) for interval in intervals).quantize(Decimal("0.0001"), rounding=ROUND_CEILING)),
+                                         "reason": "Recorded request usage at list prices; unknown cache splits are bounded, not a provider bill."}
+    # If retained request/response events cannot be reconciled, the aggregate
+    # cannot prove complete usage or cache splits, even when all receipts are empty.
+    unreconciled_transport = False
+    if requests is None and (directory / "transport.jsonl").is_file():
+        with (directory / "transport.jsonl").open() as stream:
+            unreconciled_transport = any(json.loads(line).get("event") in ("request", "response") for line in stream)
+        if unreconciled_transport:
+            run["cost_usd"] = None
+            run["provenance"]["usage_source"] = "unreconciled transport receipts; cost unknown"
+    if run["cost_usd"] is None and requests is None and "cost_range_usd" not in run and not row["usage_unknown"] and not unreconciled_transport:
         interval = estimate_cost_range(totals, pub_price)
         if interval is not None:
             run["cost_range_usd"] = interval

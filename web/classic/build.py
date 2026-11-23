@@ -118,6 +118,8 @@ def estimate_cost(totals: dict, price: dict, *, round_digits: int | None = 4) ->
                                    ("cache_write_1h_tokens", "cache_write_1h_usd_per_m")):
         if price.get(rate_field) and token_field not in totals:
             return None
+    if totals.get("cached_tokens") is None and price.get("cached_input_usd_per_m") not in (None, price["input_usd_per_m"]):
+        return None
     cached = totals.get("cached_tokens") or 0
     writes = totals.get("cache_write_tokens") or 0
     writes_1h = totals.get("cache_write_1h_tokens") or 0
@@ -153,9 +155,12 @@ def estimate_cost_range(totals: dict, price: dict, *, per_request: bool = False)
     uses the lowest/highest applicable documented rate independently, so mixed
     request tiers cannot escape the interval. Missing usage or rates stay unknown.
     """
-    fields = ("prompt_tokens", "cached_tokens", "completion_tokens")
+    fields = ("prompt_tokens", "completion_tokens")
     if not totals or any(isinstance(totals.get(key), bool) or not isinstance(totals.get(key), int)
                          or totals[key] < 0 for key in fields):
+        return None
+    cached = totals.get("cached_tokens")
+    if cached is not None and (isinstance(cached, bool) or not isinstance(cached, int) or cached < 0):
         return None
     rows = [{key: value for key, value in price.items() if key != "tiers"}]
     for tier in sorted(price.get("tiers", []), key=lambda row: row["min_prompt_tokens"]):
@@ -169,14 +174,17 @@ def estimate_cost_range(totals: dict, price: dict, *, per_request: bool = False)
     if any(key in totals and (isinstance(totals[key], bool) or not isinstance(totals[key], int)
                               or totals[key] < 0) for key in writes):
         return None
-    remaining = totals["prompt_tokens"] - totals["cached_tokens"] - sum(totals.get(key, 0) for key in writes)
+    remaining = totals["prompt_tokens"] - (cached or 0) - sum(totals.get(key, 0) for key in writes)
     if remaining < 0:
         return None
     components = [(totals["completion_tokens"], [row["output_usd_per_m"] for row in rows]),
-                  (totals["cached_tokens"], [row.get("cached_input_usd_per_m")
+                  (cached or 0, [row.get("cached_input_usd_per_m")
                    if row.get("cached_input_usd_per_m") is not None else row["input_usd_per_m"] for row in rows])]
     input_rates = [row["input_usd_per_m"] for row in rows]
-    cache_unknown = False
+    cache_unknown = cached is None and bool(remaining)
+    if cache_unknown:
+        input_rates.extend(row.get("cached_input_usd_per_m") if row.get("cached_input_usd_per_m") is not None
+                           else row["input_usd_per_m"] for row in rows)
     for key, rate in zip(writes, rates):
         count = totals.get(key)
         if count is not None:
@@ -194,7 +202,7 @@ def estimate_cost_range(totals: dict, price: dict, *, per_request: bool = False)
     if len(rows) > 1:
         reasons.append("unrecorded per-request context sizes")
     if cache_unknown:
-        reasons.append("unrecorded fresh-input and cache-write splits")
+        reasons.append("unrecorded cached-input or cache-write splits")
     reason = ("Recorded token usage at documented maker list prices. Bounds account for " + " and ".join(reasons)
               + "; they are not a provider bill.") if reasons else "Recorded token usage at documented maker list prices; not a provider bill."
     unit = Decimal("0.0001")
