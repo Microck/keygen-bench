@@ -132,6 +132,7 @@ jobs:
         if: env.DRY_RUN != 'true'
         working-directory: repository
         env:
+          GH_META_TOKEN: ${{ github.token }}
           SITE_KEY: ${{ secrets.KEYGEN_SITE_DEPLOY_KEY }}
           MEDIA_KEY: ${{ secrets.KEYGEN_MEDIA_DEPLOY_KEY }}
           MEDIA2_KEY: ${{ secrets.KEYGEN_MEDIA2_DEPLOY_KEY }}
@@ -153,7 +154,11 @@ jobs:
               path = pathlib.Path(os.environ['KEYGEN_' + name + '_DEPLOY_KEY_FILE'])
               path.touch(mode=0o600)
               path.write_text(value.rstrip() + '\n')
-          with urllib.request.urlopen('https://api.github.com/meta', timeout=30) as response:
+          request = urllib.request.Request(
+              'https://api.github.com/meta',
+              headers={'Authorization': 'Bearer ' + os.environ['GH_META_TOKEN']},
+          )
+          with urllib.request.urlopen(request, timeout=30) as response:
               keys = json.load(response)['ssh_keys']
           pathlib.Path(os.environ['KEYGEN_KNOWN_HOSTS_FILE']).write_text(
               ''.join('github.com ' + key + '\n' for key in keys))
