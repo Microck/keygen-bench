@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Report unrecognized XM effect bytes without aborting evaluation.
+- Preserve and verify linked queue continuations of unstarted benchmark slots.
 
 - Validate new and changed community bundles without rejecting unchanged historical runs.
 
