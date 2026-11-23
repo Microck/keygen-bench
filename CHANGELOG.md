@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Report unrecognized XM effect bytes without aborting evaluation.
 - Bound costs when Chat Completions receipts omit cached-token details.
 - Preserve and verify linked queue continuations of unstarted benchmark slots.
 
