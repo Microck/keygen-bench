@@ -154,6 +154,37 @@ class RunsBuilderTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "retry differs"):
             self.build(out="tampered-origin")
 
+    def test_linked_queue_continues_unstarted_slot_with_frozen_origin(self):
+        original, continuation, directory, proof = self.add_infrastructure_retry()
+        original_status = self.runs / "test-model/attempt-3/status.json"
+        status = json.loads(original_status.read_text())
+        status.update(status="RESERVED", failure_category=None, model_failure=None)
+        self.dump(original_status, status)
+        profile_path = original_status.parent / "profile.json"
+        profile = json.loads(profile_path.read_text())
+        profile.update(status="RESERVED", run_failure_category=None, model_failure=None)
+        profile["inputs"]["artifacts"]["status.json"] = sha256(original_status)
+        self.dump(profile_path, profile)
+        origin = {"campaign_id": self.config["campaign_id"], "attempt_id": original,
+                  "status": "RESERVED", "status_sha256": sha256(original_status),
+                  "outcome": "UNATTEMPTED", "failure_category": None}
+        queue = {**self.config, "campaign_id": "queue-campaign", "policies": {
+            "attempt_selection": "independent_repetitions_infrastructure_reruns",
+            "plan": {"test-model": [{"repetition": 3, "origin": origin}]},
+            "linked_campaigns": [{"campaign_id": self.config["campaign_id"],
+                                   "config_sha256": digest(self.config)}]}}
+        self.dump(directory / "campaign.json", {"campaign": queue, "sha256": digest(queue)})
+        record = {"campaign_sha256": digest(queue), "attempt_id": continuation,
+                  "model_id": "test-model", "repetition": 3, "kind": "continuation",
+                  "retry_of": original, "retry_of_campaign_id": self.config["campaign_id"]}
+        self.dump(proof, record)
+        third = next(item for item in self.build()["runs"] if item["provenance"]["attempt_ordinal"] == 3)
+        self.assertEqual(third["score"], 90.0)
+        record["kind"] = "retry"
+        self.dump(proof, record)
+        with self.assertRaisesRegex(ValueError, "retry differs"):
+            self.build(out="wrong-kind")
+
     def test_misclassified_model_failure_is_not_replaced(self):
         self.add_infrastructure_retry()
         directory = self.runs / "test-model" / "attempt-3"

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Preserve and verify linked queue continuations of unstarted benchmark slots.
+
 - Validate new and changed community bundles without rejecting unchanged historical runs.
 
 - Rename GPT-6 Pro to GPT-6 Astra Pro in published labels.

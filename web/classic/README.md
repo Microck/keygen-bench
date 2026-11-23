@@ -73,10 +73,11 @@ All commands below run from the repository root. Use your own local campaign and
 
 The deployment builder reads `runs/<model>/attempt-1/` through
 `attempt-3/`. A slot stopped by a non-model infrastructure failure may use a
-verified retry retained in `other/`, linked by its immutable retry record. For a
-linked recovery campaign, the builder also checks the frozen origin status hash,
-campaign identity and unchanged model condition. The failed original stays in its slot and in provenance; a scored result
-is never replaced. It verifies frozen campaign identities, retained
+verified retry retained in `other/`, linked by its immutable retry record. An
+unstarted reserved slot may similarly use a verified queue continuation. For a
+linked campaign, the builder also checks the frozen origin status hash,
+campaign identity and unchanged model condition. The original stays in its slot
+and in provenance; a scored result is never replaced. It verifies frozen campaign identities, retained
 profiles, submitted XM checksums, playback traces and byte-exact decoded
 canonical WAVs. Model-generated invalid intermediate WAVs remain byte-exact in the submission;
 canonical WAVs still require verified lossless FLAC. Standalone contribution
