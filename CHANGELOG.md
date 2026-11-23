@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Report unrecognized XM effect bytes without aborting evaluation.
+
 - Validate new and changed community bundles without rejecting unchanged historical runs.
 
 - Rename GPT-6 Pro to GPT-6 Astra Pro in published labels.

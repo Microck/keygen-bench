@@ -53,6 +53,11 @@ class ScoreTests(unittest.TestCase):
         if getattr(mmap, "__file__", "").endswith(".so"):
             self.assertIn(str(Path(mmap.__file__).resolve()), identity["loaded_native_libraries"])
 
+    def test_structure_reports_unknown_effect_bytes_without_crashing(self):
+        xm = score.parse_xm(build_xm())
+        xm["patterns"][0]["cells"] = [(0, 0, 49, 1, 0, effect, 1) for effect in (15, 35, 41, 42, 255)]
+        self.assertEqual(score.structure(xm)["effects_used"], ["0x29", "0x2A", "0xFF", "F", "Z"])
+
     def test_parse_and_structure(self):
         xm = score.parse_xm(build_xm())
         self.assertEqual((xm["channels"], xm["song_length"], xm["restart"], xm["n_instruments"]), (2, 3, 1, 1))
