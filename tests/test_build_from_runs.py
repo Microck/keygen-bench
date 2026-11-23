@@ -18,7 +18,7 @@ import build_from_runs as builder
 from benchmark.report import digest
 from benchmark.score import benchmark_score
 from collect_public import response_usage, sha256
-from build import estimate_request_cost
+from build import estimate_cost_range, estimate_request_cost
 from check_runs_parity import compare
 from benchmark.tests.test_contrib import make_bundle
 
@@ -235,6 +235,45 @@ class RunsBuilderTests(unittest.TestCase):
         self.assertEqual(response_usage(directory, {**totals, "requests": 3}, allow_partial=True), requests)
         self.assertIsNone(response_usage(directory, {**totals, "requests": 1}, allow_partial=True))
         self.assertIsNone(response_usage(directory, {**totals, "prompt_tokens": 400001}))
+
+    def test_chat_receipts_preserve_unknown_cached_input(self):
+        directory = self.root / "chat-receipts"
+        directory.mkdir()
+        receipts = [
+            {"usage": {"prompt_tokens": 100000, "completion_tokens": 10000,
+                       "prompt_tokens_details": {"cached_tokens": 80000}}},
+            {"usage": {"prompt_tokens": 100000, "completion_tokens": 10000}},
+        ]
+        (directory / "transport.jsonl").write_text("\n".join(json.dumps(row) for row in receipts))
+        totals = {"requests": 2, "prompt_tokens": 200000, "completion_tokens": 20000, "cached_tokens": 80000}
+        requests = response_usage(directory, totals)
+        self.assertEqual([request["cached_tokens"] for request in requests], [80000, None])
+        price = {"input_usd_per_m": .2, "cached_input_usd_per_m": .02, "output_usd_per_m": .2}
+        self.assertAlmostEqual(estimate_request_cost(requests[0], price), .0076)
+        self.assertIsNone(estimate_request_cost(requests[1], price))
+        interval = estimate_cost_range(requests[1], price, per_request=True)
+        self.assertEqual((interval["min"], interval["max"]), (.004, .022))
+        self.assertIsNone(response_usage(directory, {**totals, "prompt_tokens": 1}))
+
+    def test_unreconciled_transport_cannot_invent_an_exact_cost(self):
+        directory = self.runs / "test-model" / "attempt-1"
+        (directory / "transport.jsonl").write_text("\n".join(json.dumps(row) for row in [
+            {"event": "request"}, {"event": "response", "usage": None},
+            {"event": "request"}, {"event": "response", "usage": None},
+        ]))
+        data = self.build(no_media=True)
+        run = next(row for row in data["runs"] if row["slug"] == "historic-attempt-1")
+        self.assertIsNone(run["cost_usd"])
+        self.assertNotIn("cost_range_usd", run)
+        self.assertIn("unreconciled", run["provenance"]["usage_source"])
+
+    def test_missing_cached_count_is_not_zero_when_discounted(self):
+        from build import estimate_cost
+        price = {"input_usd_per_m": 1, "cached_input_usd_per_m": .1, "output_usd_per_m": 2}
+        usage = {"prompt_tokens": 100000, "completion_tokens": 1000}
+        self.assertIsNone(estimate_cost(usage, price))
+        bounds = estimate_cost_range(usage, price)
+        self.assertEqual((bounds["min"], bounds["max"]), (.012, .102))
 
     def test_partial_receipt_lower_bound_handles_unknown_cache_retention(self):
         price = {"input_usd_per_m": 1, "cached_input_usd_per_m": .05, "output_usd_per_m": 5,

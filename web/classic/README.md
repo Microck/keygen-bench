@@ -154,10 +154,12 @@ commit `547ddb3f`; its original per-attempt input is not included here.
 Rebuild the additions with `build_spend.py` and add their recorded bounds to
 the historical bounds, without treating the snapshot as raw attempt records.
 
+The Vibe addition uses `data/site/vibe-spend-usage.json` for the 19 physical attempts, eight readiness pilots and three queue probes. Missing response usage and cache splits stay unknown or bounded, not free. These are hosted list estimates, not subscription charges.
+
 Pricing uses the canonical builder's cache-write and context-tier rules. Complete
-Responses transport receipts are reconciled with request/input/output totals
+Responses and Chat Completions transport receipts are reconciled with request/input/output totals
 before using their cache counts and per-request context tiers. These take
-precedence over lossy controller cache aggregates. Where
+precedence over lossy controller cache aggregates. A missing chat cache split is unknown, not zero, and produces a conservative cost range. Where
 the recorded aggregate usage cannot establish an exact amount, the publication
 shows a bounded estimate or an unknown cost instead of the legacy prototype's
 guessed exact amount. Partly recorded usage with a known estimate is explicitly

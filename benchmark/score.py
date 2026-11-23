@@ -150,7 +150,10 @@ def structure(xm: dict, audible_channels: set[int] | None = None) -> dict:
     """Counts a tracker musician would ask about first: what actually plays, and how much is reused."""
     used = [xm["patterns"][p] for p in xm["order"] if p < len(xm["patterns"])]
     row_seconds = 2.5 / xm["bpm"] * xm["speed"] if xm["bpm"] else 0.0
-    effect_letters = sorted({"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"[c[5]] for pat in used for c in pat["cells"] if c[5] or c[6]})
+    # XM stores effect types as bytes; preserve unknown values without treating them as supported commands.
+    effects = {c[5] for pat in used for c in pat["cells"] if c[5] or c[6]}
+    effect_letters = sorted("0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"[effect] if effect < 36 else f"0x{effect:02X}"
+                            for effect in effects)
     samples = [s for inst in xm["instruments"] for s in inst["samples"]]
     song_seconds = sum(p["rows"] for p in used) * row_seconds
     rows = sum(p["rows"] for p in used)
