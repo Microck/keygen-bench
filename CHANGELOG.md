@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Widen the tracker model picker so names and scores fit.
+
 - Label the older DeepSeek V4.1 Flash run as the confirmed 0910 release.
 - Add Vibe runs for DeepSeek V4.1 Flash 1017, Mistral Small 4, Ministral 3 (3B, 8B, 14B) and Codestral 2508, including failures and retained retries.
 - Report unrecognized XM effect bytes without aborting evaluation.

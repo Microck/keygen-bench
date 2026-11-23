@@ -169,6 +169,7 @@ const CSS = `
   .vb .picker-field { display: flex; gap: 4px; align-items: center; max-width: 100%; }
   .vb .picker-field > .shadow-text { flex: none; }
   .vb .picker-field > .dd { flex: none; }
+  .vb .tracker-pickers .picker-field > .dd { flex: 0 1 auto; min-width: 0; }
   .vb .transport { flex-wrap: wrap; }
   .vb .playback-actions { display: flex; flex: 1 0 100%; gap: 3px; align-items: center; }
   .vb .channel-nav { display: flex; flex: none; gap: 3px; align-items: center; }
@@ -440,7 +441,7 @@ export async function mount(root, ctx) {
       h("div", { class: "picker-field" }, h("span", { class: "shadow-text" }, "Company"),
         dropdown({ label: "Company", items: makerItems(data), value: r.maker, width: 120, onChange: (mk) => ctx.go({ run: newestOf(mk).slug }), onHover: (mk) => prefetchXM(data, newestOf(mk)) })),
       h("div", { class: "picker-field" }, h("span", { class: "shadow-text" }, "Model"),
-        dropdown({ label: "Model", items: modelItems(data, r.maker, r.slug), value: r.slug, width: 170, onChange: (s2) => ctx.go({ run: s2 }), onHover: (s2) => prefetchXM(data, data.bySlug[s2]) })),
+        dropdown({ label: "Model", items: modelItems(data, r.maker, r.slug), value: r.slug, width: 230, onChange: (s2) => ctx.go({ run: s2 }), onHover: (s2) => prefetchXM(data, data.bySlug[s2]) })),
       h("span", { class: "grow" }),
       ...(r.media.xm ? [h("a", { class: "btn", href: mediaUrl(data, r.media.xm), download: r.slug + ".xm", style: { height: "14px" } }, ".XM")] : []),
       ...(r.media.audio ? [h("a", { class: "btn", href: mediaUrl(data, r.media.audio), download: r.slug + ".mp3", style: { height: "14px" } }, ".MP3")] : []));
