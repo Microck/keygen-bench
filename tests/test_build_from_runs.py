@@ -236,6 +236,15 @@ class RunsBuilderTests(unittest.TestCase):
         self.assertIsNone(response_usage(directory, {**totals, "requests": 1}, allow_partial=True))
         self.assertIsNone(response_usage(directory, {**totals, "prompt_tokens": 400001}))
 
+    def test_reviewed_publication_key_changes_slug_not_source_identity(self):
+        row = {"model_id": "deepseek-v4-1-flash", "model": "devin/deepseek-v4-1-flash", "effective_settings": None}
+        metadata = {"deepseek-v4-1-flash": {"publication_key": "deepseek-v4-1-flash-0910-estimated", "publication_campaign_sha256": ["frozen-campaign", "retry-campaign"]}}
+        self.assertEqual(builder.publication_model_key(row), "deepseek-v4-1-flash")
+        self.assertEqual(builder.publication_model_key(row, metadata, "other-campaign"), "deepseek-v4-1-flash")
+        self.assertEqual(builder.publication_model_key(row, metadata, "frozen-campaign"), "deepseek-v4-1-flash-0910-estimated")
+        self.assertEqual(builder.publication_model_key(row, metadata, "retry-campaign"), "deepseek-v4-1-flash-0910-estimated")
+        self.assertEqual(row["model"], "devin/deepseek-v4-1-flash")
+
     def test_chat_receipts_preserve_unknown_cached_input(self):
         directory = self.root / "chat-receipts"
         directory.mkdir()

@@ -2,8 +2,11 @@
 
 ## Unreleased
 
+- Label the older DeepSeek V4.1 Flash run as an estimated 0910 release.
+- Add Vibe runs for DeepSeek V4.1 Flash 1017, Mistral Small 4, Ministral 3 (3B, 8B, 14B) and Codestral 2508, including failures and retained retries.
 - Report unrecognized XM effect bytes without aborting evaluation.
 - Bound costs when Chat Completions receipts omit cached-token details.
+
 - Preserve and verify linked queue continuations of unstarted benchmark slots.
 
 - Validate new and changed community bundles without rejecting unchanged historical runs.
