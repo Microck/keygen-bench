@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Bound costs when Chat Completions receipts omit cached-token details.
+- Preserve and verify linked queue continuations of unstarted benchmark slots.
 
 - Validate new and changed community bundles without rejecting unchanged historical runs.
 

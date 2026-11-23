@@ -116,7 +116,7 @@ def organize(runs: Path, model: str, route: str, slots: dict[int, Path], others:
                       "retry_of", "retry_of_campaign_id"}
         queue_proof = (isinstance(proof, dict) and set(proof) == queue_keys
                        and all(proof.get(key) == value for key, value in expected.items())
-                       and proof.get("model_id") == model and proof.get("kind") == "retry"
+                       and proof.get("model_id") == model and proof.get("kind") in {"retry", "continuation"}
                        and proof.get("repetition") == status.get("repetition")
                        and isinstance(proof.get("retry_of_campaign_id"), str))
         if (not isinstance(campaign_hash, str) or not re.fullmatch(r"[a-f0-9]{64}", campaign_hash)

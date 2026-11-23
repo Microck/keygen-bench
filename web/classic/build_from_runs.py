@@ -192,7 +192,8 @@ def resolve_infrastructure_retry(directory: Path, row: dict, config: dict, campa
                 policies = retry_config.get("policies") or {}
                 model_id = status.get("model", {}).get("id")
                 expected = {"campaign_sha256": retry_hash, "attempt_id": attempt_id, "model_id": model_id,
-                            "repetition": ordinal, "kind": "retry", "retry_of": row["attempt_id"],
+                            "repetition": ordinal, "kind": "continuation" if row["status"] == "RESERVED" else "retry",
+                            "retry_of": row["attempt_id"],
                             "retry_of_campaign_id": config.get("campaign_id")}
                 entries = [entry for entry in (policies.get("plan") or {}).get(model_id, [])
                            if entry.get("repetition") == ordinal]
@@ -203,7 +204,8 @@ def resolve_infrastructure_retry(directory: Path, row: dict, config: dict, campa
                 actual = read_json(checked_path(directory, "status.json"))
                 required = {"campaign_id": config.get("campaign_id"), "attempt_id": row["attempt_id"],
                             "status": actual.get("status"), "status_sha256": sha256(checked_path(directory, "status.json")),
-                            "outcome": row.get("outcome"), "failure_category": row.get("failure_category")}
+                            "outcome": "UNATTEMPTED" if row["status"] == "RESERVED" and not row["attempted"] else row.get("outcome"),
+                            "failure_category": row.get("failure_category")}
                 if (proof != expected or policies.get("attempt_selection") != "independent_repetitions_infrastructure_reruns"
                         or last != required or len(linked) != 1 or linked[0].get("config_sha256") != campaign_hash
                         or condition_fingerprint(retry_config, status.get("model")) != condition_fingerprint(config, row["status_model"])):
