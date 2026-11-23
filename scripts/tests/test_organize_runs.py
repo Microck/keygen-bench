@@ -86,6 +86,24 @@ class OrganizeRunsTests(unittest.TestCase):
         self.assertEqual((self.runs / "m" / record.name).read_bytes(), record.read_bytes())
         self.assertEqual(json.loads((self.runs / "m/attempt-3/status.json").read_text())["status"], "INFRA_ERROR")
 
+    def test_retains_linked_queue_continuation_record(self):
+        slots = {n: self.attempt(f"m-rep-{n}", None, "RESERVED") for n in (1, 2, 3)}
+        continuation = self.attempt("m-rep-3-retry-1", 40)
+        status_path = continuation / "status.json"
+        status = json.loads(status_path.read_text())
+        status.update(retry_of="m-rep-3", repetition=3)
+        status_path.write_text(json.dumps(status))
+        campaign_hash = "b" * 64
+        (continuation / "campaign.json").write_text(json.dumps({"snapshot": {
+            "campaign": {"campaign_id": "queue"}, "config_sha256": campaign_hash}}))
+        record = continuation.parent / f"retry-{continuation.name}.json"
+        record.write_text(json.dumps({"campaign_sha256": campaign_hash, "attempt_id": continuation.name,
+            "model_id": "m", "repetition": 3, "kind": "continuation", "retry_of": "m-rep-3",
+            "retry_of_campaign_id": "camp-1"}))
+        organize_runs.organize(self.runs, "m", "mistral", slots, [continuation], "paris:c/runs")
+        self.assertEqual((self.runs / "m" / record.name).read_bytes(), record.read_bytes())
+        self.assertEqual(json.loads((self.runs / "m/attempt-3/status.json").read_text())["status"], "RESERVED")
+
     def test_rejects_retry_record_for_wrong_campaign_before_writing_slots(self):
         slots = {n: self.attempt(f"m-rep-{n}", 50 + n) for n in (1, 2, 3)}
         retry = self.attempt("m-rep-3-retry-1", 40)
