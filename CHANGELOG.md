@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add three GPT-6.2 Astra Pro benchmark attempts and recorded API usage.
+
 - Widen the tracker model picker so names and scores fit.
 
 - Label the older DeepSeek V4.1 Flash run as the confirmed 0910 release.
