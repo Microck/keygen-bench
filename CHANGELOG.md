@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Recover bounded or exact cost estimates from reconciled Anthropic-format usage receipts.
+
 - Add three GPT-6.2 Astra Pro benchmark attempts and recorded API usage.
 - Add three GPT-6.2 Sol Pro benchmark attempts and recorded API usage.
 

@@ -245,6 +245,48 @@ class RunsBuilderTests(unittest.TestCase):
         self.assertEqual(builder.publication_model_key(row, metadata, "retry-campaign"), "deepseek-v4-1-flash-0910")
         self.assertEqual(row["model"], "devin/deepseek-v4-1-flash")
 
+    def test_anthropic_receipts_reconcile_cache_and_bound_unknown_ttl(self):
+        directory = self.root / "anthropic-receipts"
+        directory.mkdir()
+        receipts = [
+            {"usage": {"input_tokens": 10, "cache_read_input_tokens": 60,
+                       "cache_creation_input_tokens": 30, "output_tokens": 20}},
+            {"usage": {"input_tokens": 7, "cache_read_input_tokens": 8,
+                       "cache_creation_input_tokens": 0, "output_tokens": 3}},
+        ]
+        (directory / "transport.jsonl").write_text("\n".join(json.dumps(row) for row in receipts))
+        totals = {"requests": 2, "prompt_tokens": 115, "cached_tokens": 68, "completion_tokens": 23}
+        requests = response_usage(directory, totals)
+        self.assertEqual([r["prompt_tokens"] for r in requests], [100, 15])
+        self.assertEqual([r["cached_tokens"] for r in requests], [60, 8])
+        self.assertNotIn("cache_write_tokens", requests[0])
+        self.assertEqual(requests[1]["cache_write_tokens"], 0)
+        self.assertEqual(requests[1]["cache_write_1h_tokens"], 0)
+        price = {"input_usd_per_m": 10, "cached_input_usd_per_m": 1,
+                 "output_usd_per_m": 50, "cache_write_usd_per_m": 12.5,
+                 "cache_write_1h_usd_per_m": 20}
+        self.assertIsNone(estimate_request_cost(requests[0], price))
+        interval = estimate_cost_range(requests[0], price, per_request=True)
+        self.assertLess(interval["min"], interval["max"])
+        self.assertIsNotNone(estimate_request_cost(requests[1], price))
+        self.assertIsNone(response_usage(directory, {**totals, "prompt_tokens": 116}))
+
+    def test_anthropic_receipts_preserve_reported_ttl_and_reject_invalid_usage(self):
+        directory = self.root / "anthropic-split-receipts"
+        directory.mkdir()
+        receipt = {"usage": {"input_tokens": 10, "cache_read_input_tokens": 60,
+                   "cache_creation_input_tokens": 30, "output_tokens": 20,
+                   "cache_creation": {"ephemeral_5m_input_tokens": 10,
+                                      "ephemeral_1h_input_tokens": 20}}}
+        path = directory / "transport.jsonl"
+        totals = {"requests": 1, "prompt_tokens": 100, "cached_tokens": 60, "completion_tokens": 20}
+        path.write_text(json.dumps(receipt))
+        request = response_usage(directory, totals)[0]
+        self.assertEqual((request["cache_write_tokens"], request["cache_write_1h_tokens"]), (10, 20))
+        receipt["usage"]["cache_creation_input_tokens"] = -1
+        path.write_text(json.dumps(receipt))
+        self.assertIsNone(response_usage(directory, totals))
+
     def test_chat_receipts_preserve_unknown_cached_input(self):
         directory = self.root / "chat-receipts"
         directory.mkdir()
