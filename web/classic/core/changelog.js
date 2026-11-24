@@ -3,6 +3,7 @@
 // website addition dates. Unknown models remain in the undated group.
 export const MODEL_HISTORY = [
   { date: "2026-11-24", kind: "repository", commits: ["7ecdd809e534"], keys: ["gpt-6.2-astra-pro"], note: "Run archive added; publication date may differ" },
+  { date: "2026-11-24", kind: "repository", commits: ["8c7498f6b1bb"], keys: ["gpt-6.2-sol-pro"], note: "Run archive added; publication date may differ" },
   { date: "2026-11-23", kind: "repository", commits: ["be171900"], keys: ["deepseek-v4-1-flash-1017", "mistral-small-2603", "ministral-14b-2512", "ministral-8b-2512", "ministral-3b-2512", "codestral-2508"], note: "Run archives added; publication date may differ" },
   { date: "2026-11-18", kind: "repository", commits: ["3ee9364a09be"], keys: ["gemini-4-neon"], note: "Run archive added; publication date may differ" },
   { date: "2026-11-17", kind: "repository", commits: ["4e783e7bb351"], keys: ["gpt-6.2-astra", "gpt-6.2-sol"], note: "Run archives added; publication date may differ" },
