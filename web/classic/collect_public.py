@@ -29,10 +29,9 @@ SCORE_VERSION = re.search(r'^SCORE_VERSION = "([^"]+)"$', (ROOT / "benchmark/sco
 
 
 def response_usage(directory: Path, totals: dict, *, allow_partial: bool = False) -> list[dict] | None:
-    """Use complete Responses or Chat receipts, not lossy controller cache totals.
+    """Reconcile supported per-response usage against the attempt's totals.
 
-    Other protocols retain their existing aggregate accounting. Reconcile the
-    token/request totals before treating receipts as the whole attempt.
+    Missing cache details remain unknown rather than becoming zero-cost usage.
     """
     path = directory / "transport.jsonl"
     if not path.is_file():
@@ -43,6 +42,24 @@ def response_usage(directory: Path, totals: dict, *, allow_partial: bool = False
             receipt = json.loads(line)
             usage = receipt.get("usage")
             if not usage:
+                continue
+            # Anthropic reports fresh, read and cache-creation input separately.
+            # Only trust this shape when both cache counters are explicit.
+            if "cache_creation_input_tokens" in usage and "cache_read_input_tokens" in usage:
+                fresh, cached, writes, output = (usage.get(key) for key in (
+                    "input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens", "output_tokens"))
+                if any(type(value) is not int or value < 0 for value in (fresh, cached, writes, output)):
+                    return None
+                request = {"prompt_tokens": fresh + cached + writes,
+                           "completion_tokens": output, "cached_tokens": cached}
+                # Missing TTL splits are unknown. Bounds must not assume a rate.
+                split = usage.get("cache_creation") or {}
+                short, long = split.get("ephemeral_5m_input_tokens"), split.get("ephemeral_1h_input_tokens")
+                if writes == 0:
+                    request.update(cache_write_tokens=0, cache_write_1h_tokens=0)
+                elif type(short) is int and type(long) is int and short >= 0 and long >= 0 and short + long == writes:
+                    request.update(cache_write_tokens=short, cache_write_1h_tokens=long)
+                requests.append(request)
                 continue
             # Responses and Chat Completions use different field names. An omitted
             # cache split is unknown, not proof that the cached amount was zero.
