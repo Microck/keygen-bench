@@ -2,6 +2,7 @@
 // which a run was archived. They are not model release dates or verified first
 // website addition dates. Unknown models remain in the undated group.
 export const MODEL_HISTORY = [
+  { date: "2026-11-26", kind: "repository", commits: ["06cacb6b81e2"], keys: ["glm-5.4"], note: "Run archive added; publication date may differ" },
   { date: "2026-11-24", kind: "repository", commits: ["7ecdd809e534"], keys: ["gpt-6.2-astra-pro"], note: "Run archive added; publication date may differ" },
   { date: "2026-11-24", kind: "repository", commits: ["8c7498f6b1bb"], keys: ["gpt-6.2-sol-pro"], note: "Run archive added; publication date may differ" },
   { date: "2026-11-23", kind: "repository", commits: ["be171900"], keys: ["deepseek-v4-1-flash-1017", "mistral-small-2603", "ministral-14b-2512", "ministral-8b-2512", "ministral-3b-2512", "codestral-2508"], note: "Run archives added; publication date may differ" },
