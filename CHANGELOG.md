@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add GLM-5.4 benchmark results and retain the quota-interrupted attempt.
+
 - Recover bounded or exact cost estimates from reconciled Anthropic-format usage receipts.
 
 - Add three GPT-6.2 Astra Pro benchmark attempts and recorded API usage.
